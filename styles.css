@@ -127,6 +127,13 @@ textarea.input{min-height:80px;resize:vertical;}
   padding:8px 10px;cursor:pointer;font-family:inherit;color:var(--text);font-size:14px;}
 .stu-row:hover{border-color:var(--brand);}
 .stu-top{display:flex;justify-content:space-between;gap:8px;}
+.plan-lines{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;}
+.plan{font-size:12.5px;padding:2px 8px;border-radius:6px;background:var(--brand-soft);color:var(--brand);}
+.plan.no-tutor{background:var(--warn-soft);color:var(--warn);}
+.warn-note{color:var(--warn);margin-top:4px;}
+.plan-row{display:grid;grid-template-columns:1.2fr .6fr 1.3fr auto;gap:6px;margin-bottom:6px;}
+.plan-head{display:grid;grid-template-columns:1.2fr .6fr 1.3fr 36px;gap:6px;margin-bottom:4px;}
+.stu.picked{background:var(--brand);color:#fff;}
 .empty{padding:28px;text-align:center;color:var(--sub);}
 .empty .btn{margin-top:10px;}
 .section-title{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px;}

@@ -39,7 +39,7 @@ let currentUser = null, currentSupervisor = null, isSignUpMode = false;
 let isAdmin = false;
 let currentTab = 'daily';
 const state = {
-  families: [], students: [], tutors: [], subjects: [], fx: {}, famBal: {}, tutBal: {},
+  families: [], students: [], tutors: [], subjects: [], plans: [], fx: {}, famBal: {}, tutBal: {},
   daySessions: [], relay: [], relayFilter: 'pending', dayFilter: 'all',
   day: todayStr(), fin: null,
 };
@@ -102,6 +102,12 @@ function cleanGroup(v) {
 async function copyAndOpen(text, url) {
   await copyText(text, 'تم نسخ الرسالة ✓ الصقها في الجروب');
   window.open(url, '_blank', 'noopener');
+}
+const SUBJECT_LIST = ['رياضيات', 'علوم', 'إنجليزي', 'عربي', 'فيزياء', 'كيمياء', 'أحياء', 'تأسيس إنجليزي', 'تأسيس عربي', 'دراسات اجتماعية', 'تربية إسلامية', 'فرنساوي'];
+function plansOf(studentId) { return state.plans.filter(p => p.student_id === studentId); }
+function planLabel(p, withTutor = true) {
+  const t = p.tutor_id ? byId(state.tutors, p.tutor_id) : null;
+  return `${p.subject}${p.weekly_sessions ? ` ×${p.weekly_sessions}` : ''}${withTutor ? ` — ${t ? t.name : 'بدون معلم'}` : ''}`;
 }
 function fxRate(cur) { return Number(state.fx[cur] ?? (cur === 'EGP' ? 1 : 0)); }
 function toEGP(amount, cur) { return Number(amount || 0) * fxRate(cur); }
@@ -199,7 +205,7 @@ async function confirmDelete(what, fn) {
 async function q(p) { const { data, error } = await p; if (error) throw error; return data; }
 
 async function loadMasters() {
-  const [families, students, tutors, subjects, fx, fb, tb] = await Promise.all([
+  const [families, students, tutors, subjects, fx, fb, tb, plans] = await Promise.all([
     q(sb.from('families').select('*').order('name')),
     q(sb.from('students').select('*').order('name')),
     q(sb.from('tutors').select('*').order('name')),
@@ -207,7 +213,9 @@ async function loadMasters() {
     q(sb.from('fx_rates').select('*')),
     q(sb.from('family_balances').select('*')),
     q(sb.from('tutor_balances').select('*')),
+    q(sb.from('student_subjects').select('*').order('created_at')),
   ]);
+  state.plans = plans;
   state.families = families; state.students = students; state.tutors = tutors; state.subjects = subjects;
   state.fx = Object.fromEntries(fx.map(r => [r.currency, Number(r.rate_to_egp)]));
   state.fxRows = fx;
@@ -484,6 +492,26 @@ async function openSessionForm(id) {
   openModal(s ? 'تعديل حصة' : 'حصة جديدة', formHtml(fields, s ? 'حفظ التعديل' : 'إضافة الحصة'));
 
   const stSel = document.getElementById('f_student_id'), tuSel = document.getElementById('f_tutor_id');
+  document.getElementById('wrap_student_id').insertAdjacentHTML('beforeend', '<div id="plan-picks" class="students"></div>');
+  const applyPlan = (p) => {
+    document.getElementById('f_subject').value = p.subject;
+    if (p.tutor_id) {
+      tuSel.value = p.tutor_id;
+      const t = byId(state.tutors, p.tutor_id);
+      if (t && t.default_rate_egp != null) document.getElementById('f_tutor_cost_egp').value = t.default_rate_egp;
+    }
+    document.querySelectorAll('#plan-picks .stu').forEach(b => b.classList.toggle('picked', b.dataset.pid === p.id));
+  };
+  window._applyPlan = (pid) => applyPlan(state.plans.find(x => x.id === pid));
+  const renderPicks = (auto) => {
+    const ps = plansOf(stSel.value);
+    document.getElementById('plan-picks').innerHTML = ps.length
+      ? '<span class="sub small" style="align-self:center">اختار المادة:</span>' + ps.map(p => `<button type="button" class="stu" data-pid="${esc(p.id)}" onclick="_applyPlan(${jsq(p.id)})">${esc(planLabel(p))}</button>`).join('')
+      : '';
+    if (auto && ps.length === 1) applyPlan(ps[0]);
+  };
+  stSel.addEventListener('change', () => renderPicks(true));
+  renderPicks(false);
   const updateHints = (fill) => {
     const st = byId(state.students, stSel.value);
     const fam = st ? byId(state.families, st.family_id) : null;
@@ -606,7 +634,7 @@ function renderFamilies() {
   }
   const list = state.families.filter(f => {
     if (!term) return true;
-    const studs = state.students.filter(s => s.family_id === f.id).map(s => `${s.name} ${s.notes || ''}`).join(' ');
+    const studs = state.students.filter(s => s.family_id === f.id).map(s => `${s.name} ${s.notes || ''} ${plansOf(s.id).map(p => planLabel(p)).join(' ')}`).join(' ');
     return `${f.name} ${f.parent_name || ''} ${f.whatsapp || ''} ${studs}`.toLowerCase().includes(term);
   });
   el.innerHTML = list.map(f => {
@@ -632,7 +660,8 @@ function renderFamilies() {
         ${studs.map(s => `<button class="stu-row" onclick="openStudentForm(${jsq(f.id)}, ${jsq(s.id)})">
           <div class="stu-top"><b>${esc(s.name)}</b><span class="num">${s.default_price != null ? `${fmt(s.default_price)} ${esc(f.currency)}` : '<span class="neg">بدون سعر</span>'}</span></div>
           <div class="sub small">${esc(s.grade_level)} · ${esc(CURRICULA[s.curriculum])}</div>
-          ${s.notes ? `<div class="small">${esc(s.notes)}</div>` : ''}
+          ${plansOf(s.id).length ? `<div class="plan-lines">${plansOf(s.id).map(p => `<span class="plan ${p.tutor_id ? '' : 'no-tutor'}">${esc(planLabel(p))}</span>`).join('')}</div>` : ''}
+          ${s.notes ? `<div class="small warn-note">⚠️ ${esc(s.notes)}</div>` : ''}
         </button>`).join('')}
         <button class="stu" style="background:transparent;border:1px dashed var(--brand)" onclick="openStudentForm(${fid})">+ طالب</button>
       </div>
@@ -690,16 +719,38 @@ function openStudentForm(familyId, id) {
     [{ name: 'grade_level', label: 'الصف الدراسي', required: true, value: s?.grade_level, list: GRADES },
      { name: 'curriculum', label: 'المنهج', type: 'select', required: true, value: s?.curriculum || 'arabic', options: Object.entries(CURRICULA).map(([v, l]) => ({ v, l })) }],
     { name: 'default_price', label: `سعر الحصة الافتراضي (${fam.currency})`, type: 'number', value: s?.default_price, hint: 'بيتملى تلقائي لما تضيف حصة للطالب ده، وتقدر تغيّره في كل حصة' },
-    { name: 'notes', label: 'المواد وعدد الحصص / ملاحظات', type: 'textarea', value: s?.notes, placeholder: 'أسبوعياً: رياضيات ×2 · علوم ×1 · إنجليزي ×1' },
+    { name: 'notes', label: 'ملاحظات', type: 'textarea', value: s?.notes },
   ];
+  const plans = s ? plansOf(s.id) : [];
+  const planBlock = `<div class="field"><label>المواد والمعلمين</label>
+    <datalist id="subj-list2">${SUBJECT_LIST.map(x => `<option value="${x}">`).join('')}</datalist>
+    <div class="plan-head small sub"><span>المادة</span><span>بالأسبوع</span><span>المعلم</span><span></span></div>
+    <div id="plan-rows">${(plans.length ? plans : [{}]).map(planRowHtml).join('')}</div>
+    <button type="button" class="btn btn-ghost sm" onclick="document.getElementById('plan-rows').insertAdjacentHTML('beforeend', planRowHtml())">+ مادة</button></div>`;
   const del = s && isAdmin ? `<button type="button" class="btn btn-danger" style="margin-top:6px" onclick="closeModal(); confirmDelete(${jsq('الطالب ' + s.name)}, () => q(sb.from('students').delete().eq('id', ${jsq(s.id)})))">حذف الطالب</button>` : '';
-  openModal(`${s ? 'تعديل طالب' : 'طالب جديد'} — ${fam.name}`, formHtml(fields, 'حفظ', del));
+  openModal(`${s ? 'تعديل طالب' : 'طالب جديد'} — ${fam.name}`, formHtml(fields, 'حفظ', planBlock + del));
   window._formSubmit = () => runSubmit(async () => {
     const row = { family_id: familyId, name: fv('name'), grade_level: fv('grade_level'), curriculum: fv('curriculum'), default_price: fnum('default_price'), notes: fv('notes') || null };
+    let sid = s?.id;
     if (s) await q(sb.from('students').update(row).eq('id', s.id));
-    else await q(sb.from('students').insert(row));
+    else { const [ns] = await q(sb.from('students').insert(row).select()); sid = ns.id; }
+    const rows = [...document.querySelectorAll('#plan-rows .plan-row')].map(r => ({
+      student_id: sid, subject: r.querySelector('.pl-subject').value.trim(),
+      weekly_sessions: r.querySelector('.pl-weekly').value ? Number(r.querySelector('.pl-weekly').value) : null,
+      tutor_id: r.querySelector('.pl-tutor').value || null,
+    })).filter(x => x.subject);
+    if (s) await q(sb.from('student_subjects').delete().eq('student_id', sid));
+    if (rows.length) await q(sb.from('student_subjects').insert(rows));
     closeModal(); showToast('تم الحفظ ✓'); await refreshAll();
   });
+}
+function planRowHtml(p = {}) {
+  return `<div class="plan-row">
+    <input class="input pl-subject" placeholder="المادة" value="${esc(p.subject || '')}" list="subj-list2">
+    <input class="input pl-weekly" type="number" min="1" max="14" inputmode="numeric" placeholder="—" value="${esc(p.weekly_sessions ?? '')}">
+    <select class="input pl-tutor"><option value="">— بدون —</option>${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === p.tutor_id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+    <button type="button" class="btn btn-ghost icon" onclick="this.parentElement.remove()">✕</button>
+  </div>`;
 }
 async function openFamilyStatement(familyId) {
   const f = byId(state.families, familyId);
@@ -769,7 +820,8 @@ function renderTutors() {
   const list = state.tutors.filter(t => {
     if (!term) return true;
     const subs = state.subjects.filter(s => s.tutor_id === t.id).map(s => s.subject).join(' ');
-    return `${t.name} ${t.phone || ''} ${subs}`.toLowerCase().includes(term);
+    const studs = state.plans.filter(p => p.tutor_id === t.id).map(p => byId(state.students, p.student_id)?.name || '').join(' ');
+    return `${t.name} ${t.phone || ''} ${subs} ${studs}`.toLowerCase().includes(term);
   });
   el.innerHTML = list.map(t => {
     const subs = state.subjects.filter(s => s.tutor_id === t.id);
@@ -792,7 +844,12 @@ function renderTutors() {
         ${t.vodafone_cash ? `<span>فودافون كاش: <b dir="ltr">${esc(t.vodafone_cash)}</b></span>` : ''}
         ${t.bank_account ? `<span>بنك: <b>${esc(t.bank_account)}</b></span>` : ''}
       </div>
-      ${subs.length ? `<div class="students">${subs.map(s => `<span class="pill">${esc(s.subject)} · ${esc(CURRICULA[s.curriculum])}${s.grade_level ? ' · ' + esc(s.grade_level) : ''}</span>`).join('')}</div>` : ''}
+      ${subs.length ? `<div class="meta"><span>المواد: <b>${subs.map(s => esc(s.subject) + (s.grade_level ? ` (${esc(s.grade_level)})` : '')).join('، ')}</b></span></div>` : ''}
+      ${(() => { const ps = state.plans.filter(p => p.tutor_id === t.id); if (!ps.length) return '';
+        const weekly = ps.reduce((a, p) => a + (p.weekly_sessions || 0), 0);
+        return `<div class="sub small mt">الطلاب (${ps.length})${weekly ? ` · ${weekly} حصة/أسبوع على الأقل` : ''}</div>
+        <div class="students">${ps.map(p => { const st = byId(state.students, p.student_id); const fam = st && byId(state.families, st.family_id);
+          return `<button class="stu" onclick="openStudentForm(${jsq(st?.family_id)}, ${jsq(p.student_id)})" title="${esc(fam?.name || '')}">${esc(st?.name || '')} · ${esc(p.subject)}${p.weekly_sessions ? ' ×' + p.weekly_sessions : ''}</button>`; }).join('')}</div>`; })()}
       ${t.notes ? `<div class="sub small mt">📝 ${esc(t.notes)}</div>` : ''}
       <div class="actions">
         ${b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${tid})">صرف مستحقات</button>` : ''}
