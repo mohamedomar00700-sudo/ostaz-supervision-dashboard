@@ -94,6 +94,15 @@ function waNumber(raw, country) {
   if (d.startsWith('0') && c) d = c.code + d.slice(1);
   return d;
 }
+function cleanGroup(v) {
+  if (!v) return null;
+  const m = String(v).match(/chat\.whatsapp\.com\/([A-Za-z0-9]+)/);
+  return m ? 'https://chat.whatsapp.com/' + m[1] : v.trim();
+}
+async function copyAndOpen(text, url) {
+  await copyText(text, 'تم نسخ الرسالة ✓ الصقها في الجروب');
+  window.open(url, '_blank', 'noopener');
+}
 function fxRate(cur) { return Number(state.fx[cur] ?? (cur === 'EGP' ? 1 : 0)); }
 function toEGP(amount, cur) { return Number(amount || 0) * fxRate(cur); }
 
@@ -431,13 +440,15 @@ function openReminder(id, who) {
   const { fam, tu } = sessionView(s);
   const text = buildReminder(s, who);
   const num = who === 'parent' ? waNumber(fam?.whatsapp, fam?.country) : waNumber(tu?.phone, 'مصر');
+  const group = who === 'parent' ? fam?.whatsapp_group : null;
   window._reminderText = text;
   openModal(who === 'parent' ? 'تذكير ولي الأمر' : 'تذكير المعلم', `
     <div class="msg-preview">${esc(text)}</div>
-    <div class="modal-foot">
-      ${num ? `<a class="btn btn-wa" href="https://wa.me/${num}?text=${encodeURIComponent(text)}" target="_blank" rel="noopener" onclick="closeModal()">فتح واتساب وإرسال</a>`
-            : `<span class="sub small">لا يوجد رقم واتساب مسجّل</span>`}
+    <div class="modal-foot" style="flex-wrap:wrap">
+      ${group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._reminderText, ${jsq(group)}); closeModal()">نسخ وفتح جروب الأسرة</button>` : ''}
+      ${num ? `<a class="btn ${group ? 'btn-ghost' : 'btn-wa'}" href="https://wa.me/${num}?text=${encodeURIComponent(text)}" target="_blank" rel="noopener" onclick="closeModal()">إرسال على الرقم الخاص</a>` : ''}
       <button class="btn btn-ghost" onclick="copyText(window._reminderText,'تم نسخ الرسالة ✓')">نسخ النص</button>
+      ${!group && !num ? `<span class="sub small">مفيش جروب ولا رقم مسجّل — <a href="javascript:void(0)" onclick="closeModal(); openFamilyForm(${jsq(fam?.id)})">أضفهم</a></span>` : ''}
     </div>`);
 }
 
@@ -614,6 +625,7 @@ function renderFamilies() {
           <div class="sub small">${b.balance < 0 ? 'مستحق على الأسرة' : 'رصيد'}</div>
         </div>
       </div>
+      ${f.whatsapp_group ? `<div class="actions" style="margin-top:8px"><a class="btn btn-wa sm" href="${esc(f.whatsapp_group)}" target="_blank" rel="noopener">💬 جروب الأسرة</a></div>` : ''}
       <div class="meta"><span>واتساب: ${f.whatsapp ? `<b dir="ltr">${esc(f.whatsapp)}</b>` : `<a href="javascript:void(0)" onclick="openFamilyForm(${fid})">أضف الرقم</a>`}</span><span>حصص تمت: <b>${b.count}</b></span></div>
       ${f.notes ? `<div class="sub small mt">📝 ${esc(f.notes)}</div>` : ''}
       <div class="stu-list">
@@ -642,6 +654,7 @@ function openFamilyForm(id) {
        options: Object.keys(COUNTRIES).map(k => ({ v: k, l: `${COUNTRIES[k].flag} ${k}` })) },
      { name: 'currency', label: 'عملة الدفع', type: 'select', required: true, value: f?.currency || 'SAR',
        options: CURRENCIES.map(c => ({ v: c, l: c })) }],
+    { name: 'whatsapp_group', label: 'لينك جروب واتساب الأسرة', type: 'url', value: f?.whatsapp_group, placeholder: 'https://chat.whatsapp.com/…' },
     { name: 'whatsapp', label: 'رقم واتساب ولي الأمر', type: 'tel', value: f?.whatsapp, placeholder: '9665xxxxxxxx', hint: 'بكود الدولة — للاستخدام الداخلي فقط ولا يظهر للمعلم' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: f?.notes },
   ];
@@ -656,7 +669,7 @@ function openFamilyForm(id) {
     document.getElementById('f_currency').value = COUNTRIES[e.target.value].cur;
   });
   window._formSubmit = () => runSubmit(async () => {
-    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, notes: fv('notes') || null };
+    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), notes: fv('notes') || null };
     if (!f && fv('st_name') && !fv('st_grade')) return formError('اكتب صف الطالب أو امسح اسمه');
     if (f) {
       await q(sb.from('families').update(row).eq('id', f.id));
