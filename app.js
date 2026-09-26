@@ -448,15 +448,15 @@ function openReminder(id, who) {
   const { fam, tu } = sessionView(s);
   const text = buildReminder(s, who);
   const num = who === 'parent' ? waNumber(fam?.whatsapp, fam?.country) : waNumber(tu?.phone, 'مصر');
-  const group = who === 'parent' ? fam?.whatsapp_group : null;
+  const group = who === 'parent' ? fam?.whatsapp_group : tu?.whatsapp_group;
   window._reminderText = text;
   openModal(who === 'parent' ? 'تذكير ولي الأمر' : 'تذكير المعلم', `
     <div class="msg-preview">${esc(text)}</div>
     <div class="modal-foot" style="flex-wrap:wrap">
-      ${group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._reminderText, ${jsq(group)}); closeModal()">نسخ وفتح جروب الأسرة</button>` : ''}
+      ${group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._reminderText, ${jsq(group)}); closeModal()">نسخ وفتح ${who === 'parent' ? 'جروب الأسرة' : 'جروب المعلم'}</button>` : ''}
       ${num ? `<a class="btn ${group ? 'btn-ghost' : 'btn-wa'}" href="https://wa.me/${num}?text=${encodeURIComponent(text)}" target="_blank" rel="noopener" onclick="closeModal()">إرسال على الرقم الخاص</a>` : ''}
       <button class="btn btn-ghost" onclick="copyText(window._reminderText,'تم نسخ الرسالة ✓')">نسخ النص</button>
-      ${!group && !num ? `<span class="sub small">مفيش جروب ولا رقم مسجّل — <a href="javascript:void(0)" onclick="closeModal(); openFamilyForm(${jsq(fam?.id)})">أضفهم</a></span>` : ''}
+      ${!group && !num ? `<span class="sub small">مفيش جروب ولا رقم مسجّل — <a href="javascript:void(0)" onclick="closeModal(); ${who === 'parent' ? `openFamilyForm(${jsq(fam?.id)})` : `openTutorForm(${jsq(tu?.id)})`}">أضفهم</a></span>` : ''}
     </div>`);
 }
 
@@ -838,8 +838,12 @@ function renderTutors() {
           <div class="sub small">مستحقات لم تُصرف</div>
         </div>
       </div>
+      ${t.whatsapp_group || t.phone ? `<div class="actions" style="margin-top:8px">
+        ${t.whatsapp_group ? `<a class="btn btn-wa sm" href="${esc(t.whatsapp_group)}" target="_blank" rel="noopener">💬 جروب المعلم</a>` : ''}
+        ${t.phone ? `<a class="btn btn-ghost sm" href="https://wa.me/${waNumber(t.phone, 'مصر')}" target="_blank" rel="noopener">واتساب خاص</a>` : ''}
+      </div>` : ''}
       <div class="meta">
-        ${t.default_rate_egp != null ? `<span>سعره الافتراضي: <b>${fmt(t.default_rate_egp)} EGP</b></span>` : ''}
+        ${t.default_rate_egp != null ? `<span>سعره الافتراضي: <b>${fmt(t.default_rate_egp)} EGP</b></span>` : `<span><a href="javascript:void(0)" onclick="openTutorForm(${tid})">حدد أجر الحصة</a></span>`}
         <span>حصص تمت: <b>${b.count}</b></span>
         ${t.vodafone_cash ? `<span>فودافون كاش: <b dir="ltr">${esc(t.vodafone_cash)}</b></span>` : ''}
         ${t.bank_account ? `<span>بنك: <b>${esc(t.bank_account)}</b></span>` : ''}
@@ -873,6 +877,7 @@ function openTutorForm(id) {
   const subs = t ? state.subjects.filter(s => s.tutor_id === t.id) : [];
   const fields = [
     { name: 'name', label: 'اسم المعلم', required: true, value: t?.name, placeholder: 'أ. …' },
+    { name: 'whatsapp_group', label: 'لينك جروب واتساب المعلم', type: 'url', value: t?.whatsapp_group, placeholder: 'https://chat.whatsapp.com/…' },
     [{ name: 'phone', label: 'رقم الموبايل / واتساب', type: 'tel', value: t?.phone, placeholder: '01xxxxxxxxx', hint: 'داخلي فقط — لا يظهر لولي الأمر' },
      { name: 'default_rate_egp', label: 'سعر الحصة الافتراضي (EGP)', type: 'number', value: t?.default_rate_egp }],
     [{ name: 'vodafone_cash', label: 'رقم فودافون كاش', type: 'tel', value: t?.vodafone_cash },
@@ -885,7 +890,7 @@ function openTutorForm(id) {
     <button type="button" class="btn btn-ghost sm" onclick="document.getElementById('subj-rows').insertAdjacentHTML('beforeend', subjRowHtml())">+ مادة</button></div>`;
   openModal(t ? 'تعديل معلم' : 'معلم جديد', formHtml(fields, 'حفظ', subjBlock));
   window._formSubmit = () => runSubmit(async () => {
-    const row = { name: fv('name'), phone: fv('phone') || null, default_rate_egp: fnum('default_rate_egp'),
+    const row = { name: fv('name'), phone: fv('phone') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), default_rate_egp: fnum('default_rate_egp'),
       vodafone_cash: fv('vodafone_cash') || null, bank_account: fv('bank_account') || null, notes: fv('notes') || null };
     let tutorId = t?.id;
     if (t) await q(sb.from('tutors').update(row).eq('id', t.id));
