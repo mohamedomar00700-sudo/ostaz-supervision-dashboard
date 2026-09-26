@@ -411,28 +411,14 @@ function translateAuthError(msg){
 
 async function signInWithGoogle(){
   hideAuthError();
-
-  // اللوحة بتشتغل جوه إطار (iframe) معزول، والتنقل المباشر لصفحة جوجل
-  // بيتحظر جوه الإطار ده. الحل: نفتح تاب جديد فوراً (وقت الضغطة نفسها
-  // عشان المتصفح ميعتبروش نافذة منبثقة غير مرغوبة) ثم نوجهه لرابط جوجل.
-  const newTab = window.open('', '_blank');
-
-  const { data, error } = await sb.auth.signInWithOAuth({
+  // اللوحة دلوقتي منشورة على دومين حقيقي (GitHub Pages)، فمفيش داعي لأي
+  // حيلة نوافذ منبثقة — تنقل مباشر عادي لصفحة جوجل ورجوع لنفس الصفحة.
+  const { error } = await sb.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.href, skipBrowserRedirect: true }
+    options: { redirectTo: window.location.origin + window.location.pathname }
   });
-
   if(error){
-    if(newTab) newTab.close();
     showAuthError(translateAuthError(error.message));
-    return;
-  }
-
-  if(newTab && !newTab.closed){
-    newTab.location.href = data.url;
-  } else {
-    // لو المتصفح منع فتح تاب جديد، جرّب التنقل في نفس الصفحة كحل احتياطي
-    window.location.href = data.url;
   }
 }
 
@@ -532,10 +518,21 @@ window.addEventListener('error', function(e){
   console.error('Dashboard error:', e.error || e.message);
 });
 
+let _postAuthHandled = false;
+sb.auth.onAuthStateChange((event, session) => {
+  // شبكة أمان: لو رجعنا من جوجل وفيه Session جديدة لسه ما اتعالجتش
+  // (مثلاً init() خلص قبل ما يوصل التوكن من الرابط)، هنا هنمسكها.
+  if(session && !_postAuthHandled && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')){
+    _postAuthHandled = true;
+    handlePostAuth();
+  }
+});
+
 (async function init(){
   try {
     const { data: { session } } = await sb.auth.getSession();
     if(session){
+      _postAuthHandled = true;
       await handlePostAuth();
     } else {
       showView('auth');
