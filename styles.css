@@ -121,6 +121,12 @@ textarea.input{min-height:80px;resize:vertical;}
 .session.s-now{border-color:var(--danger);box-shadow:0 0 0 1px var(--danger) inset;}
 .students{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
 .stu{font-size:13px;padding:4px 10px;border-radius:8px;background:var(--brand-soft);color:var(--brand);cursor:pointer;border:none;font-family:inherit;}
+.stu-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+.stu-list > .stu{align-self:flex-start;}
+.stu-row{display:block;width:100%;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:10px;
+  padding:8px 10px;cursor:pointer;font-family:inherit;color:var(--text);font-size:14px;}
+.stu-row:hover{border-color:var(--brand);}
+.stu-top{display:flex;justify-content:space-between;gap:8px;}
 .empty{padding:28px;text-align:center;color:var(--sub);}
 .empty .btn{margin-top:10px;}
 .section-title{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px;}

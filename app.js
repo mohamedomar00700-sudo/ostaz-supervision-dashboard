@@ -19,7 +19,7 @@ const COUNTRIES = {
   'مصر':      { cur: 'EGP', tz: 'Africa/Cairo', code: '20', flag: '🇪🇬', tzName: 'مصر' },
 };
 const CURRENCIES = ['SAR', 'AED', 'EGP'];
-const CURRICULA = { arabic: 'عربي', languages: 'لغات', international: 'دولي' };
+const CURRICULA = { arabic: 'حكومي / عربي', languages: 'لغات', international: 'دولي / أمريكي' };
 const GRADES = ['KG1', 'KG2', 'الصف الأول الابتدائي', 'الصف الثاني الابتدائي', 'الصف الثالث الابتدائي',
   'الصف الرابع الابتدائي', 'الصف الخامس الابتدائي', 'الصف السادس الابتدائي', 'الصف الأول المتوسط/الإعدادي',
   'الصف الثاني المتوسط/الإعدادي', 'الصف الثالث المتوسط/الإعدادي', 'الصف الأول الثانوي', 'الصف الثاني الثانوي',
@@ -595,8 +595,8 @@ function renderFamilies() {
   }
   const list = state.families.filter(f => {
     if (!term) return true;
-    const studs = state.students.filter(s => s.family_id === f.id).map(s => s.name).join(' ');
-    return `${f.name} ${f.parent_name || ''} ${f.whatsapp} ${studs}`.toLowerCase().includes(term);
+    const studs = state.students.filter(s => s.family_id === f.id).map(s => `${s.name} ${s.notes || ''}`).join(' ');
+    return `${f.name} ${f.parent_name || ''} ${f.whatsapp || ''} ${studs}`.toLowerCase().includes(term);
   });
   el.innerHTML = list.map(f => {
     const c = COUNTRIES[f.country] || {};
@@ -614,10 +614,14 @@ function renderFamilies() {
           <div class="sub small">${b.balance < 0 ? 'مستحق على الأسرة' : 'رصيد'}</div>
         </div>
       </div>
-      <div class="meta"><span>واتساب: <b dir="ltr">${esc(f.whatsapp)}</b></span><span>حصص تمت: <b>${b.count}</b></span></div>
+      <div class="meta"><span>واتساب: ${f.whatsapp ? `<b dir="ltr">${esc(f.whatsapp)}</b>` : `<a href="javascript:void(0)" onclick="openFamilyForm(${fid})">أضف الرقم</a>`}</span><span>حصص تمت: <b>${b.count}</b></span></div>
       ${f.notes ? `<div class="sub small mt">📝 ${esc(f.notes)}</div>` : ''}
-      <div class="students">
-        ${studs.map(s => `<button class="stu" onclick="openStudentForm(${jsq(f.id)}, ${jsq(s.id)})">${esc(s.name)} · ${esc(s.grade_level)} · ${esc(CURRICULA[s.curriculum])}${s.default_price != null ? ` · ${fmt(s.default_price)} ${esc(f.currency)}` : ''}</button>`).join('')}
+      <div class="stu-list">
+        ${studs.map(s => `<button class="stu-row" onclick="openStudentForm(${jsq(f.id)}, ${jsq(s.id)})">
+          <div class="stu-top"><b>${esc(s.name)}</b><span class="num">${s.default_price != null ? `${fmt(s.default_price)} ${esc(f.currency)}` : '<span class="neg">بدون سعر</span>'}</span></div>
+          <div class="sub small">${esc(s.grade_level)} · ${esc(CURRICULA[s.curriculum])}</div>
+          ${s.notes ? `<div class="small">${esc(s.notes)}</div>` : ''}
+        </button>`).join('')}
         <button class="stu" style="background:transparent;border:1px dashed var(--brand)" onclick="openStudentForm(${fid})">+ طالب</button>
       </div>
       <div class="actions">
@@ -638,7 +642,7 @@ function openFamilyForm(id) {
        options: Object.keys(COUNTRIES).map(k => ({ v: k, l: `${COUNTRIES[k].flag} ${k}` })) },
      { name: 'currency', label: 'عملة الدفع', type: 'select', required: true, value: f?.currency || 'SAR',
        options: CURRENCIES.map(c => ({ v: c, l: c })) }],
-    { name: 'whatsapp', label: 'رقم واتساب ولي الأمر', type: 'tel', required: true, value: f?.whatsapp, placeholder: '9665xxxxxxxx', hint: 'بكود الدولة — للاستخدام الداخلي فقط ولا يظهر للمعلم' },
+    { name: 'whatsapp', label: 'رقم واتساب ولي الأمر', type: 'tel', value: f?.whatsapp, placeholder: '9665xxxxxxxx', hint: 'بكود الدولة — للاستخدام الداخلي فقط ولا يظهر للمعلم' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: f?.notes },
   ];
   let extra = '';
@@ -652,7 +656,7 @@ function openFamilyForm(id) {
     document.getElementById('f_currency').value = COUNTRIES[e.target.value].cur;
   });
   window._formSubmit = () => runSubmit(async () => {
-    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp'), notes: fv('notes') || null };
+    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, notes: fv('notes') || null };
     if (!f && fv('st_name') && !fv('st_grade')) return formError('اكتب صف الطالب أو امسح اسمه');
     if (f) {
       await q(sb.from('families').update(row).eq('id', f.id));
@@ -673,11 +677,12 @@ function openStudentForm(familyId, id) {
     [{ name: 'grade_level', label: 'الصف الدراسي', required: true, value: s?.grade_level, list: GRADES },
      { name: 'curriculum', label: 'المنهج', type: 'select', required: true, value: s?.curriculum || 'arabic', options: Object.entries(CURRICULA).map(([v, l]) => ({ v, l })) }],
     { name: 'default_price', label: `سعر الحصة الافتراضي (${fam.currency})`, type: 'number', value: s?.default_price, hint: 'بيتملى تلقائي لما تضيف حصة للطالب ده، وتقدر تغيّره في كل حصة' },
+    { name: 'notes', label: 'المواد وعدد الحصص / ملاحظات', type: 'textarea', value: s?.notes, placeholder: 'أسبوعياً: رياضيات ×2 · علوم ×1 · إنجليزي ×1' },
   ];
   const del = s && isAdmin ? `<button type="button" class="btn btn-danger" style="margin-top:6px" onclick="closeModal(); confirmDelete(${jsq('الطالب ' + s.name)}, () => q(sb.from('students').delete().eq('id', ${jsq(s.id)})))">حذف الطالب</button>` : '';
   openModal(`${s ? 'تعديل طالب' : 'طالب جديد'} — ${fam.name}`, formHtml(fields, 'حفظ', del));
   window._formSubmit = () => runSubmit(async () => {
-    const row = { family_id: familyId, name: fv('name'), grade_level: fv('grade_level'), curriculum: fv('curriculum'), default_price: fnum('default_price') };
+    const row = { family_id: familyId, name: fv('name'), grade_level: fv('grade_level'), curriculum: fv('curriculum'), default_price: fnum('default_price'), notes: fv('notes') || null };
     if (s) await q(sb.from('students').update(row).eq('id', s.id));
     else await q(sb.from('students').insert(row));
     closeModal(); showToast('تم الحفظ ✓'); await refreshAll();
