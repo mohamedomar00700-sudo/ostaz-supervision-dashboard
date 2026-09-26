@@ -1,9 +1,10 @@
 # Ostaz Online — Supervision Dashboard
 
-لوحة إشراف داخلية لفريق "أكاديمية أستاذ أونلاين" — مبنية بـ React (vanilla, single-file) + Tailwind CDN + Supabase (Auth + Postgres).
+لوحة إشراف داخلية لفريق "أكاديمية أستاذ أونلاين".
 
-## النشر
-هذا المستودع منشور تلقائياً عبر GitHub Pages من فرع `main` (الملف `index.html` في الجذر).
+- **الواجهة:** `index.html` + `app.js` + `styles.css` (بدون build — تُنشر مباشرة على GitHub Pages من فرع `main`).
+- **الخلفية:** Supabase (Auth بالإيميل وجوجل + Postgres + Row Level Security + Realtime).
+- الأدمن: يوافق على المشرفين، ويحذف، ويعدّل أسعار الصرف. المشرف: يضيف ويعدّل كل البيانات.
+- سعر الصرف يُثبَّت على كل حصة لحظة تسجيلها "تمت" (trigger `close_session`)، ورصيد الأسر/مستحقات المعلمين من الـ views `family_balances` و `tutor_balances`.
 
-## الإعداد
-القيم الخاصة بمشروع Supabase (URL + anon key) مضمّنة داخل `index.html` مباشرة (anon key آمن للنشر العلني — الحماية الفعلية عبر Row Level Security على قاعدة البيانات).
+الـ anon key الموجود في `app.js` آمن للنشر العلني؛ الحماية الفعلية عبر RLS.
