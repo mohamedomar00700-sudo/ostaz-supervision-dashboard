@@ -1078,16 +1078,103 @@ function beep() {
     });
   } catch (e) {}
 }
-async function toggleAlerts() {
+async function toggleInPageAlerts() {
   alertsOn = !alertsOn;
-  document.getElementById('btn-alerts').textContent = alertsOn ? '🔔' : '🔕';
   try { localStorage.setItem('ostaz_alerts', alertsOn ? '1' : '0'); } catch (e) {}
-  if (alertsOn) {
-    if ('Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch (e) {} }
-    beep();
-    showToast('التنبيهات شغالة: قبل الحصة بـ 15 دقيقة وعند موعدها (طول ما الصفحة مفتوحة)');
-    startAlerts();
-  } else { clearInterval(alertTimer); showToast('تم إيقاف التنبيهات'); }
+  if (alertsOn) { beep(); startAlerts(); showToast('صوت التنبيه شغال طول ما اللوحة مفتوحة'); }
+  else { clearInterval(alertTimer); showToast('تم إيقاف صوت التنبيه'); }
+  openAlertsPanel();
+}
+
+/* ----- إشعارات حقيقية (Web Push) — بتوصل والتطبيق مقفول ----- */
+const VAPID_PUBLIC = 'BNg8dUDp2rzXqgQHiFpGdVOpnISXlN-0HO36wH9C9_ENwGFm0zi7KApfg_D4KmdhGJDVc0L4TQrzzdCiciFJgzs';
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+function b64uToUint8(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '=';
+  const bin = atob(s); return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+let swReg = null;
+async function registerSW() {
+  if (!('serviceWorker' in navigator)) return null;
+  try { swReg = await navigator.serviceWorker.register('sw.js'); return swReg; } catch (e) { console.warn('SW register failed', e); return null; }
+}
+async function currentPushSub() {
+  if (!pushSupported()) return null;
+  const reg = swReg || await navigator.serviceWorker.getRegistration();
+  return reg ? reg.pushManager.getSubscription() : null;
+}
+async function refreshAlertIcon() {
+  const sub = await currentPushSub().catch(() => null);
+  const on = !!sub && Notification.permission === 'granted';
+  document.getElementById('btn-alerts').textContent = on ? '🔔' : '🔕';
+  return on;
+}
+async function enablePush() {
+  const btn = document.getElementById('push-enable'); if (btn) btn.disabled = true;
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { showToast('لازم تسمح بالإشعارات عشان توصلك التنبيهات', true); return openAlertsPanel(); }
+    const reg = swReg || await registerSW();
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToUint8(VAPID_PUBLIC) });
+    const j = sub.toJSON();
+    await q(sb.from('push_subscriptions').upsert({ user_id: currentUser.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent.slice(0, 200) }, { onConflict: 'endpoint' }));
+    showToast('تم تفعيل الإشعارات على الجهاز ده ✓');
+    await sendTestPush(true);
+  } catch (e) { showToast('تعذر التفعيل: ' + (e.message || e), true); }
+  finally { await refreshAlertIcon(); openAlertsPanel(); }
+}
+async function disablePush() {
+  try {
+    const sub = await currentPushSub();
+    if (sub) { await sb.from('push_subscriptions').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); }
+    showToast('تم إيقاف الإشعارات على الجهاز ده');
+  } catch (e) { showToast(dbError(e), true); }
+  await refreshAlertIcon(); openAlertsPanel();
+}
+async function sendTestPush(quiet) {
+  try {
+    const { data, error } = await sb.functions.invoke('session-alerts', { body: { action: 'test' } });
+    if (error) throw error;
+    if (!quiet) showToast(data.sent ? `اتبعت إشعار تجريبي لـ ${data.sent} جهاز ✓ اقفل التطبيق واستناه` : 'مفيش أجهزة مفعّل عليها الإشعارات لحسابك', !data.sent);
+    return data;
+  } catch (e) { if (!quiet) showToast('فشل الإرسال التجريبي: ' + (e.message || e), true); }
+}
+async function openAlertsPanel() {
+  const on = await refreshAlertIcon();
+  let body = '';
+  if (isIOS && !isStandalone()) {
+    body = `<p><b>على الآيفون، الإشعارات بتشتغل بس لو اللوحة متثبتة كتطبيق على الشاشة الرئيسية:</b></p>
+      <ol class="steps">
+        <li>افتح الرابط ده في <b>Safari</b> (مش Brave ولا Chrome).</li>
+        <li>دوس زرار المشاركة <b>⬆︎</b> تحت.</li>
+        <li>اختار <b>"إضافة إلى الشاشة الرئيسية" / Add to Home Screen</b> ← إضافة.</li>
+        <li>افتح اللوحة من الأيقونة الجديدة وسجّل دخول، وبعدها ادخل هنا ودوس <b>تفعيل الإشعارات</b>.</li>
+      </ol>
+      <p class="sub small">محتاج iOS 16.4 أو أحدث.</p>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="copyText(location.origin + location.pathname, 'تم نسخ الرابط ✓ الصقه في Safari')">نسخ رابط اللوحة</button></div>`;
+  } else if (!pushSupported()) {
+    body = `<p>المتصفح ده مش بيدعم الإشعارات في الخلفية. جرّب Chrome على أندرويد أو الكمبيوتر، أو Safari على الآيفون بعد تثبيت اللوحة على الشاشة الرئيسية.</p>`;
+  } else if (Notification.permission === 'denied') {
+    body = `<p class="neg"><b>الإشعارات مقفولة للوحة دي من إعدادات الجهاز/المتصفح.</b></p>
+      <p>${isIOS ? 'افتح الإعدادات ← الإشعارات ← "أستاذ أونلاين" ← فعّل السماح بالإشعارات والأصوات.' : 'دوس على القفل 🔒 جنب الرابط ← الأذونات ← الإشعارات ← سماح، وبعدين حدّث الصفحة.'}</p>`;
+  } else if (on) {
+    body = `<p class="pos"><b>✓ الإشعارات شغالة على الجهاز ده.</b></p>
+      <p class="sub">هيوصلك تنبيه قبل كل حصة بـ 15 دقيقة، وتاني عند موعدها، حتى لو التطبيق مقفول والموبايل مقفول. التنبيه بيوصل لكل المشرفين اللي مفعّلينه.</p>
+      <div class="modal-foot" style="flex-wrap:wrap">
+        <button class="btn btn-brand" onclick="sendTestPush()">إرسال إشعار تجريبي</button>
+        <button class="btn btn-ghost" onclick="disablePush()">إيقاف على الجهاز ده</button>
+      </div>`;
+  } else {
+    body = `<p>فعّل الإشعارات عشان يوصلك تنبيه <b>قبل كل حصة بـ 15 دقيقة وعند موعدها</b> — حتى والتطبيق مقفول والموبايل مقفول.</p>
+      <div class="modal-foot"><button class="btn btn-brand" id="push-enable" onclick="enablePush()">🔔 تفعيل الإشعارات</button></div>`;
+  }
+  body += `<hr class="sep"><div class="item-head"><div><b>صوت تنبيه واللوحة مفتوحة</b><div class="sub small">صفارة قوية من جوه الصفحة وهي مفتوحة قدامك (إضافي).</div></div>
+    <button class="btn ${alertsOn ? 'btn-ok' : 'btn-ghost'} sm" onclick="toggleInPageAlerts()">${alertsOn ? 'شغال' : 'تشغيل'}</button></div>`;
+  openModal('إشعارات الحصص', body);
 }
 function startAlerts() {
   clearInterval(alertTimer);
@@ -1109,9 +1196,6 @@ function checkAlerts() {
         alerted.add(key);
         const msg = `حصة ${st?.name || ''} مع ${tu?.name || ''} ${label}`;
         beep(); showToast('⏰ ' + msg);
-        if ('Notification' in window && Notification.permission === 'granted') {
-          try { new Notification('أستاذ أونلاين — تنبيه حصة', { body: msg, icon: 'logo.png', tag: key, requireInteraction: true }); } catch (e) {}
-        }
       }
     });
   });
@@ -1192,13 +1276,21 @@ async function enterApp() {
   document.getElementById('tab-admin').classList.toggle('hidden', !isAdmin);
   // تنظيف أي داتا تجريبية قديمة من النسخة السابقة
   try { localStorage.removeItem('ostaz_sessions'); } catch (e) {}
+  // فتح يوم معيّن لو جاي من إشعار (?day=YYYY-MM-DD)
+  const qDay = new URLSearchParams(location.search).get('day');
+  if (qDay && /^\d{4}-\d{2}-\d{2}$/.test(qDay)) state.day = qDay;
   // مسح بقايا رابط جوجل (?code=… / #…) من شريط العنوان
   if (location.search || location.hash) history.replaceState(null, '', location.pathname);
   showView('app');
   await refreshAll();
   subscribeRealtime();
   let savedAlerts = false; try { savedAlerts = localStorage.getItem('ostaz_alerts') === '1'; } catch (e) {}
-  if (savedAlerts && !alertsOn) { alertsOn = true; document.getElementById('btn-alerts').textContent = '🔔'; startAlerts(); }
+  if (savedAlerts && !alertsOn) { alertsOn = true; startAlerts(); }
+  await registerSW();
+  refreshAlertIcon().then(on => {
+    let asked = false; try { asked = localStorage.getItem('ostaz_push_asked') === '1'; } catch (e) {}
+    if (!on && !asked) { try { localStorage.setItem('ostaz_push_asked', '1'); } catch (e) {} openAlertsPanel(); }
+  }).catch(() => {});
 }
 async function checkPendingStatus() {
   const { data: supervisor } = await sb.from('supervisors').select('*').eq('id', currentUser.id).maybeSingle();

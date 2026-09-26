@@ -134,6 +134,8 @@ textarea.input{min-height:80px;resize:vertical;}
 .plan-row{display:grid;grid-template-columns:1.2fr .6fr 1.3fr auto;gap:6px;margin-bottom:6px;}
 .plan-head{display:grid;grid-template-columns:1.2fr .6fr 1.3fr 36px;gap:6px;margin-bottom:4px;}
 .stu.picked{background:var(--brand);color:#fff;}
+.steps{padding-inline-start:20px;margin:8px 0;line-height:1.9;}
+.sep{border:none;border-top:1px solid var(--border);margin:16px 0;}
 .empty{padding:28px;text-align:center;color:var(--sub);}
 .empty .btn{margin-top:10px;}
 .section-title{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px;}
