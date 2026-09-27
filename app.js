@@ -361,6 +361,9 @@ function sessionView(s) {
   return { st, fam, tu };
 }
 const sMins = s => Number(s.actual_minutes || s.duration_minutes || 60);
+const KINDS = { regular: 'حصة', revision: 'مراجعة', trial: 'تجريبية' };
+const kindWord = s => KINDS[s.kind] || 'حصة';
+const kindBadge = s => s.kind === 'revision' ? '<span class="badge b-rev">مراجعة</span>' : s.kind === 'trial' ? '<span class="badge b-trial">🧪 تجريبية</span>' : '';
 const sStart = s => new Date(s.scheduled_at).getTime();
 const sEnd = s => sStart(s) + sMins(s) * 60e3;
 function durLabel(min) {
@@ -402,7 +405,7 @@ const DAY_FILTERS = [
   { k: 'done', l: 'تمت', f: s => s.status === 'done' },
   { k: 'cancel', l: 'ملغاة', f: s => s.status.startsWith('cancelled') },
 ];
-function allLoadedSessions() { return [...state.daySessions, ...(state.weekSessions || []), ...(state.unrecorded || []), ...(state.nextSession ? [state.nextSession] : [])]; }
+function allLoadedSessions() { return [...state.daySessions, ...(state.weekSessions || []), ...(state.unrecorded || []), ...(state.pendingTrials || []), ...(state.nextSession ? [state.nextSession] : [])]; }
 function findSession(id) { return allLoadedSessions().find(x => x.id === id) || (state.alertSessions || []).find(x => x.id === id); }
 
 function setDay(v) {
@@ -475,7 +478,7 @@ function sessionCard(s) {
     <div>
       <div class="item-head">
         <div>
-          <div class="item-title">${esc(st?.name || 'طالب محذوف')} ${s.kind === 'revision' ? '<span class="badge b-rev">مراجعة</span>' : ''}${s.makeup_of ? ' <span class="badge b-makeup">تعويضية</span>' : ''}</div>
+          <div class="item-title">${esc(st?.name || 'طالب محذوف')} ${kindBadge(s)}${s.makeup_of ? ' <span class="badge b-makeup">تعويضية</span>' : ''}</div>
           <div class="sub small">${esc(fam?.name || '')}${st ? ` · ${esc(st.grade_level)}` : ''}</div>
         </div>
         <span class="badge ${badge.cls}">${badge.label}</span>
@@ -487,6 +490,7 @@ function sessionCard(s) {
         ${s.meeting_link ? `<span><a href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">رابط الحصة ↗</a></span>` : (open ? '<span class="neg">لا يوجد رابط</span>' : '')}
       </div>
       ${s.notes ? `<div class="sub small mt">📝 ${esc(s.notes)}</div>` : ''}
+      ${trialOutcomeLine(s)}
       ${cancelled ? `<div class="cancel-info mt">✖ ${cancelInfo(s)}</div>` : `<div class="money">
         <span class="pill" title="${fmt(s.student_price, 2)} ${s.student_currency} في الساعة">الأسرة: ${money(c.fam, s.student_currency)}</span>
         <span class="pill" title="${fmt(s.tutor_cost_egp)} EGP في الساعة">المعلم: ${money(c.tut, 'EGP')}</span>
@@ -497,6 +501,7 @@ function sessionCard(s) {
           <button class="btn btn-wa sm" onclick="openReminder(${id},'parent')">📲 ولي الأمر</button>
           <button class="btn btn-wa sm" onclick="openReminder(${id},'tutor')">📲 المعلم</button>` : ''}
         ${open ? `<button class="btn btn-ok sm" onclick="openDone(${id})">✓ تمت…</button>` : ''}
+        ${s.kind === 'trial' && s.status === 'done' ? `<button class="btn ${s.trial_outcome && s.trial_outcome !== 'thinking' ? 'btn-ghost' : 'btn-brand'} sm" onclick="openTrialOutcome(${id})">🧪 ${s.trial_outcome ? 'تعديل النتيجة' : 'نتيجة التجربة'}</button>` : ''}
         ${cancelled && !allLoadedSessions().some(x => x.makeup_of === s.id) && s.cancel_scope !== 'permanent' ? `<button class="btn btn-ghost sm" onclick="openSessionForm(null, {student_id:${jsq(s.student_id)}, tutor_id:${jsq(s.tutor_id)}, subject:${jsq(s.subject || '')}, makeup_of:${id}, duration:${s.duration_minutes || 60}})">📅 تعويضية</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openSessionActions(${id})">⋯ المزيد</button>
       </div>
@@ -546,6 +551,7 @@ function openDone(id) {
     if (!(m >= 5 && m <= 720)) return formError('المدة لازم تكون بين 5 دقايق و12 ساعة');
     closeModal();
     await setStatus(s.id, 'done', { actual_minutes: m });
+    if (s.kind === 'trial' && !s.trial_outcome) openTrialOutcome(s.id);
   };
 }
 /* ----- الإلغاء: مين، ليه، ولحد إمتى ----- */
@@ -661,8 +667,8 @@ function deleteSession(id) {
 function buildReminder(s, who) {
   const { st, fam, tu } = sessionView(s);
   const link = s.meeting_link ? linkHref(s.meeting_link) : '(سيتم إرسال الرابط قبل الحصة)';
-  const kindLine = s.kind === 'revision' ? '\n📝 حصة مراجعة' : '';
-  const durLine = (s.duration_minutes || 60) !== 60 || s.kind === 'revision' ? `\n⏳ المدة: ${durLabel(s.duration_minutes || 60)}` : '';
+  const kindLine = s.kind === 'revision' ? '\n📝 حصة مراجعة' : s.kind === 'trial' ? `\n🧪 حصة تجريبية${who === 'parent' ? ' مجانية' : ''} — ${who === 'parent' ? 'فرصة تتعرفوا فيها على المعلمة' : 'طالب جديد: ركّزي على التعارف وتحديد المستوى'}` : '';
+  const durLine = (s.duration_minutes || 60) !== 60 || s.kind !== 'regular' ? `\n⏳ المدة: ${durLabel(s.duration_minutes || 60)}` : '';
   if (who === 'parent') {
     const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
     return `السلام عليكم ورحمة الله 🌷
@@ -736,7 +742,7 @@ async function openSessionForm(id, prefill = {}) {
     const d = parseDay(prefill.day || state.day); const n = new Date(); d.setHours(Math.min(n.getHours() + 1, 22), 0, 0, 0); return d; })();
   const kind = s?.kind || prefill.kind || 'regular';
   const fields = [
-    { name: 'kind', label: 'نوع الحصة', type: 'select', value: kind, options: [{ v: 'regular', l: 'حصة عادية' }, { v: 'revision', l: 'مراجعة (وقت ومدة مرنين)' }] },
+    { name: 'kind', label: 'نوع الحصة', type: 'select', value: kind, options: [{ v: 'regular', l: 'حصة عادية' }, { v: 'trial', l: '🧪 تجريبية مجانية (نص ساعة)' }, { v: 'revision', l: 'مراجعة (وقت ومدة مرنين)' }] },
     { name: 'student_id', label: 'الطالب', type: 'select', searchable: true, required: true, placeholder: 'اختر الطالب…', options: studentOptions(), value: s?.student_id || prefill.student_id },
     { name: 'tutor_id', label: 'المعلم', type: 'select', searchable: true, required: true, placeholder: 'اختر المعلم…', options: tutorOptions(), value: s?.tutor_id || prefill.tutor_id },
     { name: 'subject', label: 'المادة', value: s?.subject ?? prefill.subject, placeholder: 'مثال: رياضيات', list: [...new Set([...SUBJECT_LIST, ...state.subjects.map(x => x.subject)])] },
@@ -769,10 +775,25 @@ async function openSessionForm(id, prefill = {}) {
       ${cur ? `<span>الهامش <b>${fmt(toEGP(p * m / 60, cur) - c * m / 60)} EGP</b></span>` : ''}</div>`;
   };
   window._setDur = m => { durIn.value = m; totals(); };
+  let prevKind = $('kind').value;
   const kindChanged = () => {
-    const rev = $('kind').value === 'revision';
-    const rep = document.getElementById('wrap_repeat'); if (rep) rep.classList.toggle('hidden', rev);
-    if (rev && !s && Number(durIn.value) === 60) { durIn.value = 120; }
+    const k = $('kind').value;
+    const rep = document.getElementById('wrap_repeat'); if (rep) rep.classList.toggle('hidden', k !== 'regular');
+    if (k === 'revision' && !s && Number(durIn.value) === 60) durIn.value = 120;
+    const priceIn = $('student_price');
+    if (k === 'trial') {
+      if (!s || prevKind !== 'trial') { durIn.value = 30; priceIn.value = 0; }
+      priceIn.readOnly = true;
+      document.getElementById('hint_student_price').textContent = 'مجانية للأسرة';
+      document.getElementById('hint_tutor_cost_egp') || document.getElementById('wrap_tutor_cost_egp').insertAdjacentHTML('beforeend', '<div class="hint" id="hint_tutor_cost_egp"></div>');
+      document.getElementById('hint_tutor_cost_egp').textContent = 'أجر الساعة — بيتحسب على نص ساعة. خليه 0 لو المعلمة مش بتاخد عن التجريبية.';
+    } else {
+      priceIn.readOnly = false;
+      if (prevKind === 'trial') { const st = byId(state.students, stSel.value); priceIn.value = st?.default_price ?? ''; if (Number(durIn.value) === 30) durIn.value = k === 'revision' ? 120 : 60; }
+      const h = document.getElementById('hint_tutor_cost_egp'); if (h) h.textContent = '';
+      updateHints(false);
+    }
+    prevKind = k;
     totals();
   };
   $('kind').addEventListener('change', kindChanged);
@@ -800,7 +821,8 @@ async function openSessionForm(id, prefill = {}) {
     const st = byId(state.students, stSel.value);
     const fam = st ? byId(state.families, st.family_id) : null;
     document.getElementById('hint_student_price').textContent = fam ? `${fam.currency} في الساعة` : 'بعملة الأسرة';
-    if (fill && st && st.default_price != null) $('student_price').value = st.default_price;
+    if (fill && st && st.default_price != null && $('kind').value !== 'trial') $('student_price').value = st.default_price;
+    if ($('kind').value === 'trial') document.getElementById('hint_student_price').textContent = 'مجانية للأسرة';
     totals();
   };
   stSel.addEventListener('change', () => { updateHints(true); renderPicks(true); });
@@ -829,7 +851,8 @@ async function openSessionForm(id, prefill = {}) {
       student_currency: fam.currency, tutor_cost_egp: fnum('tutor_cost_egp'), notes: fv('notes') || null,
     };
     if (!s && prefill.makeup_of) row.makeup_of = prefill.makeup_of;
-    const n = s || row.kind === 'revision' ? 1 : Number(fv('repeat') || 1);
+    if (row.kind === 'trial') row.student_price = 0;
+    const n = s || row.kind !== 'regular' ? 1 : Number(fv('repeat') || 1);
     const rows = Array.from({ length: n }, (_, i) => ({ ...row, scheduled_at: new Date(start.getTime() + i * 7 * 864e5).toISOString() }));
     const conflicts = await findConflicts(rows, s?.id);
     if (conflicts.length) {
@@ -844,7 +867,7 @@ async function openSessionForm(id, prefill = {}) {
       showToast('تم حفظ التعديل ✓');
     } else {
       await q(sb.from('sessions').insert(rows));
-      if (st.default_price == null) await sb.from('students').update({ default_price: row.student_price }).eq('id', st.id);
+      if (st.default_price == null && row.kind !== 'trial') await sb.from('students').update({ default_price: row.student_price }).eq('id', st.id);
       showToast(n > 1 ? `تمت إضافة ${n} حصص ✓` : 'تمت إضافة الحصة ✓');
       state.day = fv('date');
     }
@@ -864,7 +887,7 @@ async function loadWeek() {
 }
 const norm = s => String(s || '').trim().replace(/[إأآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').toLowerCase();
 function weekCoverage() {
-  const ws = (state.weekSessions || []).filter(s => !s.status.startsWith('cancelled'));
+  const ws = (state.weekSessions || []).filter(s => !s.status.startsWith('cancelled') && s.kind !== 'trial');
   const rows = [];
   for (const p of state.plans) {
     if (!p.weekly_sessions) continue;
@@ -917,7 +940,7 @@ function renderWeek() {
         ${list.map(s => { const v = sessionView(s); const b = needsConfirm(s) ? { label: 'محتاجة تسجيل', cls: 'b-pending' } : STATUS[s.status];
           return `<button class="wk-row" onclick="openSessionForm(${jsq(s.id)})">
             <span class="num"><b>${timeStr(new Date(s.scheduled_at))}</b> <span class="sub small">${durLabel(sMins(s))}</span></span>
-            <span>${esc(v.st?.name || '')}${s.kind === 'revision' ? ' <span class="badge b-rev">مراجعة</span>' : ''} <span class="sub small">${esc(s.subject || '')} · ${esc(v.tu?.name || '')}</span></span>
+            <span>${esc(v.st?.name || '')}${' ' + kindBadge(s)} <span class="sub small">${esc(s.subject || '')} · ${esc(v.tu?.name || '')}</span></span>
             <span class="badge ${b.cls}">${b.label}</span></button>`; }).join('')}
       </div>`;
     }).join('')}`;
@@ -1184,7 +1207,7 @@ async function openFamilyStatement(familyId) {
     ]);
     const rows = [
       ...tx.map(t => ({ at: t.created_at, desc: (t.type === 'refund' ? 'استرداد' : 'دفعة') + (t.note ? ` — ${t.note}` : ''), amt: t.type === 'refund' ? -Number(t.amount) : Number(t.amount), id: t.id, kind: 'tx' })),
-      ...ss.map(s => ({ at: s.scheduled_at, desc: `${s.kind === 'revision' ? 'مراجعة' : 'حصة'} ${byId(state.students, s.student_id)?.name || ''}${s.subject ? ' — ' + s.subject : ''} (${durLabel(sMins(s))})`, amt: -charges(s).fam, kind: 'session' })),
+      ...ss.map(s => ({ at: s.scheduled_at, desc: `${kindWord(s)} ${byId(state.students, s.student_id)?.name || ''}${s.subject ? ' — ' + s.subject : ''} (${durLabel(sMins(s))})`, amt: -charges(s).fam, kind: 'session' })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at));
     let run = 0;
     const body = rows.map(r => { run += r.amt; return `<tr>
@@ -1309,7 +1332,7 @@ async function openFamilyInvoice(familyId, which = 0) {
     const paid = tx.reduce((a, t) => a + (t.type === 'refund' ? -1 : 1) * Number(t.amount), 0);
     const bal = famBalance(f).balance;
     const lines = ss.map(s => { const v = sessionView(s);
-      return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'revision' ? ' (مراجعة)' : ''} — ${durLabel(sMins(s))} = ${fmt(charges(s).fam, 2)} ${f.currency}`; }).join('\n');
+      return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'regular' ? '' : ` (${kindWord(s)})`} — ${durLabel(sMins(s))} = ${s.kind === 'trial' ? 'مجانية 🎁' : `${fmt(charges(s).fam, 2)} ${f.currency}`}`; }).join('\n');
     const closing = cycle === 'prepaid'
       ? (bal <= 0 ? 'رصيد الباقة خلص، برجاء التجديد لاستمرار الحصص 🙏' : lowPrepaid(f) ? 'رصيد الباقة قرب يخلص، برجاء التجديد قريب 🙏' : 'شكراً لثقتكم 🌷')
       : (bal < 0 ? 'برجاء التكرم بسداد المستحق، ولأي استفسار إحنا موجودين 🙏' : 'شكراً لالتزامكم 🌷');
@@ -1344,7 +1367,7 @@ async function openTutorPeriodMessage(tutorId) {
     const b = tutBalance(t);
     const label = r.fromD.getDate() === 1 && new Date(r.toD.getTime() - 1).getMonth() === r.fromD.getMonth()
       ? `شهر ${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` : `الفترة ${r.from} إلى ${r.toIncl}`;
-    const lines = ss.map(s => { const v = sessionView(s); return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${v.st?.name || ''}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'revision' ? ' مراجعة' : ''} — ${durLabel(sMins(s))} = ${fmt(charges(s).tut, 2)} ج`; }).join('\n');
+    const lines = ss.map(s => { const v = sessionView(s); return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${v.st?.name || ''}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'regular' ? '' : ' ' + kindWord(s)} — ${durLabel(sMins(s))} = ${fmt(charges(s).tut, 2)} ج`; }).join('\n');
     const text = `${greetTutor(t.name)}
 كشف حصصك عن ${label}:
 ${lines || '— لا توجد حصص —'}
@@ -1475,7 +1498,7 @@ async function openTutorStatement(tutorId) {
       q(sb.from('tutor_payouts').select('*').eq('tutor_id', tutorId)),
     ]);
     const rows = [
-      ...ss.map(s => ({ at: s.scheduled_at, desc: `${s.kind === 'revision' ? 'مراجعة' : 'حصة'} ${byId(state.students, s.student_id)?.name || ''}${s.subject ? ' — ' + s.subject : ''} (${durLabel(sMins(s))})`, amt: charges(s).tut })),
+      ...ss.map(s => ({ at: s.scheduled_at, desc: `${kindWord(s)} ${byId(state.students, s.student_id)?.name || ''}${s.subject ? ' — ' + s.subject : ''} (${durLabel(sMins(s))})`, amt: charges(s).tut })),
       ...po.filter(p => p.paid).map(p => ({ at: p.paid_at || p.created_at, desc: `صرف${p.method ? ' (' + p.method + ')' : ''}${p.note ? ' — ' + p.note : ''}`, amt: -Number(p.total_egp), id: p.id })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at));
     let run = 0;
@@ -1829,6 +1852,8 @@ async function loadAttention() {
   const nxt = await q(sb.from('sessions').select('*').eq('status', 'scheduled')
     .gte('scheduled_at', now.toISOString()).lt('scheduled_at', todayEnd.toISOString()).order('scheduled_at').limit(1));
   state.nextSession = nxt[0] || null;
+  state.pendingTrials = await q(sb.from('sessions').select('*').eq('kind', 'trial').eq('status', 'done')
+    .or('trial_outcome.is.null,trial_outcome.eq.thinking').gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at'));
 }
 function renderAttention() {
   const el = document.getElementById('attention'); if (!el) return;
@@ -1840,6 +1865,8 @@ function renderAttention() {
   }
   const un = state.unrecorded || [];
   if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${un.length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
+  const pt = (state.pendingTrials || []).length;
+  if (pt) items.push(`<button class="att att-warn" onclick="openPendingTrials()">🧪 <b>${pt}</b> تجريبية مستنية نتيجة</button>`);
   const relay = state.relay.filter(r => r.status !== 'done').length;
   if (relay) items.push(`<button class="att" onclick="switchTab('relay')">🔁 <b>${relay}</b> مهمة ترحيل مفتوحة</button>`);
   const owing = state.families.filter(f => famBalance(f).balance < 0).length;
@@ -1889,7 +1916,7 @@ const SIGN_F = 'فريق الإشراف – أكاديمية أستاذ أونل
 // جدول اليوم لكل معلمة
 function tutorDayMessage(tu, list, dayIso) {
   const lines = list.map(s => { const v = sessionView(s);
-    return `• ${fmtTime(s.scheduled_at, CAIRO_TZ)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), CAIRO_TZ)}: ${v.st?.name || ''} (${v.st?.grade_level || ''})${s.subject ? ' — ' + s.subject : ''}${s.kind === 'revision' ? ' [مراجعة]' : ''}${s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : ''}`; }).join('\n');
+    return `• ${fmtTime(s.scheduled_at, CAIRO_TZ)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), CAIRO_TZ)}: ${v.st?.name || ''} (${v.st?.grade_level || ''})${s.subject ? ' — ' + s.subject : ''}${s.kind === 'regular' ? '' : ` [${kindWord(s)}]`}${s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : ''}`; }).join('\n');
   return `${greetTutor(tu?.name)}
 جدول حصصك ${relDayLabel(dayIso, CAIRO_TZ)} (${fmtDate(dayIso, CAIRO_TZ)}) بتوقيت القاهرة:
 ${lines}
@@ -1920,7 +1947,7 @@ function familyWeekMessage(fam, list) {
   const body = Object.keys(byDay).sort().map(k => {
     const ss = byDay[k];
     return `*${fmtDate(ss[0].scheduled_at, c.tz)}*\n` + ss.map(s => { const v = sessionView(s);
-      return `• ${fmtTime(s.scheduled_at, c.tz)} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''} (${durLabel(s.duration_minutes || 60)})${s.kind === 'revision' ? ' — مراجعة' : ''}`; }).join('\n');
+      return `• ${fmtTime(s.scheduled_at, c.tz)} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''} (${durLabel(s.duration_minutes || 60)})${s.kind === 'regular' ? '' : ' — ' + kindWord(s)}`; }).join('\n');
   }).join('\n\n');
   return `السلام عليكم ورحمة الله 🌷
 جدول حصص الأسبوع بتوقيت ${c.tzName}:
@@ -2048,7 +2075,7 @@ function exportSessionsCSV() {
     const v = sessionView(s), c = charges(s);
     const done = s.status === 'done';
     return [dateStr(new Date(s.scheduled_at)), timeStr(new Date(s.scheduled_at)), v.st?.name, v.fam?.name, v.tu?.name, s.subject,
-      s.kind === 'revision' ? 'مراجعة' : 'عادية', (STATUS[s.status] || {}).label, s.duration_minutes, s.actual_minutes ?? '',
+      s.kind === 'regular' ? 'عادية' : kindWord(s), (STATUS[s.status] || {}).label, s.duration_minutes, s.actual_minutes ?? '',
       s.student_price, s.student_currency, done ? c.fam.toFixed(2) : '', s.tutor_cost_egp, done ? c.tut.toFixed(2) : '',
       done ? Number(s.fx_rate_to_egp).toFixed(4) : '', done ? Number(s.revenue_egp).toFixed(2) : '', done ? Number(s.margin_egp).toFixed(2) : '',
       s.cancel_reason || '', s.cancel_note || '', cancelNoticeHours(s) == null ? '' : cancelNoticeHours(s).toFixed(1), s.makeup_of ? 'نعم' : '', s.notes];
@@ -2148,6 +2175,7 @@ function renderReports() {
       <div class="card kpi"><div class="l">حصص تعويضية</div><div class="v num">${makeups}</div><div class="s">${unrec ? `<span class="neg">${unrec} حصة لسه ماتسجلتش</span>` : 'كل الحصص متسجلة ✓'}</div></div>
     </div>
 
+    ${trialReportHtml(rows)}
     ${wk.length ? `<div class="section-title"><h2>ساعات التدريس أسبوعياً</h2></div>
     <div class="card item">${wk.map(([w, v]) => `<div class="bar-row"><span class="bar-label">${new Date(parseDay(w)).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'short' })}</span>
       <span class="bar-track"><span class="bar-fill" style="width:${Math.max(3, v.h / maxH * 100)}%"></span></span><span class="num bar-val">${fmt(v.h, 1)} س${v.c ? ` <span class="neg small">· ${v.c} إلغاء</span>` : ''}</span></div>`).join('')}</div>` : ''}
@@ -2288,6 +2316,111 @@ function openSessionActions(id) {
     ${a('🎒', 'ملف الطالب', `openStudentProfile(${jsq(s.student_id)})`)}
     ${isAdmin ? a('🗑', 'حذف الحصة', `deleteSession(${I})`, 'danger-row') : ''}
   </div>`);
+}
+
+/* ============================================================
+   الحصص التجريبية: النتيجة والمتابعة
+   ============================================================ */
+const TRIAL_OUT = {
+  converted: { l: '✅ هيكمل مع المعلمة', short: 'اشترك', cls: 'b-done' },
+  another_tutor: { l: '🔄 يجرب معلمة تانية', short: 'معلمة تانية', cls: 'b-pending' },
+  thinking: { l: '🤔 لسه بيفكر', short: 'بيفكر', cls: 'b-scheduled' },
+  lost: { l: '❌ مش هيحجز', short: 'مش هيحجز', cls: 'b-cancel' },
+};
+const TRIAL_REASONS = {
+  another_tutor: ['أسلوب المعلمة', 'مستوى الشرح', 'الطالب مش مرتاح', 'المواعيد', 'أخرى'],
+  lost: ['السعر', 'المواعيد مش مناسبة', 'أسلوب / مستوى المعلمة', 'الطالب مش مرتاح', 'مش محتاج دلوقتي', 'لم يرد', 'أخرى'],
+};
+const trialPending = s => s.kind === 'trial' && s.status === 'done' && (!s.trial_outcome || s.trial_outcome === 'thinking');
+function trialOutcomeLine(s) {
+  if (s.kind !== 'trial' || s.status !== 'done') return '';
+  if (!s.trial_outcome) return `<div class="cancel-info mt" style="background:var(--warn-soft);color:var(--warn)">🧪 نتيجة التجربة لسه ماتسجلتش</div>`;
+  const o = TRIAL_OUT[s.trial_outcome];
+  return `<div class="cancel-info mt"><span class="badge ${o.cls}">${o.short}</span>${s.trial_outcome_reason ? ' · ' + esc(s.trial_outcome_reason) : ''}${s.trial_outcome_note ? ' — ' + esc(s.trial_outcome_note) : ''}</div>`;
+}
+function openTrialOutcome(id) {
+  const s = findSession(id); if (!s) return;
+  const { st, fam, tu } = sessionView(s);
+  const to = { out: s.trial_outcome || '', reason: s.trial_outcome_reason || '', note: s.trial_outcome_note || '' };
+  window._to = to;
+  const feedback = `السلام عليكم ورحمة الله 🌷
+نتمنى تكون الحصة التجريبية${s.subject ? ` (${s.subject})` : ''} عجبت ${st?.name || ''} 😊
+يسعدنا نعرف رأيكم في الحصة والمعلمة: تحبوا نكمل ونثبّت مواعيد أسبوعية مناسبة ليكم؟
+ولو حابين تجربوا معلمة تانية مفيش أي مشكلة.
+${SIGN_F}`;
+  const render = () => {
+    const reasons = TRIAL_REASONS[to.out] || [];
+    document.getElementById('modal-body').innerHTML = `
+      <div class="sub small mb">${esc(st?.name || '')} · ${esc(s.subject || '')} · ${esc(tu?.name || '')} · ${fmtShortDate(s.scheduled_at)}</div>
+      ${msgBlock('📲 اسأل الأسرة عن رأيها', feedback, { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id })}
+      <div class="field mt"><label>النتيجة</label><div class="seg-wrap">
+        ${Object.entries(TRIAL_OUT).map(([k, o]) => `<button type="button" class="chip ${to.out === k ? 'active' : ''}" onclick="_to.out='${k}'; _to.reason=''; _toRender()">${o.l}</button>`).join('')}
+      </div></div>
+      ${reasons.length ? `<div class="field"><label>${to.out === 'lost' ? 'السبب' : 'ليه عايز يغيّر؟'}</label><div class="chips" style="margin:0">
+        ${reasons.map(r => `<button type="button" class="chip ${to.reason === r ? 'active' : ''}" onclick="_to.reason=${esc(JSON.stringify(r))}; _toRender()">${r}</button>`).join('')}</div></div>` : ''}
+      <div class="field"><label>ملاحظة (اختياري)</label><input class="input" id="to-note" value="${esc(to.note)}" oninput="_to.note=this.value" placeholder="مثال: عايز مواعيد بعد 6 مساءً"></div>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_saveTrial()">حفظ${to.out === 'converted' ? ' وتثبيت المواعيد' : to.out === 'another_tutor' ? ' وحجز تجربة تانية' : ''}</button>
+        <button class="btn btn-ghost" onclick="closeModal()">بعدين</button></div>`;
+  };
+  window._toRender = render;
+  openModal('🧪 نتيجة الحصة التجريبية', '');
+  render();
+  window._saveTrial = () => runSubmit(async () => {
+    if (!to.out) return formError('اختار النتيجة');
+    if ((to.out === 'lost') && !to.reason) return formError('اختار السبب — مهم عشان نعرف ليه بنخسر طلاب');
+    await q(sb.from('sessions').update({ trial_outcome: to.out, trial_outcome_reason: to.reason || null, trial_outcome_note: to.note || null,
+      trial_outcome_at: new Date().toISOString() }).eq('id', s.id));
+    if (to.out === 'converted' && s.subject) {
+      const pl = plansOf(s.student_id).filter(p => norm(p.subject) === norm(s.subject));
+      if (!pl.length) await q(sb.from('student_subjects').insert({ student_id: s.student_id, subject: s.subject, tutor_id: s.tutor_id }));
+      else if (!pl[0].tutor_id || pl[0].tutor_id !== s.tutor_id) await q(sb.from('student_subjects').update({ tutor_id: s.tutor_id }).eq('id', pl[0].id));
+    }
+    await refreshAll();
+    if (to.out === 'converted') {
+      showToast(`✓ ${st?.name || ''} اشترك مع ${tu?.name || ''} — حدد المواعيد الثابتة`);
+      openSessionForm(null, { student_id: s.student_id, tutor_id: s.tutor_id, subject: s.subject || '', kind: 'regular' });
+    } else if (to.out === 'another_tutor') {
+      showToast('اختار المعلمة التانية للتجربة');
+      openSessionForm(null, { student_id: s.student_id, subject: s.subject || '', kind: 'trial' });
+    } else { closeModal(); showToast('تم الحفظ ✓'); }
+  });
+}
+function openPendingTrials() {
+  const list = state.pendingTrials || [];
+  openModal(`تجريبية مستنية نتيجة (${list.length})`, `<p class="sub">حصص تجريبية خلصت ولسه ماتعرفناش الطالب هيكمل ولا لأ. تابع مع الأسرة وسجّل النتيجة.</p>
+    <div class="list">${list.map(s => { const v = sessionView(s); return `<div class="card item"><div class="item-head"><div><b>${esc(v.st?.name || '')}</b> <span class="sub small">${esc(v.fam?.name || '')}</span>
+      <div class="small">${esc(s.subject || '')} · ${esc(v.tu?.name || '')} · ${ago(s.scheduled_at)}</div></div>
+      ${s.trial_outcome === 'thinking' ? '<span class="badge b-scheduled">بيفكر</span>' : ''}</div>
+      <div class="actions"><button class="btn btn-brand sm" onclick="openTrialOutcome(${jsq(s.id)})">🧪 سجّل النتيجة</button></div></div>`; }).join('') || '<div class="empty">مفيش 👌</div>'}</div>`);
+}
+function trialReportHtml(rows) {
+  const trials = rows.filter(s => s.kind === 'trial' && s.status === 'done');
+  if (!trials.length) return '';
+  const by = k => trials.filter(s => s.trial_outcome === k).length;
+  const conv = by('converted'), other = by('another_tutor'), lost = by('lost'), pend = trials.length - conv - other - lost;
+  const decided = conv + other + lost;
+  const cost = trials.reduce((a, s) => a + charges(s).tut, 0);
+  const perTutor = {};
+  trials.forEach(s => { const x = perTutor[s.tutor_id] ||= { n: 0, c: 0, o: 0, l: 0 }; x.n++; if (s.trial_outcome === 'converted') x.c++; if (s.trial_outcome === 'another_tutor') x.o++; if (s.trial_outcome === 'lost') x.l++; });
+  const tRows = Object.entries(perTutor).map(([id, x]) => ({ t: byId(state.tutors, id), x, rate: (x.c + x.o + x.l) ? x.c / (x.c + x.o + x.l) : null }))
+    .filter(r => r.t).sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1) || b.x.n - a.x.n);
+  const reasons = {}; trials.filter(s => ['lost', 'another_tutor'].includes(s.trial_outcome)).forEach(s => { const k = s.trial_outcome_reason || 'بدون سبب'; reasons[k] = (reasons[k] || 0) + 1; });
+  const rs = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
+  return `<div class="section-title"><h2>🧪 الحصص التجريبية</h2></div>
+    <div class="kpis">
+      <div class="card kpi"><div class="l">تجريبية تمت</div><div class="v num">${trials.length}</div><div class="s">تكلفة المعلمات: ${fmt(cost)} EGP</div></div>
+      <div class="card kpi"><div class="l">نسبة الاشتراك</div><div class="v num ${decided ? (conv / decided >= .5 ? 'pos' : 'warn-txt') : ''}">${decided ? Math.round(conv / decided * 100) + '%' : '—'}</div><div class="s">${conv} اشترك من ${decided} قرروا</div></div>
+      <div class="card kpi"><div class="l">جربوا معلمة تانية</div><div class="v num">${other}</div><div class="s">مش هيحجزوا: ${lost}</div></div>
+      <div class="card kpi"><div class="l">مستنية نتيجة</div><div class="v num ${pend ? 'warn-txt' : ''}">${pend}</div><div class="s">${pend ? '<a href="javascript:void(0)" onclick="openPendingTrials()">تابعهم ←</a>' : 'كله متسجل ✓'}</div></div>
+    </div>
+    <div class="grid2 mt">
+      <div class="card scrollx"><table><thead><tr><th>المعلمة</th><th>تجارب</th><th>اشترك</th><th>غيّر/مشي</th><th>نسبة الاشتراك</th></tr></thead><tbody>
+        ${tRows.map(({ t, x, rate }) => `<tr><td>${esc(t.name)}</td><td class="num">${x.n}</td><td class="num pos">${x.c}</td><td class="num">${x.o + x.l || '—'}</td>
+          <td>${rate == null ? '<span class="sub small">لسه</span>' : `<span class="badge ${rate >= .6 ? 'b-done' : rate >= .35 ? 'b-pending' : 'b-now'}">${Math.round(rate * 100)}%</span>`}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="card item"><h3>ليه بنخسر بعد التجربة؟</h3>${rs.length ? bars(rs, Math.max(...rs.map(x => x[1])), 'fill-fam') : '<div class="sub small">مفيش لسه</div>'}</div>
+    </div>`;
 }
 
 /* ============================================================

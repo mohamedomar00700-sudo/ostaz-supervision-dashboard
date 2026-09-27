@@ -165,6 +165,7 @@ details summary{cursor:pointer;}
 .seg-wrap{display:flex;flex-wrap:wrap;gap:6px;}
 .radio{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:14.5px;flex-wrap:wrap;}
 .input.inline{width:auto;display:inline-block;padding:4px 8px;}
+.b-trial{background:#dcfce7;color:#15803d;font-size:11px;vertical-align:middle;}
 .empty{padding:28px;text-align:center;color:var(--sub);}
 .empty .btn{margin-top:10px;}
 .section-title{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px;}
