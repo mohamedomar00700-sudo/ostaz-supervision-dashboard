@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="أستاذ أونلاين">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=9">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -83,12 +83,12 @@
   </header>
 
   <nav class="tabs" id="tabs">
-    <button data-tab="daily" class="tab active" onclick="switchTab('daily')">📅 الجدول</button>
-    <button data-tab="relay" class="tab" onclick="switchTab('relay')">🔁 الترحيل <span class="count hidden" id="relay-count"></span></button>
-    <button data-tab="families" class="tab" onclick="switchTab('families')">👨‍👩‍👧 الأسر</button>
-    <button data-tab="tutors" class="tab" onclick="switchTab('tutors')">🧑‍🏫 المعلمون</button>
-    <button data-tab="fin" class="tab" onclick="switchTab('fin')">💰 المالية</button>
-    <button data-tab="admin" class="tab hidden" id="tab-admin" onclick="switchTab('admin')">🛡️ المشرفون</button>
+    <button data-tab="daily" class="tab active" onclick="switchTab('daily')"><span class="ti">📅</span><span class="tl">الجدول</span></button>
+    <button data-tab="relay" class="tab" onclick="switchTab('relay')"><span class="ti">🔁</span><span class="tl">الترحيل</span><span class="count hidden" id="relay-count"></span></button>
+    <button data-tab="families" class="tab" onclick="switchTab('families')"><span class="ti">👨‍👩‍👧</span><span class="tl">الأسر</span></button>
+    <button data-tab="tutors" class="tab" onclick="switchTab('tutors')"><span class="ti">🧑‍🏫</span><span class="tl">المعلمون</span></button>
+    <button data-tab="fin" class="tab" onclick="switchTab('fin')"><span class="ti">💰</span><span class="tl">المالية</span></button>
+    <button data-tab="admin" class="tab hidden" id="tab-admin" onclick="switchTab('admin')"><span class="ti">🛡️</span><span class="tl">المشرفون</span></button>
   </nav>
 
   <main class="wrap">
@@ -96,17 +96,24 @@
     <!-- الجدول اليومي -->
     <section id="view-daily">
       <div class="toolbar">
-        <div class="daynav">
-          <button class="btn btn-ghost" onclick="shiftDay(-1)" title="اليوم السابق">→ السابق</button>
-          <input type="date" id="day-input" class="input" onchange="setDay(this.value)">
-          <button class="btn btn-ghost" onclick="shiftDay(1)" title="اليوم التالي">التالي ←</button>
-          <button class="btn btn-ghost" onclick="setDay(todayStr())">اليوم</button>
+        <div class="seg" id="mode-chips">
+          <button class="chip active" data-mode="day" onclick="setDayMode('day')">يوم</button>
+          <button class="chip" data-mode="week" onclick="setDayMode('week')">أسبوع</button>
         </div>
         <button class="btn btn-brand" onclick="openSessionForm()">+ حصة جديدة</button>
       </div>
-      <div class="stats" id="day-stats"></div>
-      <div class="chips" id="filters"></div>
-      <div id="daily-list" class="list"></div>
+      <div class="daynav mb">
+        <button class="btn btn-ghost" id="btn-prev" onclick="shiftDay(-1)">→ السابق</button>
+        <input type="date" id="day-input" class="input" onchange="setDay(this.value)">
+        <button class="btn btn-ghost" id="btn-next" onclick="shiftDay(1)">التالي ←</button>
+        <button class="btn btn-ghost" onclick="setDay(todayStr())">النهارده</button>
+      </div>
+      <div id="day-panel">
+        <div class="stats" id="day-stats"></div>
+        <div class="chips" id="filters"></div>
+        <div id="daily-list" class="list"></div>
+      </div>
+      <div id="week-panel" class="hidden"></div>
     </section>
 
     <!-- الترحيل -->
@@ -177,6 +184,6 @@
 <div class="toast" id="toast"></div>
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
-<script src="app.js?v=8"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
