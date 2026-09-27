@@ -1143,6 +1143,13 @@ async function sendTestPush(quiet) {
     return data;
   } catch (e) { if (!quiet) showToast('فشل الإرسال التجريبي: ' + (e.message || e), true); }
 }
+async function delayedTestPush() {
+  try {
+    await q(sb.from('push_test_requests').insert({}));
+    closeModal();
+    showToast('اقفل الموبايل دلوقتي 🔒 — الإشعار هيوصل خلال دقيقة لدقيقتين');
+  } catch (e) { showToast(dbError(e), true); }
+}
 async function openAlertsPanel() {
   const on = await refreshAlertIcon();
   let body = '';
@@ -1165,9 +1172,17 @@ async function openAlertsPanel() {
     body = `<p class="pos"><b>✓ الإشعارات شغالة على الجهاز ده.</b></p>
       <p class="sub">هيوصلك تنبيه قبل كل حصة بـ 15 دقيقة، وتاني عند موعدها، حتى لو التطبيق مقفول والموبايل مقفول. التنبيه بيوصل لكل المشرفين اللي مفعّلينه.</p>
       <div class="modal-foot" style="flex-wrap:wrap">
-        <button class="btn btn-brand" onclick="sendTestPush()">إرسال إشعار تجريبي</button>
+        <button class="btn btn-brand" onclick="delayedTestPush()">🔒 تجربة والتطبيق مقفول (بعد دقيقة)</button>
+        <button class="btn btn-ghost" onclick="sendTestPush()">إشعار تجريبي الآن</button>
         <button class="btn btn-ghost" onclick="disablePush()">إيقاف على الجهاز ده</button>
-      </div>`;
+      </div>
+      ${isIOS ? `<details class="mt"><summary><b>الإشعار مش بيظهر؟</b></summary>
+        <ol class="steps small">
+          <li>الإعدادات ← الإشعارات ← <b>أستاذ أونلاين</b>: فعّل السماح، وشاشة القفل، والشعارات (Banners)، والأصوات.</li>
+          <li>اتأكد إن وضع التركيز (Focus / عدم الإزعاج) مقفول أو إن "أستاذ أونلاين" مسموح له.</li>
+          <li>لازم تفتح اللوحة دايماً من <b>الأيقونة على الشاشة الرئيسية</b>، مش من Safari.</li>
+          <li>لو لسه مش شغال: دوس "إيقاف على الجهاز ده" وبعدين فعّل تاني.</li>
+        </ol></details>` : ''}`;
   } else {
     body = `<p>فعّل الإشعارات عشان يوصلك تنبيه <b>قبل كل حصة بـ 15 دقيقة وعند موعدها</b> — حتى والتطبيق مقفول والموبايل مقفول.</p>
       <div class="modal-foot"><button class="btn btn-brand" id="push-enable" onclick="enablePush()">🔔 تفعيل الإشعارات</button></div>`;

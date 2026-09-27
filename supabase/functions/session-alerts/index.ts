@@ -68,6 +68,21 @@ Deno.serve(async (req) => {
   // ---------- scheduled run (pg_cron) ----------
   if (req.headers.get('x-cron-secret') !== S.cron_secret) return json({ error: 'forbidden' }, 403);
 
+  // delayed test pushes requested from the dashboard ("اقفل الموبايل واستنى")
+  const testReport: any[] = [];
+  const { data: tests } = await admin.from('push_test_requests').select('*').is('sent_at', null).lte('due_at', new Date().toISOString()).limit(20);
+  for (const t of tests || []) {
+    const { data: claimedTest } = await admin.from('push_test_requests').update({ sent_at: new Date().toISOString() }).eq('id', t.id).is('sent_at', null).select();
+    if (!claimedTest?.length) continue;
+    const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', t.user_id);
+    const r = await pushToSubs((tsubs || []) as Sub[], {
+      title: '✅ وصلك الإشعار والتطبيق مقفول', body: 'تنبيهات الحصص شغالة على الجهاز ده. هيوصلك تنبيه قبل كل حصة بـ 15 دقيقة وعند موعدها.',
+      tag: 'test-delayed-' + t.id, url: './',
+    }, vapid);
+    await admin.from('push_test_requests').update({ result: JSON.stringify(r).slice(0, 500) }).eq('id', t.id);
+    testReport.push({ test: t.id, r });
+  }
+
   const now = Date.now();
   const { data: sessions, error } = await admin.from('sessions')
     .select('id, scheduled_at, subject, student_id, tutor_id, meeting_link')
@@ -76,13 +91,14 @@ Deno.serve(async (req) => {
     .lte('scheduled_at', new Date(now + 15 * 60e3 + 30e3).toISOString());
   if (error) return json({ error: error.message }, 500);
 
+  // the dedupe key includes the scheduled time, so a rescheduled session is announced again
   const due: { session_id: string; kind: string }[] = [];
   for (const s of sessions || []) {
     const t = new Date(s.scheduled_at).getTime();
-    if (now >= t - 15 * 60e3 - 30e3 && now < t - 60e3) due.push({ session_id: s.id, kind: 'before15' });
-    if (now >= t - 30e3 && now < t + 10 * 60e3) due.push({ session_id: s.id, kind: 'start' });
+    if (now >= t - 15 * 60e3 - 30e3 && now < t - 60e3) due.push({ session_id: s.id, kind: `before15@${t}` });
+    if (now >= t - 30e3 && now < t + 10 * 60e3) due.push({ session_id: s.id, kind: `start@${t}` });
   }
-  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0 });
+  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0, tests: testReport.length });
 
   // claim alerts atomically so a session is never announced twice
   const { data: claimed, error: claimErr } = await admin.from('session_alert_log')
@@ -111,7 +127,7 @@ Deno.serve(async (req) => {
     const mins = Math.max(1, Math.round((new Date(s.scheduled_at).getTime() - now) / 60e3));
     const who = `${st?.name || 'طالب'}${st?.families?.name ? ' (' + st.families.name + ')' : ''}`;
     const what = `${s.subject ? s.subject + ' مع ' : 'مع '}${tu?.name || 'المعلم'}`;
-    const payload = c.kind === 'before15'
+    const payload = c.kind.startsWith('before15')
       ? { title: `⏰ حصة بعد ${mins} دقيقة — ${cairoTime(s.scheduled_at)}`, body: `${who}\n${what}\nابعت التذكير للأسرة والمعلم.` }
       : { title: `🔔 الحصة بدأت دلوقتي — ${cairoTime(s.scheduled_at)}`, body: `${who}\n${what}\nاتأكد إن الطرفين دخلوا.` };
     const day = new Date(new Date(s.scheduled_at).toLocaleString('en-US', { timeZone: 'Africa/Cairo' }));
@@ -121,5 +137,5 @@ Deno.serve(async (req) => {
     }, vapid);
     report.push({ session: s.id, kind: c.kind, results });
   }
-  return json({ checked: sessions!.length, sent: report.length, report });
+  return json({ checked: sessions!.length, sent: report.length, report, tests: testReport.length });
 });
