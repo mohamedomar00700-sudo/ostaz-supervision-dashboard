@@ -2938,7 +2938,7 @@ function showAuthError(msg) { const el = document.getElementById('auth-error'); 
 function hideAuthError() { document.getElementById('auth-error').classList.add('hidden'); }
 function translateAuthError(msg) {
   if (/already registered/i.test(msg)) return 'هذا البريد مسجّل بالفعل، جرّب تسجيل الدخول';
-  if (/invalid login/i.test(msg)) return 'البريد أو كلمة المرور غير صحيحة';
+  if (/invalid login/i.test(msg)) return 'البريد أو كلمة المرور غير صحيحة — لو إيميلك جيميل جرّب "الدخول بحساب جوجل" تحت من غير باسورد';
   if (/email not confirmed/i.test(msg)) return 'لازم تأكد بريدك الإلكتروني الأول من الرسالة اللي وصلتك';
   if (/password/i.test(msg) && /least/i.test(msg)) return 'كلمة المرور قصيرة جداً (6 أحرف على الأقل)';
   return msg;
@@ -3030,8 +3030,16 @@ async function checkPendingStatus() {
 async function loadSupervisorsList() {
   if (!isAdmin) return;
   try {
-    const data = await q(sb.from('supervisors').select('*').order('active', { ascending: true }));
-    document.getElementById('admin-list').innerHTML = data.map(s => `<div class="card item">
+    const [data, invites] = await Promise.all([q(sb.from('supervisors').select('*').order('active', { ascending: true })),
+      q(sb.from('supervisor_invites').select('*').is('used_at', null).order('created_at')).catch(() => [])]);
+    document.getElementById('admin-list').innerHTML = `<div class="card item">
+      <h3 style="margin:0 0 6px">➕ إضافة مشرف بالإيميل</h3>
+      <p class="sub small" style="margin:0 0 8px">اكتب إيميله هنا، وأول ما يدخل بيه (بجوجل أو يعمل حساب بنفس الإيميل) هيتفعّل على طول من غير ما يستنى موافقة.</p>
+      <div class="row-gap"><input class="input" id="inv-email" type="email" placeholder="name@gmail.com" style="flex:1;min-width:180px">
+        <button class="btn btn-brand" onclick="inviteSupervisor()">إضافة</button></div>
+      ${invites.length ? `<div class="gm-list">${invites.map(i => `<div class="gm-row"><b dir="ltr">${esc(i.email)}</b><span class="sub small">لسه مادخلش</span>
+        <span class="gm-act"><button class="btn btn-ghost sm" onclick="removeInvite(${jsq(i.email)})">إلغاء</button></span></div>`).join('')}</div>` : ''}
+    </div>` + data.map(s => `<div class="card item">
       <div class="item-head">
         <div><div class="item-title">${esc(s.name)}${s.id === currentUser.id ? ' <span class="sub small">(أنت)</span>' : ''}</div>
           <div class="sub small">${s.role === 'admin' ? 'أدمن' : 'مشرف'}</div></div>
@@ -3045,6 +3053,16 @@ async function loadSupervisorsList() {
       </div>` : ''}
     </div>`).join('');
   } catch (e) { showToast(dbError(e), true); }
+}
+async function inviteSupervisor() {
+  const email = document.getElementById('inv-email').value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showToast('اكتب إيميل صحيح', true);
+  try { await q(sb.from('supervisor_invites').upsert({ email, role: 'supervisor', invited_by: currentUser.id, used_at: null }));
+    showToast('تمت الإضافة ✓ — ابعتله لينك التطبيق يدخل بالإيميل ده'); loadSupervisorsList(); }
+  catch (e) { showToast(dbError(e), true); }
+}
+async function removeInvite(email) {
+  try { await q(sb.from('supervisor_invites').delete().eq('email', email)); loadSupervisorsList(); } catch (e) { showToast(dbError(e), true); }
 }
 async function updateSupervisor(id, patch) {
   try { await q(sb.from('supervisors').update(patch).eq('id', id)); showToast('تم التحديث ✓'); loadSupervisorsList(); }
