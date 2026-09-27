@@ -850,11 +850,11 @@ function renderFamilies() {
       <div class="item-head">
         <div>
           <div class="item-title">${c.flag || ''} ${esc(f.name)}</div>
-          <div class="sub small">${esc(f.parent_name || '')}${f.parent_name ? ' · ' : ''}${esc(f.country)} · ${esc(f.currency)}</div>
+          <div class="sub small">${esc(f.parent_name || '')}${f.parent_name ? ' · ' : ''}${esc(f.country)} · ${esc(f.currency)} · <span class="pill">${CYCLES[f.billing_cycle] || 'شهري'}</span></div>
         </div>
         <div style="text-align:left">
           <div class="num ${b.balance < 0 ? 'neg' : 'pos'}" style="font-weight:800">${money(b.balance, f.currency)}</div>
-          <div class="sub small">${b.balance < 0 ? 'مستحق على الأسرة' : 'رصيد'}</div>
+          <div class="sub small">${b.balance < 0 ? 'مستحق على الأسرة' : f.billing_cycle === 'prepaid' ? (lowPrepaid(f) ? '🪫 الباقة قربت تخلص' : 'رصيد الباقة') : 'رصيد'}</div>
         </div>
       </div>
       ${f.whatsapp_group ? `<div class="actions" style="margin-top:8px"><a class="btn btn-wa sm" href="${esc(f.whatsapp_group)}" target="_blank" rel="noopener">💬 جروب الأسرة</a></div>` : ''}
@@ -871,7 +871,8 @@ function renderFamilies() {
       </div>
       <div class="actions">
         <button class="btn btn-brand sm" onclick="openPaymentForm(${fid})">+ دفعة</button>
-        ${b.balance < 0 ? `<button class="btn btn-wa sm" onclick="openPaymentReminder(${fid})">📲 مطالبة</button>` : ''}
+        <button class="btn btn-wa sm" onclick="openFamilyInvoice(${fid})">📄 ${f.billing_cycle === 'prepaid' ? 'كشف رصيد' : 'فاتورة'}</button>
+        ${b.balance < 0 ? `<button class="btn btn-ghost sm" onclick="openPaymentReminder(${fid})">📲 مطالبة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openFamilyStatement(${fid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openFamilyForm(${fid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('أسرة ' + f.name + ' وكل طلابها')}, () => q(sb.from('families').delete().eq('id', ${fid})))">حذف</button>` : ''}
@@ -888,6 +889,7 @@ function openFamilyForm(id) {
        options: Object.keys(COUNTRIES).map(k => ({ v: k, l: `${COUNTRIES[k].flag} ${k}` })) },
      { name: 'currency', label: 'عملة الدفع', type: 'select', required: true, value: f?.currency || 'SAR',
        options: CURRENCIES.map(c => ({ v: c, l: c })) }],
+    { name: 'billing_cycle', label: 'طريقة المحاسبة', type: 'select', value: f?.billing_cycle || 'monthly', options: Object.entries(CYCLES).map(([v, l]) => ({ v, l })) },
     { name: 'whatsapp_group', label: 'لينك جروب واتساب الأسرة', type: 'url', value: f?.whatsapp_group, placeholder: 'https://chat.whatsapp.com/…' },
     { name: 'whatsapp', label: 'رقم واتساب ولي الأمر', type: 'tel', value: f?.whatsapp, placeholder: '9665xxxxxxxx', hint: 'بكود الدولة — للاستخدام الداخلي فقط ولا يظهر للمعلم' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: f?.notes },
@@ -903,7 +905,7 @@ function openFamilyForm(id) {
     document.getElementById('f_currency').value = COUNTRIES[e.target.value].cur;
   });
   window._formSubmit = () => runSubmit(async () => {
-    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), notes: fv('notes') || null };
+    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), billing_cycle: fv('billing_cycle'), notes: fv('notes') || null };
     if (!f && fv('st_name') && !fv('st_grade')) return formError('اكتب صف الطالب أو امسح اسمه');
     if (f) {
       await q(sb.from('families').update(row).eq('id', f.id));
@@ -984,28 +986,162 @@ async function openFamilyStatement(familyId) {
       <div class="modal-foot"><button class="btn btn-brand" onclick="openPaymentForm(${jsq(familyId)})">+ تسجيل دفعة</button></div>`);
   } catch (e) { showToast(dbError(e), true); }
 }
+/* ----- دفعات الأسر: طريقة الاستلام + اللي وصل فعلاً بالجنيه ----- */
+const PAY_METHODS = ['ويسترن يونيون', 'تطبيق تحويل', 'استلام بالجنيه المصري', 'تحويل بنكي', 'أخرى'];
+const CYCLES = { monthly: 'شهري', weekly: 'أسبوعي', prepaid: 'مقدّم (باقة)' };
+function txEgp(t) { // الجنيه اللي وصل فعلاً (أو تقدير بسعر السوق لو ماتسجلش)
+  const sign = t.type === 'refund' ? -1 : 1;
+  if (t.received_egp != null) return { v: sign * Number(t.received_egp), est: false };
+  return { v: sign * Number(t.amount) * Number(t.market_rate || fxRate(t.currency)), est: t.currency !== 'EGP' };
+}
+function txFxDiff(t) { // فرق العملة = الواصل فعلاً − المبلغ × سعر السوق يوم الدفع
+  if (t.received_egp == null || t.currency === 'EGP' || !t.market_rate) return null;
+  const sign = t.type === 'refund' ? -1 : 1;
+  return sign * (Number(t.received_egp) - Number(t.amount) * Number(t.market_rate));
+}
 function openPaymentForm(familyId) {
   if (!state.families.length) { showToast('أضف أسرة الأول', true); switchTab('families'); return; }
   const fields = [
     { name: 'family_id', label: 'الأسرة', type: 'select', required: true, placeholder: 'اختر الأسرة…', value: familyId,
       options: state.families.map(f => ({ v: f.id, l: `${f.name} (${f.currency})` })) },
     [{ name: 'type', label: 'النوع', type: 'select', value: 'payment', options: [{ v: 'payment', l: 'دفعة مستلمة' }, { v: 'refund', l: 'استرداد للأسرة' }] },
-     { name: 'amount', label: 'المبلغ', type: 'number', required: true, hint: 'بعملة الأسرة' }],
+     { name: 'method', label: 'طريقة الاستلام', type: 'select', value: 'ويسترن يونيون', options: PAY_METHODS.map(m => ({ v: m, l: m })) }],
+    { name: 'amount', label: 'المبلغ اللي اتحسب للأسرة', type: 'number', required: true, hint: 'بعملة الأسرة' },
+    { name: 'received_egp', label: 'المبلغ اللي وصلك فعلاً بالجنيه', type: 'number', hint: ' ' },
     { name: 'date', label: 'تاريخ الاستلام', type: 'date', value: todayStr() },
-    { name: 'note', label: 'ملاحظة', placeholder: 'مثال: باقة 8 حصص — تحويل بنكي' },
+    { name: 'note', label: 'ملاحظة', placeholder: 'مثال: شهر أكتوبر — رقم الحوالة MTCN …' },
   ];
   openModal('تسجيل دفعة', formHtml(fields, 'تسجيل'));
-  const sel = document.getElementById('f_family_id');
-  const upd = () => { const f = byId(state.families, sel.value); document.getElementById('hint_amount').textContent = f ? `بـ ${f.currency}` : 'بعملة الأسرة'; };
-  sel.addEventListener('change', upd); upd();
+  const $ = n => document.getElementById('f_' + n);
+  const upd = () => {
+    const f = byId(state.families, $('family_id').value);
+    const cur = f?.currency || '';
+    document.getElementById('hint_amount').textContent = cur ? `بالـ ${cur} — ده اللي بيتخصم من مستحقات الأسرة` : 'بعملة الأسرة';
+    const egpFam = cur === 'EGP';
+    document.getElementById('wrap_received_egp').classList.toggle('hidden', egpFam);
+    const amt = Number($('amount').value) || 0, got = Number($('received_egp').value) || 0, mr = fxRate(cur);
+    let h = cur && !egpFam ? `بسعر السوق النهارده ≈ ${fmt(amt * mr, 2)} ج (1 ${cur} = ${fmt(mr, 4)} ج).` : '';
+    if (got && amt && !egpFam) {
+      const eff = got / amt, diff = got - amt * mr;
+      h += ` السعر الفعلي اللي وصلك: ${fmt(eff, 4)} ج — ${diff >= 0 ? 'مكسب' : 'خسارة'} فرق عملة ${fmt(Math.abs(diff), 2)} ج.`;
+    }
+    if (!egpFam) h += ' لو مش عارفه دلوقتي سيبه فاضي وعدّله بعدين.';
+    document.getElementById('hint_received_egp').textContent = h;
+    document.querySelector('#wrap_received_egp label').textContent = $('method').value === 'استلام بالجنيه المصري'
+      ? 'المبلغ اللي استلمته بالجنيه *' : 'المبلغ اللي وصلك فعلاً بالجنيه';
+  };
+  ['family_id', 'amount', 'received_egp', 'method'].forEach(n => { $(n).addEventListener('input', upd); $(n).addEventListener('change', upd); });
+  upd();
   window._formSubmit = () => runSubmit(async () => {
     const f = byId(state.families, fv('family_id'));
     const amount = fnum('amount');
     if (!(amount > 0)) return formError('اكتب مبلغ صحيح');
+    const got = f.currency === 'EGP' ? amount : fnum('received_egp');
+    if (fv('method') === 'استلام بالجنيه المصري' && !(got > 0)) return formError('اكتب المبلغ اللي استلمته بالجنيه');
     const d = fv('date') ? new Date(`${fv('date')}T12:00:00`) : new Date();
-    await q(sb.from('family_transactions').insert({ family_id: f.id, amount, currency: f.currency, type: fv('type'), note: fv('note') || null, created_at: d.toISOString() }));
+    await q(sb.from('family_transactions').insert({ family_id: f.id, amount, currency: f.currency, type: fv('type'), method: fv('method'),
+      received_egp: got || null, note: fv('note') || null, created_at: d.toISOString() }));
     closeModal(); showToast('تم تسجيل الدفعة ✓'); await refreshAll();
   });
+}
+function openEditReceived(txId) {
+  const t = (state.fin?.tx || []).find(x => x.id === txId); if (!t) return;
+  openModal('تعديل المبلغ اللي وصل بالجنيه', formHtml([
+    { name: 'received_egp', label: `${money(t.amount, t.currency)} وصلوا كام جنيه؟`, type: 'number', required: true, value: t.received_egp ?? '',
+      hint: `بسعر السوق يوم الدفع ≈ ${fmt(Number(t.amount) * Number(t.market_rate || fxRate(t.currency)), 2)} ج` },
+    { name: 'method', label: 'طريقة الاستلام', type: 'select', value: t.method || 'ويسترن يونيون', options: PAY_METHODS.map(m => ({ v: m, l: m })) },
+  ], 'حفظ'));
+  window._formSubmit = () => runSubmit(async () => {
+    await q(sb.from('family_transactions').update({ received_egp: fnum('received_egp'), method: fv('method') }).eq('id', t.id));
+    closeModal(); showToast('تم الحفظ ✓'); await loadFinance(true);
+  });
+}
+
+/* ----- فواتير الأسر حسب طريقة المحاسبة ----- */
+function periodFor(cycle, which) { // which: 0 = الحالية، -1 = اللي فاتت
+  const now = new Date();
+  if (cycle === 'weekly') {
+    const from = weekStart(todayStr()); from.setDate(from.getDate() + 7 * which);
+    const to = new Date(from); to.setDate(to.getDate() + 7);
+    return { from, to, label: which ? 'الأسبوع اللي فات' : 'الأسبوع ده' };
+  }
+  if (cycle === 'prepaid') {
+    const to = new Date(parseDay(todayStr()).getTime() + 864e5), from = new Date(to.getTime() - (which ? 60 : 30) * 864e5);
+    return { from, to, label: which ? 'آخر 60 يوم' : 'آخر 30 يوم' };
+  }
+  const from = new Date(now.getFullYear(), now.getMonth() + which, 1), to = new Date(now.getFullYear(), now.getMonth() + which + 1, 1);
+  return { from, to, label: `شهر ${from.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` };
+}
+function lowPrepaid(f) {
+  if (f.billing_cycle !== 'prepaid') return false;
+  const prices = state.students.filter(s => s.family_id === f.id).map(s => Number(s.default_price || 0));
+  const hour = Math.max(20, ...prices);
+  return famBalance(f).balance < 2 * hour;
+}
+async function openFamilyInvoice(familyId, which = 0) {
+  const f = byId(state.families, familyId);
+  const cycle = f.billing_cycle || 'monthly';
+  const p = periodFor(cycle, which);
+  const studIds = state.students.filter(s => s.family_id === familyId).map(s => s.id);
+  try {
+    const [ss, tx] = await Promise.all([
+      studIds.length ? q(sb.from('sessions').select('*').in('student_id', studIds).eq('status', 'done')
+        .gte('scheduled_at', p.from.toISOString()).lt('scheduled_at', p.to.toISOString()).order('scheduled_at')) : [],
+      q(sb.from('family_transactions').select('*').eq('family_id', familyId).gte('created_at', p.from.toISOString()).lt('created_at', p.to.toISOString())),
+    ]);
+    const c = COUNTRIES[f.country] || COUNTRIES['مصر'];
+    const total = ss.reduce((a, s) => a + charges(s).fam, 0), mins = ss.reduce((a, s) => a + sMins(s), 0);
+    const paid = tx.reduce((a, t) => a + (t.type === 'refund' ? -1 : 1) * Number(t.amount), 0);
+    const bal = famBalance(f).balance;
+    const lines = ss.map(s => { const v = sessionView(s);
+      return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'revision' ? ' (مراجعة)' : ''} — ${durLabel(sMins(s))} = ${fmt(charges(s).fam, 2)} ${f.currency}`; }).join('\n');
+    const closing = cycle === 'prepaid'
+      ? (bal <= 0 ? 'رصيد الباقة خلص، برجاء التجديد لاستمرار الحصص 🙏' : lowPrepaid(f) ? 'رصيد الباقة قرب يخلص، برجاء التجديد قريب 🙏' : 'شكراً لثقتكم 🌷')
+      : (bal < 0 ? 'برجاء التكرم بسداد المستحق، ولأي استفسار إحنا موجودين 🙏' : 'شكراً لالتزامكم 🌷');
+    const text = `السلام عليكم ورحمة الله 🌷
+${cycle === 'prepaid' ? 'كشف رصيد الباقة' : 'فاتورة حصص ' + p.label} — ${f.name}
+${lines || '— لا توجد حصص منفذة في الفترة —'}
+
+إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
+إجمالي الحصص: *${fmt(total, 2)} ${f.currency}*${paid ? `\nالمدفوع في الفترة: ${fmt(paid, 2)} ${f.currency}` : ''}
+${bal < 0 ? `المستحق حالياً: *${fmt(-bal, 2)} ${f.currency}*` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${f.currency}*`}
+
+${closing}
+${SIGN_F}`;
+    openModal(`${cycle === 'prepaid' ? 'كشف رصيد' : 'فاتورة'} — ${f.name}`, `
+      <div class="chips"><span class="sub small" style="align-self:center">طريقة المحاسبة: <b>${CYCLES[cycle]}</b></span>
+        <button class="chip ${which === 0 ? 'active' : ''}" onclick="openFamilyInvoice(${jsq(familyId)}, 0)">${periodFor(cycle, 0).label}</button>
+        <button class="chip ${which === -1 ? 'active' : ''}" onclick="openFamilyInvoice(${jsq(familyId)}, -1)">${periodFor(cycle, -1).label}</button></div>
+      <div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}`);
+  } catch (e) { showToast(dbError(e), true); }
+}
+
+/* ----- كشف المعلمة عن فترة (للتسوية الشهرية) ----- */
+async function openTutorPeriodMessage(tutorId) {
+  const t = byId(state.tutors, tutorId), r = state.fin?.range || finRange();
+  try {
+    const [ss, po] = await Promise.all([
+      q(sb.from('sessions').select('*').eq('tutor_id', tutorId).eq('status', 'done').gte('scheduled_at', r.fromD.toISOString()).lt('scheduled_at', r.toD.toISOString()).order('scheduled_at')),
+      q(sb.from('tutor_payouts').select('*').eq('tutor_id', tutorId).eq('paid', true).gte('created_at', r.fromD.toISOString()).lt('created_at', r.toD.toISOString())),
+    ]);
+    const earned = ss.reduce((a, s) => a + charges(s).tut, 0), mins = ss.reduce((a, s) => a + sMins(s), 0);
+    const paid = po.reduce((a, p) => a + Number(p.total_egp), 0);
+    const b = tutBalance(t);
+    const label = r.fromD.getDate() === 1 && new Date(r.toD.getTime() - 1).getMonth() === r.fromD.getMonth()
+      ? `شهر ${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` : `الفترة ${r.from} إلى ${r.toIncl}`;
+    const lines = ss.map(s => { const v = sessionView(s); return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${v.st?.name || ''}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'revision' ? ' مراجعة' : ''} — ${durLabel(sMins(s))} = ${fmt(charges(s).tut, 2)} ج`; }).join('\n');
+    const text = `${greetTutor(t.name)}
+كشف حصصك عن ${label}:
+${lines || '— لا توجد حصص —'}
+
+إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
+إجمالي المستحق عن الفترة: *${fmt(earned, 2)} جنيه*${paid ? `\nتم تحويل: ${fmt(paid, 2)} جنيه` : ''}
+${b.due > 0 ? `المتبقي لكِ حالياً: *${fmt(b.due, 2)} جنيه*` : 'لا يوجد متبقي ✅'}
+
+لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل.
+${SIGN_T}`;
+    openModal(`كشف ${label} — ${t.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id })}`);
+  } catch (e) { showToast(dbError(e), true); }
 }
 
 /* ============================================================
@@ -1202,72 +1338,107 @@ function renderFinance() {
   const margin = rev - cost;
   const byCur = {};
   done.forEach(s => { const c = byCur[s.student_currency] ||= { amt: 0, egp: 0, n: 0 }; c.amt += charges(s).fam; c.egp += Number(s.revenue_egp || 0); c.n++; });
+  // الكاش الفعلي
+  let cashIn = 0, estCount = 0, fxDiff = 0, fxKnown = 0;
   const collected = {};
-  tx.forEach(t => { collected[t.currency] = (collected[t.currency] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount); });
-  const collectedEgp = Object.entries(collected).reduce((a, [c, v]) => a + toEGP(v, c), 0);
+  tx.forEach(t => {
+    const e = txEgp(t); cashIn += e.v; if (e.est) estCount++;
+    const d = txFxDiff(t); if (d != null) { fxDiff += d; fxKnown++; }
+    collected[t.currency] = (collected[t.currency] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount);
+  });
   const paidOut = payouts.filter(p => p.paid).reduce((a, p) => a + Number(p.total_egp), 0);
 
-  // مستحقات المعلمين في الفترة
+  // المعلمين — تسوية الفترة (بالجنيه)
   const perTutor = {};
   done.forEach(s => { const x = perTutor[s.tutor_id] ||= { n: 0, egp: 0, h: 0 }; x.n++; x.h += sMins(s) / 60; x.egp += charges(s).tut; });
-  const tutorRows = state.tutors.map(t => ({ t, p: perTutor[t.id] || { n: 0, egp: 0, h: 0 }, b: tutBalance(t) }))
-    .filter(x => x.p.n || x.b.due > 0).sort((a, b) => b.b.due - a.b.due);
+  const paidPerTutor = {};
+  payouts.filter(p => p.paid).forEach(p => paidPerTutor[p.tutor_id] = (paidPerTutor[p.tutor_id] || 0) + Number(p.total_egp));
+  const tutorRows = state.tutors.map(t => ({ t, p: perTutor[t.id] || { n: 0, egp: 0, h: 0 }, paid: paidPerTutor[t.id] || 0, b: tutBalance(t) }))
+    .filter(x => x.p.n || x.b.due > 0 || x.paid).sort((a, b) => b.b.due - a.b.due);
 
-  const owing = state.families.map(f => ({ f, b: famBalance(f) })).filter(x => x.b.balance < 0).sort((a, b) => a.b.balance - b.b.balance);
+  // الأسر — حصص الفترة والمدفوع والرصيد
+  const famPeriod = {};
+  done.forEach(s => { const st = byId(state.students, s.student_id); if (!st) return; const x = famPeriod[st.family_id] ||= { charge: 0, mins: 0 }; x.charge += charges(s).fam; x.mins += sMins(s); });
+  const famPaid = {};
+  tx.forEach(t => famPaid[t.family_id] = (famPaid[t.family_id] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount));
+  const famRows = state.families.map(f => ({ f, p: famPeriod[f.id] || { charge: 0, mins: 0 }, paid: famPaid[f.id] || 0, b: famBalance(f) }))
+    .filter(x => x.p.charge || x.paid || x.b.balance < 0 || lowPrepaid(x.f))
+    .sort((a, b) => a.b.balance - b.b.balance);
 
+  const fxRows = (state.fxRows || []).filter(r => r.currency !== 'EGP');
   document.getElementById('fin-content').innerHTML = `
     <div class="kpis">
-      <div class="card kpi"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP · ${done.length} حصة · ${fmt(hoursDone, 1)} ساعة</div></div>
-      <div class="card kpi"><div class="l">تكلفة المعلمين</div><div class="v num">${fmt(cost)}</div><div class="s">EGP</div></div>
-      <div class="card kpi"><div class="l">صافي هامش الأكاديمية</div><div class="v num ${margin >= 0 ? 'pos' : 'neg'}">${fmt(margin)}</div><div class="s">EGP · ${rev ? Math.round(margin / rev * 100) : 0}%</div></div>
-      <div class="card kpi"><div class="l">تحصيلات الفترة</div><div class="v num">${fmt(collectedEgp)}</div><div class="s">EGP تقريبي · ${Object.entries(collected).map(([c, v]) => `${fmt(v)} ${c}`).join(' + ') || '—'}</div></div>
-      <div class="card kpi"><div class="l">مصروف للمعلمين</div><div class="v num">${fmt(paidOut)}</div><div class="s">EGP في الفترة</div></div>
-      <div class="card kpi"><div class="l">حصص ملغاة</div><div class="v num">${cancelled.length}</div><div class="s">طالب: ${cancelled.filter(s => s.status === 'cancelled_by_student').length} · معلم: ${cancelled.filter(s => s.status === 'cancelled_by_tutor').length}</div></div>
+      <div class="card kpi"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP بسعر السوق يوم الحصة · ${done.length} ${done.length > 2 && done.length < 11 ? 'حصص' : 'حصة'} · ${fmt(hoursDone, 1)} ساعة</div></div>
+      <div class="card kpi"><div class="l">مستحقات المعلمين عن الفترة</div><div class="v num">${fmt(cost)}</div><div class="s">EGP</div></div>
+      <div class="card kpi"><div class="l">هامش الأكاديمية</div><div class="v num ${margin >= 0 ? 'pos' : 'neg'}">${fmt(margin)}</div><div class="s">EGP · ${rev ? Math.round(margin / rev * 100) : 0}% من الإيراد</div></div>
+      <div class="card kpi"><div class="l">المحصّل فعلياً بالجنيه</div><div class="v num">${fmt(cashIn)}</div><div class="s">${Object.entries(collected).map(([c, v]) => `${fmt(v)} ${c}`).join(' + ') || '—'}${estCount ? ` · ${estCount} دفعة لسه مقدّرة` : ''}</div></div>
+      <div class="card kpi"><div class="l">فرق العملة (مكسب/خسارة)</div><div class="v num ${fxDiff >= 0 ? 'pos' : 'neg'}">${fxKnown ? (fxDiff >= 0 ? '+' : '') + fmt(fxDiff) : '—'}</div><div class="s">${fxKnown ? `EGP · من ${fxKnown} تحويل: الواصل فعلاً مقابل سعر السوق` : 'سجّل "المبلغ اللي وصلك بالجنيه" في الدفعات'}</div></div>
+      <div class="card kpi"><div class="l">صافي الكاش في الفترة</div><div class="v num ${cashIn - paidOut >= 0 ? 'pos' : 'neg'}">${fmt(cashIn - paidOut)}</div><div class="s">المحصّل − المحوَّل للمعلمين (${fmt(paidOut)})</div></div>
     </div>
+
+    <div class="section-title"><h2>تسوية المعلمين (بالجنيه)</h2></div>
+    <div class="card scrollx"><table><thead><tr><th>المعلم</th><th>الفترة</th><th>مستحق الفترة</th><th>اتحوّل في الفترة</th><th>المتبقي الكلي</th><th></th></tr></thead><tbody>
+      ${tutorRows.map(x => `<tr><td>${esc(x.t.name)}${x.t.default_rate_egp == null ? '<div class="small neg">بدون أجر ساعة</div>' : ''}</td>
+        <td class="num">${x.p.n} حصة<div class="sub small">${fmt(x.p.h || 0, 1)} ساعة</div></td>
+        <td class="num">${fmt(x.p.egp)}</td><td class="num">${x.paid ? fmt(x.paid) : '—'}</td>
+        <td class="num ${x.b.due > 0 ? 'neg' : ''}">${fmt(x.b.due)}</td>
+        <td class="row-gap">${x.b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${jsq(x.t.id)})">صرف</button>` : '<span class="pill ok">مصروف</span>'}
+          <button class="btn btn-wa sm" onclick="openTutorPeriodMessage(${jsq(x.t.id)})">📲 كشف</button></td></tr>`).join('')
+        || '<tr><td colspan="6" class="empty">لا توجد حصص أو مستحقات في الفترة</td></tr>'}
+    </tbody></table></div>
+
+    <div class="section-title"><h2>الأسر — الفواتير والرصيد</h2></div>
+    <div class="card scrollx"><table><thead><tr><th>الأسرة</th><th>حصص الفترة</th><th>مدفوع في الفترة</th><th>الرصيد الحالي</th><th></th></tr></thead><tbody>
+      ${famRows.map(x => { const cur = x.f.currency; return `<tr><td>${esc(x.f.name)}<div class="sub small">${CYCLES[x.f.billing_cycle] || ''}${lowPrepaid(x.f) ? ' · <span class="neg">🪫 الباقة قربت تخلص</span>' : ''}</div></td>
+        <td class="num">${fmt(x.p.charge, 2)} ${cur}<div class="sub small">${x.p.mins ? durLabel(x.p.mins) : ''}</div></td>
+        <td class="num">${x.paid ? fmt(x.paid, 2) + ' ' + cur : '—'}</td>
+        <td class="num ${x.b.balance < 0 ? 'neg' : 'pos'}">${x.b.balance < 0 ? 'عليها ' : 'لها '}${fmt(Math.abs(x.b.balance), 2)} ${cur}</td>
+        <td class="row-gap"><button class="btn btn-wa sm" onclick="openFamilyInvoice(${jsq(x.f.id)})">📄 فاتورة</button>
+          <button class="btn btn-brand sm" onclick="openPaymentForm(${jsq(x.f.id)})">+ دفعة</button></td></tr>`; }).join('')
+        || '<tr><td colspan="5" class="empty">لا توجد حصص أو مستحقات في الفترة</td></tr>'}
+    </tbody></table></div>
+
+    <div class="section-title"><h2>الدفعات المستلمة في الفترة</h2></div>
+    <div class="card scrollx"><table><thead><tr><th>التاريخ</th><th>الأسرة</th><th>المبلغ</th><th>وصل بالجنيه</th><th>فرق العملة</th><th>الطريقة</th></tr></thead><tbody>
+      ${tx.map(t => { const e = txEgp(t), d = txFxDiff(t); return `<tr><td class="num">${fmtShortDate(t.created_at)}</td><td>${esc(byId(state.families, t.family_id)?.name || '')}<div class="sub small">${esc(t.note || '')}</div></td>
+        <td class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</td>
+        <td class="num">${e.est ? `<a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})" title="مقدّر بسعر السوق — دوس لتسجيل المبلغ الفعلي">≈ ${fmt(e.v)} ✎</a>` : `${fmt(e.v)}${t.currency !== 'EGP' ? ` <a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})">✎</a>` : ''}`}</td>
+        <td class="num ${d == null ? '' : d >= 0 ? 'pos' : 'neg'}">${d == null ? '—' : (d >= 0 ? '+' : '') + fmt(d)}</td>
+        <td class="sub small">${esc(t.method || '')}</td></tr>`; }).join('')
+        || '<tr><td colspan="6" class="empty">لا توجد دفعات في الفترة</td></tr>'}
+    </tbody></table></div>
 
     ${Object.keys(byCur).length ? `<div class="section-title"><h2>الإيراد حسب العملة</h2></div>
     <div class="card scrollx"><table><thead><tr><th>العملة</th><th>حصص</th><th>بالعملة الأصلية</th><th>بالجنيه (سعر يوم الحصة)</th></tr></thead><tbody>
       ${Object.entries(byCur).map(([c, v]) => `<tr><td>${c}</td><td class="num">${v.n}</td><td class="num">${fmt(v.amt, 2)} ${c}</td><td class="num">${fmt(v.egp)} EGP</td></tr>`).join('')}
     </tbody></table></div>` : ''}
 
-    <div class="section-title"><h2>مستحقات المعلمين</h2></div>
-    <div class="card scrollx"><table><thead><tr><th>المعلم</th><th>الفترة</th><th>مستحق عن الفترة</th><th>إجمالي غير مصروف</th><th></th></tr></thead><tbody>
-      ${tutorRows.map(x => `<tr><td>${esc(x.t.name)}</td><td class="num">${x.p.n} حصة<div class="sub small">${fmt(x.p.h || 0, 1)} ساعة</div></td><td class="num">${fmt(x.p.egp)} EGP</td>
-        <td class="num ${x.b.due > 0 ? 'neg' : ''}">${fmt(x.b.due)} EGP</td>
-        <td>${x.b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${jsq(x.t.id)})">صرف</button>` : '<span class="pill ok">مصروف</span>'}</td></tr>`).join('')
-        || '<tr><td colspan="5" class="empty">لا توجد مستحقات</td></tr>'}
-    </tbody></table></div>
-
-    <div class="section-title"><h2>أسر عليها مستحقات</h2></div>
-    <div class="card scrollx"><table><thead><tr><th>الأسرة</th><th>المستحق</th><th></th></tr></thead><tbody>
-      ${owing.map(x => `<tr><td>${esc(x.f.name)}</td><td class="num neg">${money(-x.b.balance, x.f.currency)}</td>
-        <td class="row-gap"><button class="btn btn-brand sm" onclick="openPaymentForm(${jsq(x.f.id)})">+ دفعة</button>
-        <button class="btn btn-wa sm" onclick="openPaymentReminder(${jsq(x.f.id)})">📲 مطالبة</button>
-        <button class="btn btn-ghost sm" onclick="openFamilyStatement(${jsq(x.f.id)})">كشف</button></td></tr>`).join('')
-        || '<tr><td colspan="3" class="empty">كل الأسر رصيدها سليم 👌</td></tr>'}
-    </tbody></table></div>
-
-    <div class="section-title"><h2>الدفعات المستلمة في الفترة</h2></div>
-    <div class="card scrollx"><table><thead><tr><th>التاريخ</th><th>الأسرة</th><th>المبلغ</th><th>ملاحظة</th></tr></thead><tbody>
-      ${tx.map(t => `<tr><td class="num">${fmtShortDate(t.created_at)}</td><td>${esc(byId(state.families, t.family_id)?.name || '')}</td>
-        <td class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</td><td class="sub">${esc(t.note || '')}</td></tr>`).join('')
-        || '<tr><td colspan="4" class="empty">لا توجد دفعات في الفترة</td></tr>'}
-    </tbody></table></div>
-
     <div class="section-title"><h2>أسعار الصرف</h2>${isAdmin ? `<button class="btn btn-ghost sm" onclick="openFxForm()">تعديل</button>` : ''}</div>
-    <div class="card item"><div class="meta">
-      ${['SAR', 'AED'].map(c => `<span dir="ltr">1 ${c} = <b>${fmt(state.fx[c], 4)}</b> EGP</span>`).join('')}
-      <span class="small">آخر تحديث: ${state.fxRows?.[0] ? fmtShortDate(state.fxRows.reduce((a, r) => r.updated_at > a ? r.updated_at : a, '')) : ''}</span>
-    </div><p class="sub small" style="margin:8px 0 0">سعر الصرف بيتثبت على كل حصة لحظة تسجيلها "تمت"، فتغيير السعر هنا مش بيأثر على الحصص القديمة.</p></div>`;
+    <div class="card item">
+      ${fxRows.map(r => `<div class="item-head" style="padding:4px 0"><span dir="ltr"><b>1 ${r.currency} = ${fmt(r.rate_to_egp, 4)} EGP</b></span>
+        <span class="sub small">${r.auto ? `🔄 سعر السوق — بيتحدث تلقائي كل 6 ساعات · آخر تحديث ${ago(r.updated_at)}` : `✋ سعر يدوي من ${fmtShortDate(r.updated_at)}`}</span></div>`).join('')}
+      <p class="sub small" style="margin:8px 0 0">سعر السوق بيتثبت على كل حصة لحظة تسجيلها "تمت" (لحساب الإيراد والهامش). الفلوس اللي وصلت فعلاً بتتسجل مع كل دفعة، والفرق بينهم بيظهر في "فرق العملة".</p>
+    </div>`;
 }
 function openFxForm() {
-  const fields = ['SAR', 'AED'].map(c => ({ name: 'fx_' + c, label: `1 ${c} = ؟ جنيه مصري`, type: 'number', required: true, value: state.fx[c], step: '0.0001' }));
-  openModal('تعديل أسعار الصرف', formHtml([fields], 'حفظ'));
-  window._formSubmit = () => runSubmit(async () => {
-    for (const c of ['SAR', 'AED']) {
-      await q(sb.from('fx_rates').update({ rate_to_egp: fnum('fx_' + c), updated_at: new Date().toISOString() }).eq('currency', c));
+  const rows = (state.fxRows || []).filter(r => r.currency !== 'EGP');
+  const body = rows.map(r => `<div class="card item mb" style="background:var(--bg)">
+      <label class="row-gap" style="align-items:center;margin-bottom:8px"><input type="checkbox" id="fxauto_${r.currency}" ${r.auto ? 'checked' : ''}> <b>${r.currency}</b>: تحديث تلقائي من سعر السوق</label>
+      <div class="field" style="margin:0"><label>أو سعر يدوي: 1 ${r.currency} = ؟ جنيه</label>
+        <input id="fxval_${r.currency}" class="input" type="number" step="0.0001" value="${r.rate_to_egp}"></div></div>`).join('');
+  openModal('أسعار الصرف', `${body}
+    <p class="sub small">لو قفلت "تحديث تلقائي" السعر اليدوي هيفضل ثابت لحد ما ترجّعه تلقائي.</p>
+    <div id="form-error" class="err hidden"></div>
+    <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_saveFx()">حفظ</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>`);
+  window._saveFx = () => runSubmit(async () => {
+    for (const r of rows) {
+      const auto = document.getElementById('fxauto_' + r.currency).checked;
+      const val = Number(document.getElementById('fxval_' + r.currency).value);
+      const patch = { auto };
+      if (!auto) { if (!(val > 0)) return formError('اكتب سعر صحيح'); patch.rate_to_egp = val; patch.updated_at = new Date().toISOString(); patch.source = 'manual'; }
+      await q(sb.from('fx_rates').update(patch).eq('currency', r.currency));
     }
-    closeModal(); showToast('تم تحديث الأسعار ✓'); await refreshAll();
+    closeModal(); showToast('تم الحفظ ✓ — الأسعار التلقائية بتتحدث خلال 6 ساعات'); await refreshAll();
   });
 }
 
@@ -1453,6 +1624,8 @@ function renderAttention() {
   if (relay) items.push(`<button class="att" onclick="switchTab('relay')">🔁 <b>${relay}</b> مهمة ترحيل مفتوحة</button>`);
   const owing = state.families.filter(f => famBalance(f).balance < 0).length;
   if (owing) items.push(`<button class="att" onclick="switchTab('fin')">💸 <b>${owing}</b> أسرة عليها مستحقات</button>`);
+  const low = state.families.filter(lowPrepaid).length;
+  if (low) items.push(`<button class="att att-warn" onclick="switchTab('families')">🪫 <b>${low}</b> باقة قربت تخلص</button>`);
   const noRate = state.tutors.filter(t => t.default_rate_egp == null).length;
   if (noRate) items.push(`<button class="att" onclick="switchTab('tutors')">🧑‍🏫 <b>${noRate}</b> معلم بدون أجر ساعة</button>`);
   const noPrice = state.students.filter(s => s.default_price == null).length;
@@ -1665,9 +1838,10 @@ function exportSessionsCSV() {
 function exportPaymentsCSV() {
   if (!state.fin) return;
   const r = state.fin.range;
-  const rows = state.fin.tx.map(t => [dateStr(new Date(t.created_at)), byId(state.families, t.family_id)?.name, t.type === 'refund' ? 'استرداد' : 'دفعة', t.amount, t.currency, t.note]);
-  const po = state.fin.payouts.map(p => [dateStr(new Date(p.paid_at || p.created_at)), byId(state.tutors, p.tutor_id)?.name, 'صرف لمعلم', p.total_egp, 'EGP', [p.method, p.note].filter(Boolean).join(' — ')]);
-  downloadCSV(`مدفوعات_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الأسرة / المعلم', 'النوع', 'المبلغ', 'العملة', 'ملاحظة'], [...rows, ...po]);
+  const rows = state.fin.tx.map(t => { const d = txFxDiff(t); return [dateStr(new Date(t.created_at)), byId(state.families, t.family_id)?.name, t.type === 'refund' ? 'استرداد' : 'دفعة', t.amount, t.currency,
+    t.method, t.received_egp ?? '', t.market_rate ?? '', d == null ? '' : d.toFixed(2), t.note]; });
+  const po = state.fin.payouts.map(p => [dateStr(new Date(p.paid_at || p.created_at)), byId(state.tutors, p.tutor_id)?.name, 'صرف لمعلم', p.total_egp, 'EGP', p.method, p.total_egp, '', '', p.note]);
+  downloadCSV(`مدفوعات_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الأسرة / المعلم', 'النوع', 'المبلغ', 'العملة', 'الطريقة', 'وصل/اتحوّل بالجنيه', 'سعر السوق يومها', 'فرق العملة (EGP)', 'ملاحظة'], [...rows, ...po]);
 }
 
 /* ============================================================
