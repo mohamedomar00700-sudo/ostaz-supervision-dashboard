@@ -137,11 +137,79 @@ async function copyText(text, okMsg) {
 }
 
 /* ============================================================
+   قائمة اختيار بالبحث (بديل للـ select العادي)
+   ============================================================ */
+const normAr = s => String(s || '').toLowerCase().replace(/[إأآا]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/[ًٌٍَُِّْـ]/g, '').replace(/\s+/g, ' ').trim();
+function tutorOptions() {
+  return state.tutors.map(t => {
+    const subs = [...new Set(state.subjects.filter(x => x.tutor_id === t.id).map(x => x.subject))].join('، ');
+    return { v: t.id, l: t.name + (subs ? ` — ${subs}` : '') };
+  });
+}
+function makeSearchable(sel) {
+  if (sel._combo) return;
+  const items = [...sel.options].filter(o => o.value).map(o => ({
+    v: o.value, l: o.textContent, g: o.parentElement.tagName === 'OPTGROUP' ? o.parentElement.label : '',
+  }));
+  items.forEach(it => { it.n = normAr(it.l + ' ' + it.g); it.nl = normAr(it.l); });
+  const wrap = document.createElement('div'); wrap.className = 'combo';
+  sel.parentNode.insertBefore(wrap, sel); wrap.appendChild(sel);
+  sel.classList.add('combo-native'); sel.tabIndex = -1;
+  const inp = document.createElement('input');
+  inp.className = 'input combo-input'; inp.type = 'text'; inp.autocomplete = 'off';
+  inp.placeholder = '🔍 ' + (sel.options[0] && !sel.options[0].value ? sel.options[0].textContent : 'ابحث…');
+  const clear = document.createElement('button'); clear.type = 'button'; clear.className = 'combo-clear'; clear.textContent = '✕'; clear.tabIndex = -1;
+  const list = document.createElement('div'); list.className = 'combo-list hidden';
+  wrap.append(inp, clear, list);
+  let active = -1, shown = [];
+  const labelOf = v => { const it = items.find(i => i.v === v); return it ? (it.g ? `${it.l} · ${it.g}` : it.l) : ''; };
+  const sync = () => { inp.value = labelOf(sel.value); clear.classList.toggle('hidden', !sel.value); };
+  const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+  Object.defineProperty(sel, 'value', { get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); sync(); } });
+  const render = () => {
+    const qn = normAr(inp.value === labelOf(sel.value) ? '' : inp.value);
+    const words = qn.split(' ').filter(Boolean);
+    const score = it => { // الاسم نفسه الأول، بعدين اسم الأسرة/المجموعة
+      if (!words.length) return 0;
+      if (it.nl.startsWith(qn)) return 0;
+      if (words.every(w => it.nl.includes(w))) return 1;
+      if (words.some(w => it.nl.split(' ').some(t => t.startsWith(w)))) return 2;
+      return 3;
+    };
+    shown = items.filter(it => words.every(w => it.n.includes(w))).map((it, i) => ({ it, sc: score(it), i }))
+      .sort((a, b) => a.sc - b.sc || a.i - b.i).map(x => x.it).slice(0, 60);
+    active = shown.length ? 0 : -1;
+    list.innerHTML = shown.map((it, i) => `<div class="combo-item ${i === active ? 'on' : ''} ${it.v === sel.value ? 'sel' : ''}" data-i="${i}">
+      <div>${esc(it.l)}</div>${it.g ? `<div class="sub small">${esc(it.g)}</div>` : ''}</div>`).join('')
+      || '<div class="combo-empty sub small">مفيش نتايج</div>';
+    list.classList.remove('hidden');
+  };
+  const pick = it => { desc.set.call(sel, it.v); sync(); list.classList.add('hidden'); sel.dispatchEvent(new Event('change', { bubbles: true })); };
+  inp.addEventListener('focus', () => { inp.select(); render(); });
+  inp.addEventListener('input', render);
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); if (!shown.length) return;
+      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + shown.length) % shown.length;
+      list.querySelectorAll('.combo-item').forEach((el, i) => el.classList.toggle('on', i === active));
+      list.querySelector('.combo-item.on')?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') { if (!list.classList.contains('hidden') && shown[active]) { e.preventDefault(); pick(shown[active]); } }
+    else if (e.key === 'Escape') { e.stopPropagation(); list.classList.add('hidden'); sync(); }
+  });
+  list.addEventListener('mousedown', e => { const el = e.target.closest('.combo-item'); if (el) { e.preventDefault(); pick(shown[Number(el.dataset.i)]); } });
+  inp.addEventListener('blur', () => setTimeout(() => { list.classList.add('hidden'); sync(); }, 120));
+  clear.addEventListener('click', () => { desc.set.call(sel, ''); sync(); sel.dispatchEvent(new Event('change', { bubbles: true })); inp.focus(); });
+  sel.addEventListener('invalid', () => inp.focus());
+  sel._combo = true; sync();
+}
+
+/* ============================================================
    النافذة المنبثقة + نماذج الإدخال
    ============================================================ */
 function openModal(title, html) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = html;
+  document.querySelectorAll('#modal-body select[data-search]').forEach(makeSearchable);
   document.getElementById('modal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
 }
@@ -162,7 +230,7 @@ function fieldHtml(f) {
         `<option value="${esc(i.v)}" ${String(i.v) === String(val) ? 'selected' : ''}>${esc(i.l)}</option>`).join('') + '</optgroup>';
       return `<option value="${esc(o.v)}" ${String(o.v) === String(val) ? 'selected' : ''}>${esc(o.l)}</option>`;
     }).join('');
-    input = `<select id="${id}" name="${f.name}" class="input"${req}>${f.placeholder ? `<option value="">${esc(f.placeholder)}</option>` : ''}${opts}</select>`;
+    input = `<select id="${id}" name="${f.name}" class="input"${req}${f.searchable ? ' data-search="1"' : ''}>${f.placeholder ? `<option value="">${esc(f.placeholder)}</option>` : ''}${opts}</select>`;
   } else if (f.type === 'textarea') {
     input = `<textarea id="${id}" name="${f.name}" class="input" placeholder="${esc(f.placeholder || '')}"${req}>${esc(val)}</textarea>`;
   } else {
@@ -573,8 +641,8 @@ async function openSessionForm(id, prefill = {}) {
   const kind = s?.kind || prefill.kind || 'regular';
   const fields = [
     { name: 'kind', label: 'نوع الحصة', type: 'select', value: kind, options: [{ v: 'regular', l: 'حصة عادية' }, { v: 'revision', l: 'مراجعة (وقت ومدة مرنين)' }] },
-    { name: 'student_id', label: 'الطالب', type: 'select', required: true, placeholder: 'اختر الطالب…', options: studentOptions(), value: s?.student_id || prefill.student_id },
-    { name: 'tutor_id', label: 'المعلم', type: 'select', required: true, placeholder: 'اختر المعلم…', options: state.tutors.map(t => ({ v: t.id, l: t.name })), value: s?.tutor_id },
+    { name: 'student_id', label: 'الطالب', type: 'select', searchable: true, required: true, placeholder: 'اختر الطالب…', options: studentOptions(), value: s?.student_id || prefill.student_id },
+    { name: 'tutor_id', label: 'المعلم', type: 'select', searchable: true, required: true, placeholder: 'اختر المعلم…', options: tutorOptions(), value: s?.tutor_id },
     { name: 'subject', label: 'المادة', value: s?.subject, placeholder: 'مثال: رياضيات', list: [...new Set([...SUBJECT_LIST, ...state.subjects.map(x => x.subject)])] },
     [{ name: 'date', label: 'التاريخ', type: 'date', required: true, value: dateStr(when) },
      { name: 'time', label: 'الوقت (بتوقيتك)', type: 'time', required: true, value: timeStr(when) }],
@@ -809,7 +877,7 @@ function openRelayForm(prefill, id) {
   const fields = [
     { name: 'requested_by', label: 'الطلب جاي من', type: 'select', required: true, value: v.requested_by || 'parent',
       options: Object.entries(REQUESTERS).map(([k, l]) => ({ v: k, l })) },
-    { name: 'student_id', label: 'الطالب', type: 'select', placeholder: '— بدون —', options: studentOptions(), value: v.student_id },
+    { name: 'student_id', label: 'الطالب', type: 'select', searchable: true, placeholder: '— بدون —', options: studentOptions(), value: v.student_id },
     { name: 'description', label: 'المطلوب', type: 'textarea', required: true, value: v.description,
       placeholder: 'مثال: المعلم أرسل شيت مراجعة يحتاج إرساله للأب / الأم تطلب تأجيل حصة الغد لـ 7 مساءً' },
   ];
@@ -1002,7 +1070,7 @@ function txFxDiff(t) { // فرق العملة = الواصل فعلاً − ال
 function openPaymentForm(familyId) {
   if (!state.families.length) { showToast('أضف أسرة الأول', true); switchTab('families'); return; }
   const fields = [
-    { name: 'family_id', label: 'الأسرة', type: 'select', required: true, placeholder: 'اختر الأسرة…', value: familyId,
+    { name: 'family_id', label: 'الأسرة', type: 'select', searchable: true, required: true, placeholder: 'اختر الأسرة…', value: familyId,
       options: state.families.map(f => ({ v: f.id, l: `${f.name} (${f.currency})` })) },
     [{ name: 'type', label: 'النوع', type: 'select', value: 'payment', options: [{ v: 'payment', l: 'دفعة مستلمة' }, { v: 'refund', l: 'استرداد للأسرة' }] },
      { name: 'method', label: 'طريقة الاستلام', type: 'select', value: 'ويسترن يونيون', options: PAY_METHODS.map(m => ({ v: m, l: m })) }],

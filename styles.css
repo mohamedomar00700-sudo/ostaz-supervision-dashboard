@@ -232,3 +232,15 @@ td{padding:10px 8px;border-bottom:1px solid var(--border);vertical-align:middle;
   #fin-content .scrollx table{min-width:600px;}
   #fin-content td .row-gap{flex-wrap:nowrap;}
 }
+
+/* searchable select */
+.combo{position:relative;}
+.combo-native{position:absolute;opacity:0;pointer-events:none;height:1px;width:1px;bottom:0;right:50%;}
+.combo-input{padding-inline-end:34px;}
+.combo-clear{position:absolute;left:8px;top:50%;transform:translateY(-50%);border:none;background:none;color:var(--sub);cursor:pointer;font-size:14px;padding:4px;}
+.combo-list{position:absolute;z-index:60;top:calc(100% + 4px);left:0;right:0;max-height:280px;overflow:auto;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px;}
+.combo-item{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:14.5px;}
+.combo-item.on{background:var(--brand-soft);}
+.combo-item.sel{font-weight:700;}
+.combo-empty{padding:10px;}
