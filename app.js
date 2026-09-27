@@ -30,6 +30,7 @@ const STATUS = {
   done: { label: 'تمت', cls: 'b-done' },
   cancelled_by_student: { label: 'ألغاها الطالب', cls: 'b-cancel' },
   cancelled_by_tutor: { label: 'ألغاها المعلم', cls: 'b-cancel' },
+  cancelled_by_academy: { label: 'ألغتها الأكاديمية', cls: 'b-cancel' },
 };
 const REQUESTERS = { parent: 'ولي الأمر', tutor: 'المعلم', supervisor: 'المشرف' };
 const CAIRO_TZ = 'Africa/Cairo';
@@ -312,6 +313,7 @@ async function refreshAll() {
     await Promise.all([loadMasters(), loadDay(), loadRelay(), loadAttention(), state.dayMode === 'week' ? loadWeek() : null]);
     if (currentTab === 'fin') await loadFinance(true);
     if (currentTab === 'admin') await loadSupervisorsList();
+    if (currentTab === 'reports') loadReports();
     renderAll();
     if (alertsOn) loadUpcomingForAlerts().catch(() => {});
   } catch (e) { showToast(dbError(e), true); }
@@ -341,10 +343,11 @@ function renderAll() {
 function switchTab(t) {
   currentTab = t;
   document.querySelectorAll('#tabs .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
-  ['daily', 'relay', 'families', 'tutors', 'fin', 'admin'].forEach(k =>
+  ['daily', 'relay', 'families', 'tutors', 'fin', 'reports', 'admin'].forEach(k =>
     document.getElementById('view-' + k).classList.toggle('hidden', k !== t));
   if (t === 'fin') loadFinance();
   if (t === 'admin') loadSupervisorsList();
+  if (t === 'reports') loadReports();
   window.scrollTo(0, 0);
 }
 
@@ -472,7 +475,7 @@ function sessionCard(s) {
     <div>
       <div class="item-head">
         <div>
-          <div class="item-title">${esc(st?.name || 'طالب محذوف')} ${s.kind === 'revision' ? '<span class="badge b-rev">مراجعة</span>' : ''}</div>
+          <div class="item-title">${esc(st?.name || 'طالب محذوف')} ${s.kind === 'revision' ? '<span class="badge b-rev">مراجعة</span>' : ''}${s.makeup_of ? ' <span class="badge b-makeup">تعويضية</span>' : ''}</div>
           <div class="sub small">${esc(fam?.name || '')}${st ? ` · ${esc(st.grade_level)}` : ''}</div>
         </div>
         <span class="badge ${badge.cls}">${badge.label}</span>
@@ -484,7 +487,7 @@ function sessionCard(s) {
         ${s.meeting_link ? `<span><a href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">رابط الحصة ↗</a></span>` : (open ? '<span class="neg">لا يوجد رابط</span>' : '')}
       </div>
       ${s.notes ? `<div class="sub small mt">📝 ${esc(s.notes)}</div>` : ''}
-      ${cancelled ? '' : `<div class="money">
+      ${cancelled ? `<div class="cancel-info mt">✖ ${cancelInfo(s)}</div>` : `<div class="money">
         <span class="pill" title="${fmt(s.student_price, 2)} ${s.student_currency} في الساعة">الأسرة: ${money(c.fam, s.student_currency)}</span>
         <span class="pill" title="${fmt(s.tutor_cost_egp)} EGP في الساعة">المعلم: ${money(c.tut, 'EGP')}</span>
         <span class="pill ${c.margin >= 0 ? 'ok' : 'bad'}">الهامش: ${fmt(c.margin)} EGP${s.status === 'done' ? '' : ' (تقديري)'}</span>
@@ -493,15 +496,9 @@ function sessionCard(s) {
         ${open && !confirmNeeded ? `
           <button class="btn btn-wa sm" onclick="openReminder(${id},'parent')">📲 ولي الأمر</button>
           <button class="btn btn-wa sm" onclick="openReminder(${id},'tutor')">📲 المعلم</button>` : ''}
-        ${s.status === 'scheduled' && !confirmNeeded ? `<button class="btn btn-ghost sm" onclick="setStatus(${id},'in_progress')">▶ بدأت</button>` : ''}
         ${open ? `<button class="btn btn-ok sm" onclick="openDone(${id})">✓ تمت…</button>` : ''}
-        ${s.status === 'done' ? `<button class="btn btn-ghost sm" onclick="openDone(${id})">⏱ تعديل المدة</button>` : ''}
-        ${open ? `<button class="btn btn-ghost sm" onclick="openPostpone(${id})">🔁 تأجيل</button>` : ''}
-        ${open ? `<button class="btn btn-ghost sm" onclick="openCancel(${id})">إلغاء…</button>` : ''}
-        ${s.status === 'done' || cancelled ? `<button class="btn btn-ghost sm" onclick="setStatus(${id},'scheduled')">↺ إرجاع</button>` : ''}
-        <button class="btn btn-ghost sm" onclick="openSessionForm(${id})">تعديل</button>
-        <button class="btn btn-ghost sm" onclick="openRelayForm({student_id:${jsq(s.student_id)}, session_id:${id}})">+ ترحيل</button>
-        ${isAdmin ? `<button class="btn btn-danger sm" onclick="deleteSession(${id})">حذف</button>` : ''}
+        ${cancelled && !allLoadedSessions().some(x => x.makeup_of === s.id) && s.cancel_scope !== 'permanent' ? `<button class="btn btn-ghost sm" onclick="openSessionForm(null, {student_id:${jsq(s.student_id)}, tutor_id:${jsq(s.tutor_id)}, subject:${jsq(s.subject || '')}, makeup_of:${id}, duration:${s.duration_minutes || 60}})">📅 تعويضية</button>` : ''}
+        <button class="btn btn-ghost sm" onclick="openSessionActions(${id})">⋯ المزيد</button>
       </div>
     </div>
   </div>`;
@@ -510,6 +507,7 @@ function linkHref(l) { return /^https?:\/\//i.test(l) ? l : 'https://' + l; }
 
 async function setStatus(id, status, extra = {}) {
   try {
+    if (status === 'scheduled') Object.assign(extra, { cancel_reason: null, cancel_note: null, cancelled_at: null, cancelled_by_user: null, cancel_scope: null, actual_minutes: null });
     await q(sb.from('sessions').update({ status, ...extra }).eq('id', id));
     showToast(status === 'done' ? 'تم تسجيل الحصة ✓' : 'تم تحديث الحالة');
     await refreshAll();
@@ -550,13 +548,111 @@ function openDone(id) {
     await setStatus(s.id, 'done', { actual_minutes: m });
   };
 }
-function openCancel(id) {
-  openModal('إلغاء الحصة', `<p class="sub">مين اللي ألغى الحصة؟ (الحصة الملغاة لا تُحسب على الأسرة ولا تُستحق للمعلم)</p>
-    <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal(); setStatus(${jsq(id)},'cancelled_by_student')">ألغاها الطالب / الأسرة</button>
-      <button class="btn btn-ghost" onclick="closeModal(); setStatus(${jsq(id)},'cancelled_by_tutor')">ألغاها المعلم</button>
-    </div>`);
+/* ----- الإلغاء: مين، ليه، ولحد إمتى ----- */
+const CANCEL_PARTIES = {
+  cancelled_by_student: { l: 'الطالب / الأسرة', icon: '👨‍👩‍👧', reasons: ['مرض', 'سفر', 'امتحانات / ضغط مذاكرة', 'مناسبة عائلية', 'لم يحضر', 'نسيان', 'مشكلة إنترنت / تقنية', 'ظروف مادية', 'إيقاف الاشتراك', 'أخرى'] },
+  cancelled_by_tutor: { l: 'المعلم', icon: '🧑‍🏫', reasons: ['ظرف طارئ', 'مرض', 'تعارض مواعيد', 'مشكلة إنترنت / كهرباء', 'لم يحضر', 'اعتذار عن الطالب', 'ترك العمل', 'أخرى'] },
+  cancelled_by_academy: { l: 'الأكاديمية', icon: '🏫', reasons: ['إجازة رسمية', 'إعادة تنظيم الجدول', 'تغيير المعلم', 'عدم السداد', 'أخرى'] },
+};
+const LATE_HOURS = 3;
+function cancelNoticeHours(s) {
+  if (!s.cancelled_at) return null;
+  return (sStart(s) - new Date(s.cancelled_at).getTime()) / 3600e3;
 }
+function cancelInfo(s) {
+  if (!s.status.startsWith('cancelled')) return '';
+  const h = cancelNoticeHours(s);
+  const notice = h == null ? '' : h <= 0 ? ' · اتلغت بعد معادها' : h < LATE_HOURS ? ` · قبلها بـ ${durLabel(Math.max(5, Math.round(h * 60 / 5) * 5))} (متأخر)` : h < 48 ? ` · قبلها بـ ${Math.round(h)} ساعة` : ` · قبلها بـ ${Math.round(h / 24)} يوم`;
+  return `${s.cancel_reason ? esc(s.cancel_reason) : ''}${s.cancel_note ? ` — ${esc(s.cancel_note)}` : ''}${notice}${s.cancel_scope === 'permanent' ? ' · <b>إيقاف دائم</b>' : ''}`;
+}
+async function futureSeries(s) {
+  const rows = await q(sb.from('sessions').select('*').eq('student_id', s.student_id).eq('tutor_id', s.tutor_id)
+    .eq('status', 'scheduled').gt('scheduled_at', s.scheduled_at).order('scheduled_at').limit(200));
+  return rows.filter(r => norm(r.subject) === norm(s.subject));
+}
+async function openCancel(id) {
+  const s = findSession(id); if (!s) return;
+  const { st, fam, tu } = sessionView(s);
+  let series = [];
+  try { series = await futureSeries(s); } catch (e) {}
+  const late = Date.now() > sStart(s) - LATE_HOURS * 3600e3;
+  const cs = { party: 'cancelled_by_student', reason: '', scope: 'once', n: Math.min(2, series.length) || 1 };
+  window._cs = cs;
+  const render = () => {
+    const P = CANCEL_PARTIES[cs.party];
+    const affected = cs.scope === 'once' ? 0 : cs.scope === 'next' ? Math.min(cs.n, series.length) : series.length;
+    document.getElementById('modal-body').innerHTML = `
+      <div class="sub small mb">${esc(st?.name || '')} · ${esc(s.subject || '')} · ${fmtDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))} · ${esc(tu?.name || '')}</div>
+      ${late ? `<div class="pill bad mb" style="display:inline-block">⚠️ إلغاء متأخر — أقل من ${LATE_HOURS} ساعات قبل الحصة${Date.now() > sStart(s) ? ' (بعد معادها)' : ''}</div>` : ''}
+      <div class="field"><label>مين اللي لغى؟</label><div class="seg-wrap">
+        ${Object.entries(CANCEL_PARTIES).map(([k, p]) => `<button type="button" class="chip ${cs.party === k ? 'active' : ''}" onclick="_cs.party='${k}'; _cs.reason=''; _csRender()">${p.icon} ${p.l}</button>`).join('')}
+      </div></div>
+      <div class="field"><label>السبب</label><div class="chips" style="margin:0">
+        ${P.reasons.map(r => `<button type="button" class="chip ${cs.reason === r ? 'active' : ''}" onclick="_cs.reason=${esc(JSON.stringify(r))}; _csRender()">${r}</button>`).join('')}
+      </div></div>
+      <div class="field"><label>تفاصيل (اختياري)</label><input id="cs-note" class="input" placeholder="مثال: عندها امتحان شهر يوم الخميس" value="${esc(cs.note || '')}" oninput="_cs.note=this.value"></div>
+      <div class="field"><label>الإلغاء لحد إمتى؟</label>
+        <label class="radio"><input type="radio" name="cs-scope" ${cs.scope === 'once' ? 'checked' : ''} onchange="_cs.scope='once'; _csRender()"> الحصة دي بس</label>
+        ${series.length ? `
+        <label class="radio"><input type="radio" name="cs-scope" ${cs.scope === 'next' ? 'checked' : ''} onchange="_cs.scope='next'; _csRender()"> الحصة دي و
+          <select class="input inline" onchange="_cs.n=Number(this.value); _cs.scope='next'; _csRender()">${Array.from({ length: Math.min(series.length, 12) }, (_, i) => i + 1).map(n => `<option ${cs.n === n ? 'selected' : ''} value="${n}">${n}</option>`).join('')}</select>
+          ${cs.n === 1 ? 'حصة' : 'حصص'} جاية بعدها</label>
+        <label class="radio"><input type="radio" name="cs-scope" ${cs.scope === 'permanent' ? 'checked' : ''} onchange="_cs.scope='permanent'; _csRender()"> كل الحصص الجاية للمادة دي (إيقاف دائم) — ${series.length} حصة</label>` :
+        '<div class="sub small">مفيش حصص جاية متسجلة لنفس المادة والمعلم.</div>'}
+        ${affected ? `<div class="sub small mt">هيتلغي كمان: ${series.slice(0, affected).slice(0, 6).map(r => fmtShortDate(r.scheduled_at)).join('، ')}${affected > 6 ? ` و${affected - 6} كمان` : ''}</div>` : ''}
+        ${cs.scope === 'permanent' || (!series.length && cs.reason === 'إيقاف الاشتراك') ? `<label class="radio mt"><input type="checkbox" id="cs-plan" ${cs.dropPlan ? 'checked' : ''} onchange="_cs.dropPlan=this.checked"> شيل "${esc(s.subject || '')}" من خطة ${esc(st?.name || '')} الأسبوعية</label>` : ''}
+      </div>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-danger" style="background:var(--danger);color:#fff" id="form-submit" onclick="_saveCancel()">تأكيد الإلغاء${affected ? ` (${affected + 1} حصص)` : ''}</button>
+        <button class="btn btn-ghost" onclick="closeModal()">رجوع</button></div>`;
+  };
+  window._csRender = render;
+  openModal('إلغاء الحصة', '');
+  render();
+  window._saveCancel = () => runSubmit(async () => {
+    if (!cs.reason) return formError('اختار سبب الإلغاء (ده اللي بيعمل تقارير الالتزام)');
+    const affected = cs.scope === 'once' ? [] : cs.scope === 'next' ? series.slice(0, cs.n) : series;
+    const ids = [s.id, ...affected.map(r => r.id)];
+    const patch = { status: cs.party, cancel_reason: cs.reason, cancel_note: cs.note || null, cancelled_at: new Date().toISOString(),
+      cancelled_by_user: currentUser.id, cancel_scope: cs.scope };
+    await q(sb.from('sessions').update(patch).in('id', ids));
+    if (cs.dropPlan) {
+      const pl = plansOf(s.student_id).filter(p => norm(p.subject) === norm(s.subject));
+      if (pl.length) await q(sb.from('student_subjects').delete().in('id', pl.map(p => p.id)));
+    }
+    await refreshAll();
+    showCancelNotices(s, [s, ...affected], cs);
+  });
+}
+function showCancelNotices(s, list, cs) {
+  const { st, fam, tu } = sessionView(s);
+  const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+  const datesF = list.map(r => `• ${fmtDate(r.scheduled_at, c.tz)} الساعة ${fmtTime(r.scheduled_at, c.tz)}`).join('\n');
+  const datesT = list.map(r => `• ${fmtDate(r.scheduled_at, CAIRO_TZ)} الساعة ${fmtTime(r.scheduled_at, CAIRO_TZ)}`).join('\n');
+  const permanent = cs.scope === 'permanent';
+  const blocks = [];
+  if (cs.party !== 'cancelled_by_student') {
+    const why = cs.party === 'cancelled_by_tutor' ? 'لظرف طارئ عند المعلمة' : cs.reason === 'إجازة رسمية' ? 'بمناسبة الإجازة الرسمية' : '';
+    blocks.push(msgBlock('رسالة لولي الأمر', `السلام عليكم ورحمة الله 🌷
+نعتذر عن إلغاء ${list.length > 1 ? 'حصص' : 'حصة'} ${st?.name || ''}${s.subject ? ` (${s.subject})` : ''} ${why}:
+${datesF}
+${permanent ? 'وهنرتب مع حضراتكم البديل المناسب في أقرب وقت.' : 'وهنرتب موعد تعويضي مناسب ونبلغكم بيه قريب إن شاء الله.'}
+شكراً لتفهمكم 🙏
+${SIGN_F}`, { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id }));
+  }
+  if (cs.party !== 'cancelled_by_tutor') {
+    blocks.push(msgBlock('رسالة للمعلم', `${greetTutor(tu?.name)}
+تم إلغاء ${list.length > 1 ? 'حصص' : 'حصة'} ${st?.name || ''}${s.subject ? ` (${s.subject})` : ''} ${cs.party === 'cancelled_by_student' ? 'بناءً على طلب الأسرة' : ''}:
+${datesT}
+${permanent ? 'ده إيقاف لحد إشعار آخر، وهنبلغك لو فيه أي جديد.' : 'هنبلغك بأي موعد تعويضي.'}
+${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }));
+  }
+  const makeup = !permanent && cs.party !== 'cancelled_by_student'
+    ? `<button class="btn btn-brand" onclick="openSessionForm(null, {student_id:${jsq(s.student_id)}, tutor_id:${jsq(s.tutor_id)}, subject:${jsq(s.subject || '')}, makeup_of:${jsq(s.id)}, duration:${s.duration_minutes || 60}})">📅 احجز حصة تعويضية</button>` : '';
+  openModal(`تم الإلغاء ✓ (${list.length} ${list.length > 1 ? 'حصص' : 'حصة'})`, `<p class="sub">بلّغ الطرف التاني:</p><div class="list">${blocks.join('')}</div>${makeup ? `<div class="modal-foot">${makeup}</div>` : ''}`);
+  document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
+
 function deleteSession(id) {
   confirmDelete('هذه الحصة', () => q(sb.from('sessions').delete().eq('id', id)));
 }
@@ -618,7 +714,7 @@ async function findConflicts(rows, excludeId) {
   const to = new Date(Math.max(...starts) + 12 * 3600e3).toISOString();
   const tutorId = rows[0].tutor_id, studentId = rows[0].student_id;
   const others = await q(sb.from('sessions').select('*').or(`tutor_id.eq.${tutorId},student_id.eq.${studentId}`)
-    .gte('scheduled_at', from).lte('scheduled_at', to).not('status', 'in', '(cancelled_by_student,cancelled_by_tutor)'));
+    .gte('scheduled_at', from).lte('scheduled_at', to).not('status', 'in', '(cancelled_by_student,cancelled_by_tutor,cancelled_by_academy)'));
   const out = [];
   for (const r of rows) {
     const a = new Date(r.scheduled_at).getTime(), b = a + r.duration_minutes * 60e3;
@@ -642,11 +738,11 @@ async function openSessionForm(id, prefill = {}) {
   const fields = [
     { name: 'kind', label: 'نوع الحصة', type: 'select', value: kind, options: [{ v: 'regular', l: 'حصة عادية' }, { v: 'revision', l: 'مراجعة (وقت ومدة مرنين)' }] },
     { name: 'student_id', label: 'الطالب', type: 'select', searchable: true, required: true, placeholder: 'اختر الطالب…', options: studentOptions(), value: s?.student_id || prefill.student_id },
-    { name: 'tutor_id', label: 'المعلم', type: 'select', searchable: true, required: true, placeholder: 'اختر المعلم…', options: tutorOptions(), value: s?.tutor_id },
-    { name: 'subject', label: 'المادة', value: s?.subject, placeholder: 'مثال: رياضيات', list: [...new Set([...SUBJECT_LIST, ...state.subjects.map(x => x.subject)])] },
+    { name: 'tutor_id', label: 'المعلم', type: 'select', searchable: true, required: true, placeholder: 'اختر المعلم…', options: tutorOptions(), value: s?.tutor_id || prefill.tutor_id },
+    { name: 'subject', label: 'المادة', value: s?.subject ?? prefill.subject, placeholder: 'مثال: رياضيات', list: [...new Set([...SUBJECT_LIST, ...state.subjects.map(x => x.subject)])] },
     [{ name: 'date', label: 'التاريخ', type: 'date', required: true, value: dateStr(when) },
      { name: 'time', label: 'الوقت (بتوقيتك)', type: 'time', required: true, value: timeStr(when) }],
-    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s?.duration_minutes ?? 60, step: 5, min: 5 },
+    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s?.duration_minutes ?? prefill.duration ?? 60, step: 5, min: 5 },
     [{ name: 'student_price', label: 'سعر الساعة للأسرة', type: 'number', required: true, value: s?.student_price, hint: 'بعملة الأسرة' },
      { name: 'tutor_cost_egp', label: 'أجر الساعة للمعلم (EGP)', type: 'number', required: true, value: s?.tutor_cost_egp }],
     { name: 'meeting_link', label: 'رابط الحصة', value: s?.meeting_link, placeholder: 'meet.google.com/…' },
@@ -654,7 +750,7 @@ async function openSessionForm(id, prefill = {}) {
   ];
   if (!s) fields.push({ name: 'repeat', label: 'تكرار أسبوعي', type: 'select', value: '1',
     options: [1, 2, 4, 8, 12, 16].map(n => ({ v: n, l: n === 1 ? 'بدون تكرار (حصة واحدة)' : `نفس الموعد لمدة ${n} أسابيع` })) });
-  openModal(s ? 'تعديل حصة' : 'حصة جديدة', formHtml(fields, s ? 'حفظ التعديل' : 'إضافة الحصة'));
+  openModal(s ? 'تعديل حصة' : prefill.makeup_of ? 'حصة تعويضية' : 'حصة جديدة', formHtml(fields, s ? 'حفظ التعديل' : 'إضافة الحصة'));
 
   const $ = n => document.getElementById('f_' + n);
   const stSel = $('student_id'), tuSel = $('tutor_id'), durIn = $('duration_minutes');
@@ -714,6 +810,7 @@ async function openSessionForm(id, prefill = {}) {
     totals();
   });
   updateHints(!s && !!prefill.student_id);
+  if (!s && prefill.tutor_id) { const t = byId(state.tutors, prefill.tutor_id); if (t?.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp; totals(); }
   renderPicks(false);
   if (prefill.plan_id) window._applyPlan(prefill.plan_id);
   kindChanged();
@@ -731,6 +828,7 @@ async function openSessionForm(id, prefill = {}) {
       meeting_link: fv('meeting_link') || null, student_price: fnum('student_price'),
       student_currency: fam.currency, tutor_cost_egp: fnum('tutor_cost_egp'), notes: fv('notes') || null,
     };
+    if (!s && prefill.makeup_of) row.makeup_of = prefill.makeup_of;
     const n = s || row.kind === 'revision' ? 1 : Number(fv('repeat') || 1);
     const rows = Array.from({ length: n }, (_, i) => ({ ...row, scheduled_at: new Date(start.getTime() + i * 7 * 864e5).toISOString() }));
     const conflicts = await findConflicts(rows, s?.id);
@@ -829,6 +927,34 @@ function renderWeek() {
    مركز الترحيل
    ============================================================ */
 function setRelayFilter(k) { state.relayFilter = k; renderRelay(); }
+const RELAY_CATS = { material: '📎 مواد / واجب', schedule: '🗓️ مواعيد / تأجيل', level: '📈 مستوى الطالب', complaint: '⚠️ شكوى / ملاحظة', other: '💬 أخرى' };
+function relayTarget(r) { // الطلب رايح لمين؟
+  return r.requested_by === 'tutor' ? 'parent' : r.requested_by === 'parent' ? 'tutor' : 'both';
+}
+function relayMessage(r, to) {
+  const st = byId(state.students, r.student_id), tu = byId(state.tutors, r.tutor_id);
+  const link = r.link ? `\n🔗 ${linkHref(r.link)}` : '';
+  if (to === 'parent') return `السلام عليكم ورحمة الله 🌷
+${r.requested_by === 'tutor' ? `رسالة من معلمة ${st ? st.name : 'الطالب'}${r.category === 'material' ? ' (مواد للمذاكرة)' : ''}:` : `بخصوص ${st ? st.name : 'الطالب'}:`}
+${r.description}${link}
+${SIGN_F}`;
+  return `${greetTutor(tu?.name)}
+${r.requested_by === 'parent' ? `رسالة من ولي أمر ${st ? st.name : 'الطالب'}:` : `بخصوص ${st ? st.name : 'الطالب'}:`}
+${r.description}${link}
+${SIGN_T}`;
+}
+function openRelayDeliver(id) {
+  const r = state.relay.find(x => x.id === id); if (!r) return;
+  const st = byId(state.students, r.student_id), fam = st ? byId(state.families, st.family_id) : null, tu = byId(state.tutors, r.tutor_id);
+  const to = relayTarget(r);
+  const blocks = [];
+  if (to !== 'tutor') blocks.push(msgBlock('لولي الأمر', relayMessage(r, 'parent'), { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id }));
+  if (to !== 'parent') blocks.push(tu ? msgBlock('للمعلم', relayMessage(r, 'tutor'), { group: tu.whatsapp_group, phone: tu.phone, editTutor: tu.id })
+    : `<div class="card item sub small">حدد المعلم في المهمة عشان نجهّز رسالته — <a href="javascript:void(0)" onclick="openRelayForm(null, ${jsq(r.id)})">تعديل</a></div>`);
+  openModal('توصيل للطرف التاني', `<div class="list">${blocks.join('')}</div>
+    <div class="modal-foot"><button class="btn btn-ok" onclick="closeModal(); setRelay(${jsq(r.id)},'done')">✓ اتوصّلت — اقفل المهمة</button></div>`);
+  document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
 function renderRelay() {
   const pending = state.relay.filter(r => r.status !== 'done');
   const cnt = document.getElementById('relay-count');
@@ -839,25 +965,29 @@ function renderRelay() {
   const el = document.getElementById('relay-list');
   if (!list.length) {
     el.innerHTML = `<div class="card empty">${state.relayFilter === 'pending' ? 'مفيش مهام مفتوحة 👌' : 'لا توجد مهام.'}<br>
-      <span class="small">سجّل هنا أي طلب بين ولي الأمر والمعلم (مواد، تأجيل، ملاحظات) عشان محدش من المشرفين ينساه.</span></div>`;
+      <span class="small">سجّل هنا أي حاجة لازم تتوصل بين ولي الأمر والمعلم (مواد، تأجيل، ملاحظات) — وبعدين "📲 توصيل" بيجهّز الرسالة للطرف التاني.</span></div>`;
     return;
   }
   el.innerHTML = list.map(r => {
     const st = byId(state.students, r.student_id);
     const fam = st ? byId(state.families, st.family_id) : null;
+    const tu = byId(state.tutors, r.tutor_id);
     const done = r.status === 'done';
-    return `<div class="card item">
+    const age = (Date.now() - new Date(r.created_at)) / 3600e3;
+    return `<div class="card item ${!done && age > 24 ? 's-confirm' : ''}">
       <div class="item-head">
         <div>
-          <div class="item-title">${esc(REQUESTERS[r.requested_by] || r.requested_by)} ${st ? `← ${esc(st.name)}` : ''}</div>
-          <div class="sub small">${esc(fam?.name || '')} · ${ago(r.created_at)}</div>
+          <div class="item-title">${esc(REQUESTERS[r.requested_by] || r.requested_by)} ← ${relayTarget(r) === 'parent' ? 'ولي الأمر' : relayTarget(r) === 'tutor' ? 'المعلم' : 'الطرفين'}${st ? ` · ${esc(st.name)}` : ''}</div>
+          <div class="sub small">${r.category ? RELAY_CATS[r.category] + ' · ' : ''}${esc(fam?.name || '')}${tu ? ' · ' + esc(tu.name) : ''} · ${ago(r.created_at)}${!done && age > 24 ? ' · <span class="warn-txt">متأخرة</span>' : ''}</div>
         </div>
-        <span class="badge ${done ? 'b-done' : 'b-pending'}">${done ? 'تم' : 'مفتوحة'}</span>
+        <span class="badge ${done ? 'b-done' : 'b-pending'}">${done ? 'اتوصّلت' : 'مفتوحة'}</span>
       </div>
       <div class="mt" style="white-space:pre-wrap">${esc(r.description)}</div>
+      ${r.link ? `<div class="mt"><a href="${esc(linkHref(r.link))}" target="_blank" rel="noopener">📎 المرفق ↗</a></div>` : ''}
       <div class="actions">
         ${done ? `<button class="btn btn-ghost sm" onclick="setRelay(${jsq(r.id)},'pending')">إعادة فتح</button>`
-               : `<button class="btn btn-ok sm" onclick="setRelay(${jsq(r.id)},'done')">✓ تم التوصيل</button>`}
+               : `<button class="btn btn-wa sm" onclick="openRelayDeliver(${jsq(r.id)})">📲 توصيل</button>
+                  <button class="btn btn-ok sm" onclick="setRelay(${jsq(r.id)},'done')">✓ تم</button>`}
         <button class="btn btn-ghost sm" onclick="openRelayForm(null, ${jsq(r.id)})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete('هذه المهمة', () => q(sb.from('relay_tasks').delete().eq('id', ${jsq(r.id)})))">حذف</button>` : ''}
       </div>
@@ -875,18 +1005,29 @@ function openRelayForm(prefill, id) {
   const r = id ? state.relay.find(x => x.id === id) : null;
   const v = r || prefill || {};
   const fields = [
-    { name: 'requested_by', label: 'الطلب جاي من', type: 'select', required: true, value: v.requested_by || 'parent',
-      options: Object.entries(REQUESTERS).map(([k, l]) => ({ v: k, l })) },
+    [{ name: 'requested_by', label: 'جاي من', type: 'select', required: true, value: v.requested_by || 'tutor',
+       options: Object.entries(REQUESTERS).map(([k, l]) => ({ v: k, l })) },
+     { name: 'category', label: 'النوع', type: 'select', value: v.category || 'material', options: Object.entries(RELAY_CATS).map(([k, l]) => ({ v: k, l })) }],
     { name: 'student_id', label: 'الطالب', type: 'select', searchable: true, placeholder: '— بدون —', options: studentOptions(), value: v.student_id },
-    { name: 'description', label: 'المطلوب', type: 'textarea', required: true, value: v.description,
-      placeholder: 'مثال: المعلم أرسل شيت مراجعة يحتاج إرساله للأب / الأم تطلب تأجيل حصة الغد لـ 7 مساءً' },
+    { name: 'tutor_id', label: 'المعلم', type: 'select', searchable: true, placeholder: '— بدون —', options: tutorOptions(), value: v.tutor_id },
+    { name: 'description', label: 'المطلوب توصيله', type: 'textarea', required: true, value: v.description,
+      placeholder: 'مثال: الشيت ده مراجعة الوحدة التانية، يتحل قبل حصة الخميس' },
+    { name: 'link', label: 'رابط مرفق (اختياري)', type: 'url', value: v.link, placeholder: 'لينك Google Drive / ملف / صورة' },
   ];
   openModal(r ? 'تعديل مهمة ترحيل' : 'مهمة ترحيل جديدة', formHtml(fields, 'حفظ'));
+  const stSel = document.getElementById('f_student_id'), tuSel = document.getElementById('f_tutor_id');
+  stSel.addEventListener('change', () => { // اقترح المعلم من خطة الطالب
+    const ps = plansOf(stSel.value).filter(p => p.tutor_id);
+    if (!tuSel.value && ps.length === 1) tuSel.value = ps[0].tutor_id;
+  });
   window._formSubmit = () => runSubmit(async () => {
-    const row = { requested_by: fv('requested_by'), student_id: fv('student_id') || null, description: fv('description') };
-    if (r) await q(sb.from('relay_tasks').update(row).eq('id', r.id));
-    else await q(sb.from('relay_tasks').insert({ ...row, session_id: v.session_id || null }));
+    const row = { requested_by: fv('requested_by'), category: fv('category'), student_id: fv('student_id') || null,
+      tutor_id: fv('tutor_id') || null, description: fv('description'), link: fv('link') || null };
+    let saved;
+    if (r) { await q(sb.from('relay_tasks').update(row).eq('id', r.id)); }
+    else { [saved] = await q(sb.from('relay_tasks').insert({ ...row, session_id: v.session_id || null }).select()); }
     closeModal(); showToast('تم الحفظ ✓'); await refreshAll();
+    if (saved) openRelayDeliver(saved.id);
   });
 }
 
@@ -904,7 +1045,13 @@ function renderFamilies() {
     el.innerHTML = `<div class="card empty">لسه مفيش أسر مسجّلة.<br><button class="btn btn-brand" onclick="openFamilyForm()">+ أضف أول أسرة</button></div>`;
     return;
   }
-  const list = state.families.filter(f => {
+  const FF = { all: () => true, owe: f => famBalance(f).balance < 0, low: lowPrepaid, nogroup: f => !f.whatsapp_group,
+    noprice: f => state.students.some(s => s.family_id === f.id && s.default_price == null) };
+  const counts = Object.fromEntries(Object.entries(FF).map(([k, fn]) => [k, state.families.filter(fn).length]));
+  document.getElementById('family-chips').innerHTML = [['all', 'الكل'], ['owe', '💸 عليها فلوس'], ['low', '🪫 باقة قربت تخلص'], ['nogroup', 'بدون جروب'], ['noprice', 'طالب بدون سعر']]
+    .filter(([k]) => k === 'all' || counts[k] || state.famFilter === k)
+    .map(([k, l]) => `<button class="chip ${(state.famFilter || 'all') === k ? 'active' : ''}" onclick="state.famFilter='${k}'; renderFamilies()">${l} (${counts[k]})</button>`).join('');
+  const list = state.families.filter(FF[state.famFilter || 'all'] || FF.all).filter(f => {
     if (!term) return true;
     const studs = state.students.filter(s => s.family_id === f.id).map(s => `${s.name} ${s.notes || ''} ${plansOf(s.id).map(p => planLabel(p)).join(' ')}`).join(' ');
     return `${f.name} ${f.parent_name || ''} ${f.whatsapp || ''} ${studs}`.toLowerCase().includes(term);
@@ -929,7 +1076,7 @@ function renderFamilies() {
       <div class="meta"><span>واتساب: ${f.whatsapp ? `<b dir="ltr">${esc(f.whatsapp)}</b>` : `<a href="javascript:void(0)" onclick="openFamilyForm(${fid})">أضف الرقم</a>`}</span><span>حصص تمت: <b>${b.count}</b></span></div>
       ${f.notes ? `<div class="sub small mt">📝 ${esc(f.notes)}</div>` : ''}
       <div class="stu-list">
-        ${studs.map(s => `<button class="stu-row" onclick="openStudentForm(${jsq(f.id)}, ${jsq(s.id)})">
+        ${studs.map(s => `<button class="stu-row" onclick="openStudentProfile(${jsq(s.id)})">
           <div class="stu-top"><b>${esc(s.name)}</b><span class="num">${s.default_price != null ? `${fmt(s.default_price)} ${esc(f.currency)}<span class="sub small">/ساعة</span>` : '<span class="neg">بدون سعر</span>'}</span></div>
           <div class="sub small">${esc(s.grade_level)} · ${esc(CURRICULA[s.curriculum])}</div>
           ${plansOf(s.id).length ? `<div class="plan-lines">${plansOf(s.id).map(p => `<span class="plan ${p.tutor_id ? '' : 'no-tutor'}">${esc(planLabel(p))}</span>`).join('')}</div>` : ''}
@@ -1226,7 +1373,12 @@ function renderTutors() {
     el.innerHTML = `<div class="card empty">لسه مفيش معلمين مسجّلين.<br><button class="btn btn-brand" onclick="openTutorForm()">+ أضف أول معلم</button></div>`;
     return;
   }
-  const list = state.tutors.filter(t => {
+  const TF = { all: () => true, due: t => tutBalance(t).due > 0, norate: t => t.default_rate_egp == null, nogroup: t => !t.whatsapp_group };
+  const tc = Object.fromEntries(Object.entries(TF).map(([k, fn]) => [k, state.tutors.filter(fn).length]));
+  document.getElementById('tutor-chips').innerHTML = [['all', 'الكل'], ['due', '💰 ليه مستحقات'], ['norate', 'بدون أجر ساعة'], ['nogroup', 'بدون جروب']]
+    .filter(([k]) => k === 'all' || tc[k] || state.tutFilter === k)
+    .map(([k, l]) => `<button class="chip ${(state.tutFilter || 'all') === k ? 'active' : ''}" onclick="state.tutFilter='${k}'; renderTutors()">${l} (${tc[k]})</button>`).join('');
+  const list = state.tutors.filter(TF[state.tutFilter || 'all'] || TF.all).filter(t => {
     if (!term) return true;
     const subs = state.subjects.filter(s => s.tutor_id === t.id).map(s => s.subject).join(' ');
     const studs = state.plans.filter(p => p.tutor_id === t.id).map(p => byId(state.students, p.student_id)?.name || '').join(' ');
@@ -1898,10 +2050,11 @@ function exportSessionsCSV() {
     return [dateStr(new Date(s.scheduled_at)), timeStr(new Date(s.scheduled_at)), v.st?.name, v.fam?.name, v.tu?.name, s.subject,
       s.kind === 'revision' ? 'مراجعة' : 'عادية', (STATUS[s.status] || {}).label, s.duration_minutes, s.actual_minutes ?? '',
       s.student_price, s.student_currency, done ? c.fam.toFixed(2) : '', s.tutor_cost_egp, done ? c.tut.toFixed(2) : '',
-      done ? Number(s.fx_rate_to_egp).toFixed(4) : '', done ? Number(s.revenue_egp).toFixed(2) : '', done ? Number(s.margin_egp).toFixed(2) : '', s.notes];
+      done ? Number(s.fx_rate_to_egp).toFixed(4) : '', done ? Number(s.revenue_egp).toFixed(2) : '', done ? Number(s.margin_egp).toFixed(2) : '',
+      s.cancel_reason || '', s.cancel_note || '', cancelNoticeHours(s) == null ? '' : cancelNoticeHours(s).toFixed(1), s.makeup_of ? 'نعم' : '', s.notes];
   });
   downloadCSV(`حصص_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الوقت', 'الطالب', 'الأسرة', 'المعلم', 'المادة', 'النوع', 'الحالة', 'المدة المخططة (د)', 'المدة الفعلية (د)',
-    'سعر الساعة للأسرة', 'العملة', 'إجمالي الأسرة', 'أجر الساعة للمعلم (EGP)', 'إجمالي المعلم (EGP)', 'سعر الصرف', 'الإيراد (EGP)', 'الهامش (EGP)', 'ملاحظات'], rows);
+    'سعر الساعة للأسرة', 'العملة', 'إجمالي الأسرة', 'أجر الساعة للمعلم (EGP)', 'إجمالي المعلم (EGP)', 'سعر الصرف', 'الإيراد (EGP)', 'الهامش (EGP)', 'سبب الإلغاء', 'تفاصيل الإلغاء', 'الإلغاء قبلها بكام ساعة', 'تعويضية', 'ملاحظات'], rows);
 }
 function exportPaymentsCSV() {
   if (!state.fin) return;
@@ -1910,6 +2063,231 @@ function exportPaymentsCSV() {
     t.method, t.received_egp ?? '', t.market_rate ?? '', d == null ? '' : d.toFixed(2), t.note]; });
   const po = state.fin.payouts.map(p => [dateStr(new Date(p.paid_at || p.created_at)), byId(state.tutors, p.tutor_id)?.name, 'صرف لمعلم', p.total_egp, 'EGP', p.method, p.total_egp, '', '', p.note]);
   downloadCSV(`مدفوعات_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الأسرة / المعلم', 'النوع', 'المبلغ', 'العملة', 'الطريقة', 'وصل/اتحوّل بالجنيه', 'سعر السوق يومها', 'فرق العملة (EGP)', 'ملاحظة'], [...rows, ...po]);
+}
+
+/* ============================================================
+   التقارير: الالتزام، أسباب الإلغاء، الساعات
+   ============================================================ */
+state.repPeriod = 'this';
+function repRange() {
+  const now = new Date(); let from, to = new Date(now.getFullYear(), now.getMonth() + 1, 1), label;
+  if (state.repPeriod === 'last') { from = new Date(now.getFullYear(), now.getMonth() - 1, 1); to = new Date(now.getFullYear(), now.getMonth(), 1); label = 'الشهر اللي فات'; }
+  else if (state.repPeriod === '3m') { from = new Date(now.getFullYear(), now.getMonth() - 2, 1); label = 'آخر 3 شهور'; }
+  else if (state.repPeriod === 'year') { from = new Date(now.getFullYear(), 0, 1); to = new Date(now.getFullYear() + 1, 0, 1); label = 'السنة دي'; }
+  else { from = new Date(now.getFullYear(), now.getMonth(), 1); label = 'الشهر ده'; }
+  return { from, to, label };
+}
+async function loadReports() {
+  const r = repRange();
+  setLoading(true);
+  try {
+    state.rep = { rows: await q(sb.from('sessions').select('*').gte('scheduled_at', r.from.toISOString()).lt('scheduled_at', r.to.toISOString()).order('scheduled_at')), r };
+    renderReports();
+  } catch (e) { showToast(dbError(e), true); } finally { setLoading(false); }
+}
+function setRepPeriod(p) { state.repPeriod = p; loadReports(); }
+const isLate = s => { const h = cancelNoticeHours(s); return h != null && h < LATE_HOURS; };
+function commitment(done, cancels) {
+  const total = done + cancels;
+  if (total < 3) return { rate: total ? done / total : null, label: 'بيانات قليلة', cls: 'b-cancel' };
+  const rate = done / total;
+  return rate >= 0.9 ? { rate, label: 'ملتزم ✅', cls: 'b-done' } : rate >= 0.75 ? { rate, label: 'متوسط', cls: 'b-pending' } : { rate, label: 'محتاج متابعة', cls: 'b-now' };
+}
+function bars(entries, max, cls = '') {
+  return entries.map(([k, v]) => `<div class="bar-row"><span class="bar-label">${esc(k)}</span>
+    <span class="bar-track"><span class="bar-fill ${cls}" style="width:${max ? Math.max(4, v / max * 100) : 0}%"></span></span><span class="num bar-val">${v}</span></div>`).join('');
+}
+function renderReports() {
+  const el = document.getElementById('reports-content'); if (!el || !state.rep) return;
+  const { rows, r } = state.rep;
+  const past = rows.filter(s => s.status !== 'scheduled' || sStart(s) < Date.now());
+  const done = past.filter(s => s.status === 'done');
+  const byParty = k => past.filter(s => s.status === k);
+  const cS = byParty('cancelled_by_student'), cT = byParty('cancelled_by_tutor'), cA = byParty('cancelled_by_academy');
+  const cancels = [...cS, ...cT, ...cA];
+  const hours = done.reduce((a, s) => a + sMins(s), 0) / 60;
+  const attend = done.length + cS.length + cT.length ? done.length / (done.length + cS.length + cT.length) : null;
+  const makeups = rows.filter(s => s.makeup_of).length;
+  const unrec = past.filter(needsConfirm).length;
+
+  // أسباب
+  const reasonCount = list => { const m = {}; list.forEach(s => { const k = s.cancel_reason || 'بدون سبب'; m[k] = (m[k] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  const rS = reasonCount(cS), rT = reasonCount(cT), rA = reasonCount(cA);
+  const maxR = Math.max(1, ...[...rS, ...rT, ...rA].map(x => x[1]));
+
+  // أسبوعي
+  const weeks = {};
+  past.forEach(s => { const w = dateStr(weekStart(dateStr(new Date(s.scheduled_at)))); const x = weeks[w] ||= { h: 0, c: 0 }; if (s.status === 'done') x.h += sMins(s) / 60; else if (s.status.startsWith('cancelled')) x.c++; });
+  const wk = Object.entries(weeks).sort();
+  const maxH = Math.max(1, ...wk.map(([, v]) => v.h));
+
+  // الأسر
+  const fam = {};
+  past.forEach(s => { const st = byId(state.students, s.student_id); if (!st) return; const x = fam[st.family_id] ||= { d: 0, h: 0, c: 0, late: 0, ns: 0, other: 0 };
+    if (s.status === 'done') { x.d++; x.h += sMins(s) / 60; }
+    else if (s.status === 'cancelled_by_student') { x.c++; if (isLate(s)) x.late++; if (s.cancel_reason === 'لم يحضر') x.ns++; }
+    else if (s.status.startsWith('cancelled')) x.other++; });
+  const famRows = Object.entries(fam).map(([id, x]) => ({ f: byId(state.families, id), x, k: commitment(x.d, x.c) })).filter(r => r.f)
+    .sort((a, b) => (a.k.rate ?? 1) - (b.k.rate ?? 1) || b.x.c - a.x.c);
+  // المعلمين
+  const tut = {};
+  past.forEach(s => { const x = tut[s.tutor_id] ||= { d: 0, h: 0, c: 0, late: 0, ns: 0 };
+    if (s.status === 'done') { x.d++; x.h += sMins(s) / 60; }
+    else if (s.status === 'cancelled_by_tutor') { x.c++; if (isLate(s)) x.late++; if (s.cancel_reason === 'لم يحضر') x.ns++; } });
+  const tutRows = Object.entries(tut).map(([id, x]) => ({ t: byId(state.tutors, id), x, k: commitment(x.d, x.c) })).filter(r => r.t)
+    .sort((a, b) => (a.k.rate ?? 1) - (b.k.rate ?? 1) || b.x.c - a.x.c);
+
+  el.innerHTML = `
+    <div class="chips">${[['this', 'الشهر ده'], ['last', 'الشهر اللي فات'], ['3m', 'آخر 3 شهور'], ['year', 'السنة دي']].map(([k, l]) => `<button class="chip ${state.repPeriod === k ? 'active' : ''}" onclick="setRepPeriod('${k}')">${l}</button>`).join('')}</div>
+    <div class="kpis">
+      <div class="card kpi"><div class="l">حصص تمت</div><div class="v num">${done.length}</div><div class="s">${fmt(hours, 1)} ساعة تدريس</div></div>
+      <div class="card kpi"><div class="l">نسبة الالتزام العامة</div><div class="v num ${attend == null ? '' : attend >= .9 ? 'pos' : attend >= .75 ? 'warn-txt' : 'neg'}">${attend == null ? '—' : Math.round(attend * 100) + '%'}</div><div class="s">حصص تمت ÷ (تمت + إلغاء أسرة/معلم)</div></div>
+      <div class="card kpi"><div class="l">إلغاءات</div><div class="v num">${cancels.length}</div><div class="s">أسر ${cS.length} · معلمين ${cT.length} · أكاديمية ${cA.length}</div></div>
+      <div class="card kpi"><div class="l">إلغاءات متأخرة</div><div class="v num ${cancels.filter(isLate).length ? 'neg' : ''}">${cancels.filter(isLate).length}</div><div class="s">أقل من ${LATE_HOURS} ساعات قبل الحصة</div></div>
+      <div class="card kpi"><div class="l">لم يحضر</div><div class="v num">${cancels.filter(s => s.cancel_reason === 'لم يحضر').length}</div><div class="s">طلاب ${cS.filter(s => s.cancel_reason === 'لم يحضر').length} · معلمين ${cT.filter(s => s.cancel_reason === 'لم يحضر').length}</div></div>
+      <div class="card kpi"><div class="l">حصص تعويضية</div><div class="v num">${makeups}</div><div class="s">${unrec ? `<span class="neg">${unrec} حصة لسه ماتسجلتش</span>` : 'كل الحصص متسجلة ✓'}</div></div>
+    </div>
+
+    ${wk.length ? `<div class="section-title"><h2>ساعات التدريس أسبوعياً</h2></div>
+    <div class="card item">${wk.map(([w, v]) => `<div class="bar-row"><span class="bar-label">${new Date(parseDay(w)).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'short' })}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${Math.max(3, v.h / maxH * 100)}%"></span></span><span class="num bar-val">${fmt(v.h, 1)} س${v.c ? ` <span class="neg small">· ${v.c} إلغاء</span>` : ''}</span></div>`).join('')}</div>` : ''}
+
+    <div class="section-title"><h2>أسباب الإلغاء</h2></div>
+    <div class="grid2">
+      <div class="card item"><h3>👨‍👩‍👧 من الأسر (${cS.length})</h3>${rS.length ? bars(rS, maxR, 'fill-fam') : '<div class="sub small">مفيش</div>'}</div>
+      <div class="card item"><h3>🧑‍🏫 من المعلمين (${cT.length})</h3>${rT.length ? bars(rT, maxR, 'fill-tut') : '<div class="sub small">مفيش</div>'}</div>
+      ${rA.length ? `<div class="card item"><h3>🏫 من الأكاديمية (${cA.length})</h3>${bars(rA, maxR)}</div>` : ''}
+    </div>
+
+    <div class="section-title"><h2>التزام الأسر</h2></div>
+    <div class="card scrollx"><table class="rep-table"><thead><tr><th>الأسرة</th><th>تمت</th><th>ألغت</th><th>متأخر</th><th>لم يحضر</th><th>الالتزام</th></tr></thead><tbody>
+      ${famRows.map(({ f, x, k }) => `<tr class="clickable" onclick="openCommitDetail('family', ${jsq(f.id)})"><td>${esc(f.name)}<div class="sub small">${fmt(x.h, 1)} ساعة</div></td>
+        <td class="num">${x.d}</td><td class="num ${x.c ? 'neg' : ''}">${x.c}</td><td class="num">${x.late || '—'}</td><td class="num">${x.ns || '—'}</td>
+        <td><span class="badge ${k.cls}">${k.rate == null ? '' : Math.round(k.rate * 100) + '% · '}${k.label}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">لا توجد بيانات في الفترة</td></tr>'}
+    </tbody></table></div>
+
+    <div class="section-title"><h2>التزام المعلمين</h2></div>
+    <div class="card scrollx"><table class="rep-table"><thead><tr><th>المعلم</th><th>تمت</th><th>ألغى</th><th>متأخر</th><th>لم يحضر</th><th>الالتزام</th></tr></thead><tbody>
+      ${tutRows.map(({ t, x, k }) => `<tr class="clickable" onclick="openCommitDetail('tutor', ${jsq(t.id)})"><td>${esc(t.name)}<div class="sub small">${fmt(x.h, 1)} ساعة</div></td>
+        <td class="num">${x.d}</td><td class="num ${x.c ? 'neg' : ''}">${x.c}</td><td class="num">${x.late || '—'}</td><td class="num">${x.ns || '—'}</td>
+        <td><span class="badge ${k.cls}">${k.rate == null ? '' : Math.round(k.rate * 100) + '% · '}${k.label}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">لا توجد بيانات في الفترة</td></tr>'}
+    </tbody></table></div>
+    <p class="sub small">الالتزام = الحصص اللي تمت ÷ (اللي تمت + اللي الطرف ده لغاها). الإلغاء المتأخر = أقل من ${LATE_HOURS} ساعات قبل معاد الحصة. دوس على أي صف عشان تشوف التفاصيل.</p>`;
+}
+function openCommitDetail(kind, id) {
+  const { rows, r } = state.rep;
+  const list = rows.filter(s => s.status.startsWith('cancelled') && (kind === 'family' ? byId(state.students, s.student_id)?.family_id === id : s.tutor_id === id));
+  const name = kind === 'family' ? byId(state.families, id)?.name : byId(state.tutors, id)?.name;
+  openModal(`إلغاءات ${name} — ${r.label}`, list.length ? `<div class="list">${list.map(s => { const v = sessionView(s);
+    return `<div class="card item"><div class="item-head"><div><b>${esc(v.st?.name || '')}</b> · ${esc(s.subject || '')} · ${esc(v.tu?.name || '')}
+      <div class="sub small">${fmtDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</div></div><span class="badge b-cancel">${STATUS[s.status].label}</span></div>
+      <div class="cancel-info mt">${cancelInfo(s) || 'بدون سبب مسجّل'}</div></div>`; }).join('')}</div>` : '<div class="empty">مفيش إلغاءات في الفترة 👌</div>');
+}
+
+/* ============================================================
+   ملف الطالب (من البحث أو من كارت الحصة)
+   ============================================================ */
+async function openStudentProfile(studentId) {
+  const st = byId(state.students, studentId); if (!st) return;
+  const fam = byId(state.families, st.family_id);
+  let rows = [];
+  try { rows = await q(sb.from('sessions').select('*').eq('student_id', studentId).gte('scheduled_at', new Date(Date.now() - 90 * 864e5).toISOString()).order('scheduled_at')); } catch (e) {}
+  const now = Date.now();
+  const upcoming = rows.filter(s => s.status === 'scheduled' && sStart(s) > now).slice(0, 5);
+  const recent = rows.filter(s => sStart(s) <= now || s.status !== 'scheduled').slice(-6).reverse();
+  const d = rows.filter(s => s.status === 'done').length, c = rows.filter(s => s.status === 'cancelled_by_student').length;
+  const k = commitment(d, c);
+  const b = famBalance(fam);
+  const line = s => { const v = sessionView(s); const bd = needsConfirm(s) ? { label: 'محتاجة تسجيل', cls: 'b-pending' } : STATUS[s.status];
+    return `<button class="wk-row" onclick="closeModal(); setDayMode('day'); setDay(${jsq(dateStr(new Date(s.scheduled_at)))}); switchTab('daily')">
+      <span class="num"><b>${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'short' })}</b> ${timeStr(new Date(s.scheduled_at))}</span>
+      <span>${esc(s.subject || '')} <span class="sub small">${esc(v.tu?.name || '')} · ${durLabel(sMins(s))}</span></span><span class="badge ${bd.cls}">${bd.label}</span></button>`; };
+  openModal(`${st.name}`, `
+    <div class="sub mb">${esc(fam?.name || '')} · ${esc(st.grade_level)} · ${esc(CURRICULA[st.curriculum])}${st.default_price != null ? ` · ${fmt(st.default_price)} ${fam?.currency}/ساعة` : ''}</div>
+    <div class="stats">
+      <div class="card stat"><div class="v">${d}</div><div class="l">حصص تمت (90 يوم)</div></div>
+      <div class="card stat"><div class="v">${c}</div><div class="l">إلغاءات الأسرة</div></div>
+      <div class="card stat"><div class="v"><span class="badge ${k.cls}">${k.rate == null ? '—' : Math.round(k.rate * 100) + '%'}</span></div><div class="l">${k.label}</div></div>
+      <div class="card stat"><div class="v num ${b.balance < 0 ? 'neg' : 'pos'}" style="font-size:16px">${fmt(b.balance, 0)} ${fam?.currency}</div><div class="l">رصيد الأسرة</div></div>
+    </div>
+    ${plansOf(st.id).length ? `<h3>المواد</h3><div class="plan-lines mb">${plansOf(st.id).map(p => `<span class="plan ${p.tutor_id ? '' : 'no-tutor'}">${esc(planLabel(p))}</span>`).join('')}</div>` : ''}
+    ${st.notes ? `<div class="warn-note small mb">⚠️ ${esc(st.notes)}</div>` : ''}
+    <h3>الحصص الجاية</h3>${upcoming.map(line).join('') || '<div class="sub small mb">مفيش حصص جاية محجوزة</div>'}
+    <h3 class="mt">آخر الحصص</h3>${recent.map(line).join('') || '<div class="sub small">لا يوجد</div>'}
+    <div class="modal-foot" style="flex-wrap:wrap">
+      <button class="btn btn-brand" onclick="openSessionForm(null, {student_id:${jsq(st.id)}})">+ حصة</button>
+      <button class="btn btn-wa" onclick="openFamilyInvoice(${jsq(st.family_id)})">📄 فاتورة الأسرة</button>
+      <button class="btn btn-ghost" onclick="openStudentForm(${jsq(st.family_id)}, ${jsq(st.id)})">تعديل</button>
+    </div>`);
+}
+
+/* ============================================================
+   بحث شامل من أعلى الشاشة
+   ============================================================ */
+function openGlobalSearch() {
+  openModal('بحث', `<input id="gs-input" class="input" placeholder="🔍 اسم طالب، أسرة، معلم، أو مادة…" autocomplete="off">
+    <div id="gs-results" class="list mt"></div>`);
+  const inp = document.getElementById('gs-input');
+  const run = () => {
+    const qn = normAr(inp.value); const words = qn.split(' ').filter(Boolean);
+    const out = document.getElementById('gs-results');
+    if (!words.length) { out.innerHTML = '<div class="sub small">ابدأ اكتب…</div>'; return; }
+    const match = t => words.every(w => normAr(t).includes(w));
+    const studs = state.students.filter(s => { const f = byId(state.families, s.family_id); return match(`${s.name} ${f?.name || ''} ${plansOf(s.id).map(p => p.subject).join(' ')}`); }).slice(0, 12);
+    const fams = state.families.filter(f => match(`${f.name} ${f.parent_name || ''}`)).slice(0, 6);
+    const tuts = state.tutors.filter(t => match(`${t.name} ${state.subjects.filter(x => x.tutor_id === t.id).map(x => x.subject).join(' ')}`)).slice(0, 8);
+    out.innerHTML = [
+      studs.length ? `<div class="sub small">طلاب</div>` + studs.map(s => `<button class="wk-row" onclick="openStudentProfile(${jsq(s.id)})"><span>🎒</span><span><b>${esc(s.name)}</b> <span class="sub small">${esc(byId(state.families, s.family_id)?.name || '')} · ${esc(s.grade_level)}</span></span><span></span></button>`).join('') : '',
+      fams.length ? `<div class="sub small mt">أسر</div>` + fams.map(f => `<button class="wk-row" onclick="closeModal(); switchTab('families'); document.getElementById('family-search').value=${jsq(f.name)}; renderFamilies()"><span>👨‍👩‍👧</span><span><b>${esc(f.name)}</b> <span class="sub small">${esc(f.country)}</span></span><span></span></button>`).join('') : '',
+      tuts.length ? `<div class="sub small mt">معلمين</div>` + tuts.map(t => `<button class="wk-row" onclick="closeModal(); switchTab('tutors'); document.getElementById('tutor-search').value=${jsq(t.name)}; renderTutors()"><span>🧑‍🏫</span><span><b>${esc(t.name)}</b></span><span></span></button>`).join('') : '',
+    ].join('') || '<div class="empty">مفيش نتايج</div>';
+  };
+  inp.addEventListener('input', run); run(); setTimeout(() => inp.focus(), 50);
+}
+
+/* ============================================================
+   قائمة الإعدادات + الوضع الليلي
+   ============================================================ */
+function applyTheme(t) {
+  if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme');
+}
+try { applyTheme(localStorage.getItem('ostaz_theme')); } catch (e) {}
+function setTheme(t) { try { localStorage.setItem('ostaz_theme', t); } catch (e) {} applyTheme(t); openMenu(); }
+function openMenu() {
+  let t = 'auto'; try { t = localStorage.getItem('ostaz_theme') || 'auto'; } catch (e) {}
+  openModal('الإعدادات', `
+    <div class="sub small mb">${esc(currentSupervisor?.name || '')} · ${isAdmin ? 'أدمن' : 'مشرف'}</div>
+    <div class="list">
+      <button class="wk-row" onclick="openAlertsPanel()"><span>🔔</span><span><b>إشعارات الحصص</b></span><span></span></button>
+      ${isAdmin ? `<button class="wk-row" onclick="closeModal(); switchTab('admin')"><span>🛡️</span><span><b>إدارة المشرفين</b> <span class="sub small">موافقة وصلاحيات</span></span><span></span></button>
+      <button class="wk-row" onclick="closeModal(); switchTab('fin'); setTimeout(openFxForm, 400)"><span>💱</span><span><b>أسعار الصرف</b></span><span></span></button>` : ''}
+    </div>
+    <div class="field mt"><label>المظهر</label><div class="seg-wrap">
+      ${[['auto', 'تلقائي'], ['light', '☀️ فاتح'], ['dark', '🌙 غامق']].map(([k, l]) => `<button class="chip ${t === k ? 'active' : ''}" onclick="setTheme('${k}')">${l}</button>`).join('')}
+    </div></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal(); signOut()">تسجيل الخروج</button></div>`);
+}
+
+/* ============================================================
+   قائمة إجراءات الحصة (⋯)
+   ============================================================ */
+function openSessionActions(id) {
+  const s = findSession(id); if (!s) return;
+  const v = sessionView(s), open = s.status === 'scheduled' || s.status === 'in_progress', cancelled = s.status.startsWith('cancelled');
+  const I = jsq(id);
+  const a = (icon, label, fn, cls = '') => `<button class="wk-row ${cls}" onclick="closeModal(); ${fn}"><span>${icon}</span><span><b>${label}</b></span><span></span></button>`;
+  openModal(`${v.st?.name || ''} · ${timeStr(new Date(s.scheduled_at))}`, `<div class="list">
+    ${s.status === 'scheduled' ? a('▶', 'الحصة بدأت', `setStatus(${I},'in_progress')`) : ''}
+    ${open ? a('🔁', 'تأجيل / تغيير الموعد', `openPostpone(${I})`) : ''}
+    ${open ? a('✖', 'إلغاء…', `openCancel(${I})`) : ''}
+    ${s.status === 'done' ? a('⏱', 'تعديل المدة الفعلية', `openDone(${I})`) : ''}
+    ${cancelled ? a('📅', 'حجز حصة تعويضية', `openSessionForm(null, {student_id:${jsq(s.student_id)}, tutor_id:${jsq(s.tutor_id)}, subject:${jsq(s.subject || '')}, makeup_of:${I}, duration:${s.duration_minutes || 60}})`) : ''}
+    ${s.status === 'done' || cancelled ? a('↺', 'إرجاع لمجدولة', `setStatus(${I},'scheduled')`) : ''}
+    ${a('✏️', 'تعديل الحصة', `openSessionForm(${I})`)}
+    ${a('🔁', 'مهمة ترحيل', `openRelayForm({student_id:${jsq(s.student_id)}, session_id:${I}, tutor_id:${jsq(s.tutor_id)}})`)}
+    ${a('🎒', 'ملف الطالب', `openStudentProfile(${jsq(s.student_id)})`)}
+    ${isAdmin ? a('🗑', 'حذف الحصة', `deleteSession(${I})`, 'danger-row') : ''}
+  </div>`);
 }
 
 /* ============================================================
@@ -1984,7 +2362,7 @@ async function handlePostAuth(attempt = 0) {
 async function enterApp() {
   isAdmin = currentSupervisor.role === 'admin';
   document.getElementById('current-user-name').textContent = currentSupervisor.name + (isAdmin ? ' · أدمن' : ' · مشرف');
-  document.getElementById('tab-admin').classList.toggle('hidden', !isAdmin);
+  // إدارة المشرفين بقت من قائمة الإعدادات ⚙️
   // تنظيف أي داتا تجريبية قديمة من النسخة السابقة
   try { localStorage.removeItem('ostaz_sessions'); } catch (e) {}
   // فتح يوم معيّن لو جاي من إشعار (?day=YYYY-MM-DD)

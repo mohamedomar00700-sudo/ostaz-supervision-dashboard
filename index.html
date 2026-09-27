@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="أستاذ أونلاين">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css?v=14">
+<link rel="stylesheet" href="styles.css?v=16">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -77,8 +77,9 @@
       </div>
     </div>
     <div class="top-actions">
+      <button class="btn btn-ghost icon" onclick="openGlobalSearch()" title="بحث">🔍</button>
       <button class="btn btn-ghost icon" id="btn-alerts" onclick="openAlertsPanel()" title="إشعارات الحصص">🔕</button>
-      <button class="btn btn-ghost" onclick="signOut()">خروج</button>
+      <button class="btn btn-ghost icon" onclick="openMenu()" title="الإعدادات">⚙️</button>
     </div>
   </header>
 
@@ -88,7 +89,7 @@
     <button data-tab="families" class="tab" onclick="switchTab('families')"><span class="ti">👨‍👩‍👧</span><span class="tl">الأسر</span></button>
     <button data-tab="tutors" class="tab" onclick="switchTab('tutors')"><span class="ti">🧑‍🏫</span><span class="tl">المعلمون</span></button>
     <button data-tab="fin" class="tab" onclick="switchTab('fin')"><span class="ti">💰</span><span class="tl">المالية</span></button>
-    <button data-tab="admin" class="tab hidden" id="tab-admin" onclick="switchTab('admin')"><span class="ti">🛡️</span><span class="tl">المشرفون</span></button>
+    <button data-tab="reports" class="tab" onclick="switchTab('reports')"><span class="ti">📊</span><span class="tl">التقارير</span></button>
   </nav>
 
   <main class="wrap">
@@ -133,6 +134,7 @@
         <input class="input search" id="family-search" placeholder="بحث باسم الأسرة أو الطالب أو الرقم…" oninput="renderFamilies()">
         <button class="btn btn-brand" onclick="openFamilyForm()">+ أسرة جديدة</button>
       </div>
+      <div class="chips" id="family-chips"></div>
       <div id="families-list" class="list grid2"></div>
     </section>
 
@@ -142,6 +144,7 @@
         <input class="input search" id="tutor-search" placeholder="بحث باسم المعلم أو المادة…" oninput="renderTutors()">
         <button class="btn btn-brand" onclick="openTutorForm()">+ معلم جديد</button>
       </div>
+      <div class="chips" id="tutor-chips"></div>
       <div id="tutors-list" class="list grid2"></div>
     </section>
 
@@ -166,6 +169,11 @@
       <div id="fin-content"></div>
     </section>
 
+    <!-- التقارير -->
+    <section id="view-reports" class="hidden">
+      <div id="reports-content"></div>
+    </section>
+
     <!-- المشرفون -->
     <section id="view-admin" class="hidden">
       <div id="admin-list" class="list"></div>
@@ -188,6 +196,6 @@
 <div class="toast" id="toast"></div>
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
-<script src="app.js?v=14"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>
