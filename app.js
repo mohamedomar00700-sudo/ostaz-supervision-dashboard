@@ -1114,6 +1114,7 @@ function renderFamilies() {
       </div>
       <div class="actions">
         <button class="btn btn-brand sm" onclick="openPaymentForm(${fid})">+ دفعة</button>
+        <button class="btn btn-ghost sm" onclick="openSchedule('family', ${fid})">📋 الجدول</button>
         <button class="btn btn-wa sm" onclick="openFamilyInvoice(${fid})">📄 ${f.billing_cycle === 'prepaid' ? 'كشف رصيد' : 'فاتورة'}</button>
         ${b.balance < 0 ? `<button class="btn btn-ghost sm" onclick="openPaymentReminder(${fid})">📲 مطالبة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openFamilyStatement(${fid})">كشف حساب</button>
@@ -1449,6 +1450,7 @@ function renderTutors() {
       <div class="actions">
         ${b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${tid})">صرف مستحقات</button>
         <button class="btn btn-wa sm" onclick="openTutorStatementMessage(${tid})">📲 كشف للمعلمة</button>` : ''}
+        <button class="btn btn-ghost sm" onclick="openSchedule('tutor', ${tid})">📋 الجدول</button>
         <button class="btn btn-ghost sm" onclick="openTutorStatement(${tid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openTutorForm(${tid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('المعلم ' + t.name)}, () => q(sb.from('tutors').delete().eq('id', ${tid})))">حذف</button>` : ''}
@@ -2254,7 +2256,8 @@ async function openStudentProfile(studentId) {
     <h3 class="mt">آخر الحصص</h3>${recent.map(line).join('') || '<div class="sub small">لا يوجد</div>'}
     <div class="modal-foot" style="flex-wrap:wrap">
       <button class="btn btn-brand" onclick="openSessionForm(null, {student_id:${jsq(st.id)}})">+ حصة</button>
-      <button class="btn btn-wa" onclick="openFamilyInvoice(${jsq(st.family_id)})">📄 فاتورة الأسرة</button>
+      <button class="btn btn-wa" onclick="openSchedule('student', ${jsq(st.id)})">📋 الجدول</button>
+      <button class="btn btn-ghost" onclick="openFamilyInvoice(${jsq(st.family_id)})">📄 فاتورة الأسرة</button>
       <button class="btn btn-ghost" onclick="openStudentForm(${jsq(st.family_id)}, ${jsq(st.id)})">تعديل</button>
     </div>`);
 }
@@ -2275,9 +2278,9 @@ function openGlobalSearch() {
     const fams = state.families.filter(f => match(`${f.name} ${f.parent_name || ''}`)).slice(0, 6);
     const tuts = state.tutors.filter(t => match(`${t.name} ${state.subjects.filter(x => x.tutor_id === t.id).map(x => x.subject).join(' ')}`)).slice(0, 8);
     out.innerHTML = [
-      studs.length ? `<div class="sub small">طلاب</div>` + studs.map(s => `<button class="wk-row" onclick="openStudentProfile(${jsq(s.id)})"><span>🎒</span><span><b>${esc(s.name)}</b> <span class="sub small">${esc(byId(state.families, s.family_id)?.name || '')} · ${esc(s.grade_level)}</span></span><span></span></button>`).join('') : '',
-      fams.length ? `<div class="sub small mt">أسر</div>` + fams.map(f => `<button class="wk-row" onclick="closeModal(); switchTab('families'); document.getElementById('family-search').value=${jsq(f.name)}; renderFamilies()"><span>👨‍👩‍👧</span><span><b>${esc(f.name)}</b> <span class="sub small">${esc(f.country)}</span></span><span></span></button>`).join('') : '',
-      tuts.length ? `<div class="sub small mt">معلمين</div>` + tuts.map(t => `<button class="wk-row" onclick="closeModal(); switchTab('tutors'); document.getElementById('tutor-search').value=${jsq(t.name)}; renderTutors()"><span>🧑‍🏫</span><span><b>${esc(t.name)}</b></span><span></span></button>`).join('') : '',
+      studs.length ? `<div class="sub small">طلاب</div>` + studs.map(s => `<button class="wk-row" onclick="openStudentProfile(${jsq(s.id)})"><span>🎒</span><span><b>${esc(s.name)}</b> <span class="sub small">${esc(byId(state.families, s.family_id)?.name || '')} · ${esc(s.grade_level)}</span></span><span class="chip" onclick="event.stopPropagation(); openSchedule('student', ${jsq(s.id)})">📋 جدول</span></button>`).join('') : '',
+      fams.length ? `<div class="sub small mt">أسر</div>` + fams.map(f => `<button class="wk-row" onclick="closeModal(); switchTab('families'); document.getElementById('family-search').value=${jsq(f.name)}; renderFamilies()"><span>👨‍👩‍👧</span><span><b>${esc(f.name)}</b> <span class="sub small">${esc(f.country)}</span></span><span class="chip" onclick="event.stopPropagation(); openSchedule('family', ${jsq(f.id)})">📋 جدول</span></button>`).join('') : '',
+      tuts.length ? `<div class="sub small mt">معلمين</div>` + tuts.map(t => `<button class="wk-row" onclick="closeModal(); switchTab('tutors'); document.getElementById('tutor-search').value=${jsq(t.name)}; renderTutors()"><span>🧑‍🏫</span><span><b>${esc(t.name)}</b></span><span class="chip" onclick="event.stopPropagation(); openSchedule('tutor', ${jsq(t.id)})">📋 جدول</span></button>`).join('') : '',
     ].join('') || '<div class="empty">مفيش نتايج</div>';
   };
   inp.addEventListener('input', run); run(); setTimeout(() => inp.focus(), 50);
@@ -2796,6 +2799,95 @@ async function openGroupForm(key, prefill = {}) {
 }
 
 /* ============================================================
+   جدول أي طالب / أسرة / معلم — عرض + رسالة جاهزة للنسخ والإرسال
+   ============================================================ */
+const SCHED_RANGES = { week: 'الأسبوع ده', next: 'الأسبوع الجاي', d14: 'أسبوعين جايين', month: 'باقي الشهر' };
+function schedRange(k) {
+  const today = parseDay(todayStr()), ws = weekStart(todayStr());
+  if (k === 'next') return { from: new Date(ws.getTime() + 7 * 864e5), to: new Date(ws.getTime() + 14 * 864e5) };
+  if (k === 'd14') return { from: today, to: new Date(today.getTime() + 14 * 864e5) };
+  if (k === 'month') return { from: today, to: new Date(today.getFullYear(), today.getMonth() + 1, 1) };
+  return { from: today, to: new Date(ws.getTime() + 7 * 864e5) };
+}
+function schedSubject(kind, id) {
+  if (kind === 'tutor') { const t = byId(state.tutors, id); return { name: t?.name || '', tz: 'مصر', group: t?.whatsapp_group, phone: t?.phone, edit: { editTutor: id } }; }
+  if (kind === 'family') { const f = byId(state.families, id); return { name: f?.name || '', tz: f?.country || 'مصر', group: f?.whatsapp_group, phone: f?.whatsapp, country: f?.country, edit: { editFamily: id } }; }
+  const st = byId(state.students, id), f = st ? byId(state.families, st.family_id) : null;
+  return { name: st?.name || '', tz: f?.country || 'مصر', group: f?.whatsapp_group, phone: f?.whatsapp, country: f?.country, edit: { editFamily: f?.id } };
+}
+function scheduleText(sc, rows) {
+  const c = COUNTRIES[sc.tz] || COUNTRIES['مصر'];
+  const subj = schedSubject(sc.kind, sc.id);
+  const list = sc.kind === 'student' ? rows : occurrences(rows);
+  const byDay = {};
+  list.forEach(s => { const k = new Intl.DateTimeFormat('en-CA', { timeZone: c.tz }).format(new Date(s.scheduled_at)); (byDay[k] ||= []).push(s); });
+  const line = s => {
+    const st = byId(state.students, s.student_id), tu = byId(state.tutors, s.tutor_id);
+    const t = `${fmtTime(s.scheduled_at, c.tz)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), c.tz)}`;
+    let what;
+    if (sc.kind === 'tutor') what = s.group_key ? `👥 ${s.group_name || 'مجموعة'}: ${groupNames(s._members)}` : `${st?.name || ''}${st?.grade_level ? ` (${st.grade_level})` : ''}`;
+    else what = `${sc.kind === 'family' ? (s._members ? s._members.map(m => byId(state.students, m.student_id)?.name).filter(Boolean).join(' و') : st?.name || '') + ': ' : ''}${s.subject || 'حصة'}${s.group_key ? ' 👥 مجموعة' : ''}`;
+    const subjPart = sc.kind === 'tutor' && s.subject ? ` — ${s.subject}` : '';
+    const kindPart = s.kind === 'revision' || s.kind === 'trial' ? ` [${kindWord(s)}]` : '';
+    const tutPart = sc.kind !== 'tutor' && sc.names && tu ? ` — ${tu.name}` : '';
+    const link = sc.links && s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : '';
+    return `• ${t}: ${what}${subjPart}${kindPart}${tutPart} (${durLabel(s.duration_minutes || 60)})${link}`;
+  };
+  const body = Object.keys(byDay).sort().map(k => `*${fmtDate(byDay[k][0].scheduled_at, c.tz)}*\n${byDay[k].map(line).join('\n')}`).join('\n\n');
+  const mins = list.reduce((a, s) => a + (s.duration_minutes || 60), 0);
+  const greet = sc.kind === 'tutor' ? greetTutor(subj.name) : 'السلام عليكم ورحمة الله 🌷';
+  const title = sc.kind === 'tutor' ? 'جدول حصصك' : `جدول حصص ${sc.kind === 'family' ? 'الأسرة' : subj.name}`;
+  return `${greet}
+📅 ${title} — ${SCHED_RANGES[sc.range]} (بتوقيت ${c.tzName}):
+
+${body || '— لا توجد حصص محجوزة في الفترة دي —'}
+${list.length ? `\nالإجمالي: ${list.length} ${list.length > 2 && list.length < 11 ? 'حصص' : 'حصة'} · ${durLabel(mins)}\n` : ''}
+لأي تعديل في المواعيد تواصلوا معنا هنا.
+${sc.kind === 'tutor' ? SIGN_T : SIGN_F}`;
+}
+async function shareText(key) {
+  const text = window._msgs?.[key]; if (!text) return;
+  if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  copyText(text, 'تم نسخ الجدول ✓');
+}
+async function openSchedule(kind, id, range = 'week') {
+  const sc = window._sc && window._sc.kind === kind && window._sc.id === id ? { ...window._sc, range } : { kind, id, range, tz: schedSubject(kind, id).tz, names: false, links: false };
+  window._sc = sc;
+  const r = schedRange(range);
+  let qq = sb.from('sessions').select('*').gte('scheduled_at', r.from.toISOString()).lt('scheduled_at', r.to.toISOString())
+    .not('status', 'in', '(cancelled_by_student,cancelled_by_tutor,cancelled_by_academy)').order('scheduled_at');
+  if (kind === 'tutor') qq = qq.eq('tutor_id', id);
+  else if (kind === 'family') { const ids = state.students.filter(s => s.family_id === id).map(s => s.id); if (!ids.length) return showToast('الأسرة مفيهاش طلاب', true); qq = qq.in('student_id', ids); }
+  else qq = qq.eq('student_id', id);
+  let rows;
+  try { rows = await q(qq); } catch (e) { return showToast(dbError(e), true); }
+  window._scRows = rows;
+  const subj = schedSubject(kind, id);
+  const render = () => {
+    const text = scheduleText(sc, rows);
+    const key = 'sc' + Math.random().toString(36).slice(2, 8); (window._msgs ||= {})[key] = text;
+    const chip = (on, label, fn) => `<button class="chip ${on ? 'active' : ''}" onclick="${fn}">${label}</button>`;
+    document.getElementById('modal-body').innerHTML = `
+      <div class="chips" style="margin-bottom:6px">${Object.entries(SCHED_RANGES).map(([k, l]) => chip(sc.range === k, l, `openSchedule(${jsq(kind)}, ${jsq(id)}, '${k}')`)).join('')}</div>
+      <div class="chips" style="margin-bottom:6px"><span class="sub small" style="align-self:center">التوقيت:</span>
+        ${Object.entries(COUNTRIES).map(([k, c]) => chip(sc.tz === k, `${c.flag} ${c.tzName}`, `_sc.tz=${jsq(k)}; _scRender()`)).join('')}</div>
+      <div class="chips" style="margin-bottom:8px">
+        ${kind !== 'tutor' ? chip(sc.names, '🧑‍🏫 أسماء المعلمين', `_sc.names=!_sc.names; _scRender()`) : ''}
+        ${chip(sc.links, '🔗 روابط الحصص', `_sc.links=!_sc.links; _scRender()`)}</div>
+      <div class="msg-preview">${esc(text)}</div>
+      <div class="modal-foot" style="flex-wrap:wrap;position:static;padding:8px 0 0">
+        <button class="btn btn-brand sm" onclick="copyText(window._msgs[${jsq(key)}],'تم نسخ الجدول ✓')">📋 نسخ</button>
+        <button class="btn btn-ghost sm" onclick="shareText(${jsq(key)})">📤 مشاركة / إرسال لأي حد</button>
+      </div>
+      ${msgActionsHtml(text, { group: subj.group, phone: subj.phone, country: subj.country, ...subj.edit })}
+      <p class="sub small mt">${kind === 'tutor' ? 'الجدول فيه أسماء الطلاب بس — من غير أسماء أو أرقام الأسر.' : 'الجدول من غير أرقام المعلمين. أسماء المعلمين مخفية إلا لو فعّلتها.'} الحصص الملغاة مش ظاهرة.</p>`;
+  };
+  window._scRender = render;
+  openModal(`📋 جدول ${subj.name}`, '');
+  render();
+}
+
+/* ============================================================
    قائمة إجراءات الحصة (⋯)
    ============================================================ */
 function openSessionActions(id) {
@@ -2814,6 +2906,8 @@ function openSessionActions(id) {
     ${a('✏️', 'تعديل الحصة', `openSessionForm(${I})`)}
     ${a('🔁', 'مهمة ترحيل', `openRelayForm({student_id:${jsq(s.student_id)}, session_id:${I}, tutor_id:${jsq(s.tutor_id)}})`)}
     ${a('🎒', 'ملف الطالب', `openStudentProfile(${jsq(s.student_id)})`)}
+    ${a('📋', 'جدول الطالب', `openSchedule('student', ${jsq(s.student_id)})`)}
+    ${a('📋', 'جدول المعلم', `openSchedule('tutor', ${jsq(s.tutor_id)})`)}
     ${isAdmin ? a('🗑', 'حذف الحصة', `deleteSession(${I})`, 'danger-row') : ''}
   </div>`);
 }
