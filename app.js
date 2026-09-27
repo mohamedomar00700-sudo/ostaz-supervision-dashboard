@@ -361,9 +361,9 @@ function sessionView(s) {
   return { st, fam, tu };
 }
 const sMins = s => Number(s.actual_minutes || s.duration_minutes || 60);
-const KINDS = { regular: 'حصة', revision: 'مراجعة', trial: 'تجريبية' };
+const KINDS = { regular: 'حصة', revision: 'مراجعة', trial: 'تجريبية', group: 'مجموعة' };
 const kindWord = s => KINDS[s.kind] || 'حصة';
-const kindBadge = s => s.kind === 'revision' ? '<span class="badge b-rev">مراجعة</span>' : s.kind === 'trial' ? '<span class="badge b-trial">🧪 تجريبية</span>' : '';
+const kindBadge = s => s.kind === 'revision' ? '<span class="badge b-rev">مراجعة</span>' : s.kind === 'trial' ? '<span class="badge b-trial">🧪 تجريبية</span>' : s.kind === 'group' ? '<span class="badge b-group">👥 مجموعة</span>' : '';
 const sStart = s => new Date(s.scheduled_at).getTime();
 const sEnd = s => sStart(s) + sMins(s) * 60e3;
 function durLabel(min) {
@@ -429,17 +429,17 @@ function renderDaily() {
   document.getElementById('day-input').value = state.day;
   const all = state.daySessions;
   document.getElementById('filters').innerHTML = DAY_FILTERS.map(f => {
-    const n = all.filter(f.f).length;
+    const n = occurrences(all.filter(f.f)).length;
     if (!n && !['all', 'done'].includes(f.k) && state.dayFilter !== f.k) return '';
     return `<button class="chip ${state.dayFilter === f.k ? 'active' : ''} ${f.k === 'confirm' && n ? 'warn' : ''}" onclick="setDayFilter('${f.k}')">${f.l} (${n})</button>`;
   }).join('');
 
   const active = all.filter(s => !s.status.startsWith('cancelled'));
-  const hours = active.reduce((a, s) => a + sMins(s), 0) / 60;
+  const hours = occurrences(active).reduce((a, s) => a + sMins(s), 0) / 60;
   const margin = active.reduce((a, s) => a + charges(s).margin, 0);
   document.getElementById('day-stats').innerHTML = `
-    <div class="card stat"><div class="v">${all.length}</div><div class="l">حصص اليوم</div></div>
-    <div class="card stat"><div class="v">${all.filter(s => s.status === 'done').length}</div><div class="l">تمت</div></div>
+    <div class="card stat"><div class="v">${occurrences(all).length}</div><div class="l">حصص اليوم</div></div>
+    <div class="card stat"><div class="v">${occurrences(all.filter(s => s.status === 'done')).length}</div><div class="l">تمت</div></div>
     <div class="card stat"><div class="v num">${fmt(hours, 1)}</div><div class="l">ساعة تدريس</div></div>
     <div class="card stat"><div class="v num">${fmt(margin)}</div><div class="l">هامش متوقع (EGP)</div></div>`;
 
@@ -455,7 +455,7 @@ function renderDaily() {
     return;
   }
   if (!list.length) { el.innerHTML = `<div class="card empty">لا توجد حصص مطابقة للفلتر.</div>`; return; }
-  el.innerHTML = list.map(sessionCard).join('');
+  el.innerHTML = occurrences(list).map(o => o.group_key ? groupCard(all.filter(x => x.group_key === o.group_key)) : sessionCard(o)).join('');
 }
 
 function sessionCard(s) {
@@ -522,6 +522,7 @@ async function setStatus(id, status, extra = {}) {
 /* ----- تسجيل "تمت" مع المدة الفعلية (لو الطالب طلب وقت زيادة) ----- */
 function openDone(id) {
   const s = findSession(id); if (!s) return;
+  if (s.group_key) return openGroupDone(s.group_key);
   const planned = s.duration_minutes || 60;
   const current = s.actual_minutes || planned;
   const opts = [...new Set([planned, planned + 15, planned + 20, planned + 30, planned + 45, planned + 60, planned + 90, Math.max(15, planned - 15), Math.max(15, planned - 30)])].sort((a, b) => a - b);
@@ -667,7 +668,7 @@ function deleteSession(id) {
 function buildReminder(s, who) {
   const { st, fam, tu } = sessionView(s);
   const link = s.meeting_link ? linkHref(s.meeting_link) : '(سيتم إرسال الرابط قبل الحصة)';
-  const kindLine = s.kind === 'revision' ? '\n📝 حصة مراجعة' : s.kind === 'trial' ? `\n🧪 حصة تجريبية${who === 'parent' ? ' مجانية' : ''} — ${who === 'parent' ? 'فرصة تتعرفوا فيها على المعلمة' : 'طالب جديد: ركّزي على التعارف وتحديد المستوى'}` : '';
+  const kindLine = s.kind === 'group' ? `\n👥 حصة مجموعة${s.group_name ? ': ' + s.group_name : ''}` : s.kind === 'revision' ? '\n📝 حصة مراجعة' : s.kind === 'trial' ? `\n🧪 حصة تجريبية${who === 'parent' ? ' مجانية' : ''} — ${who === 'parent' ? 'فرصة تتعرفوا فيها على المعلمة' : 'طالب جديد: ركّزي على التعارف وتحديد المستوى'}` : '';
   const durLine = (s.duration_minutes || 60) !== 60 || s.kind !== 'regular' ? `\n⏳ المدة: ${durLabel(s.duration_minutes || 60)}` : '';
   if (who === 'parent') {
     const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
@@ -691,6 +692,7 @@ function buildReminder(s, who) {
 function openReminder(id, who) {
   const s = findSession(id);
   if (!s) return;
+  if (s.group_key) return openGroupReminder(s.group_key, who);
   const { fam, tu } = sessionView(s);
   const text = buildReminder(s, who);
   const num = who === 'parent' ? waNumber(fam?.whatsapp, fam?.country) : waNumber(tu?.phone, 'مصر');
@@ -738,11 +740,13 @@ async function openSessionForm(id, prefill = {}) {
     return;
   }
   const s = id ? findSession(id) : null;
+  if (s?.group_key) return openGroupForm(s.group_key);
+  if (prefill.kind === 'group') return openGroupForm(null, { tutor_id: prefill.tutor_id, subject: prefill.subject, day: prefill.day, students: prefill.student_id ? [prefill.student_id] : [] });
   const when = s ? new Date(s.scheduled_at) : (() => {
     const d = parseDay(prefill.day || state.day); const n = new Date(); d.setHours(Math.min(n.getHours() + 1, 22), 0, 0, 0); return d; })();
   const kind = s?.kind || prefill.kind || 'regular';
   const fields = [
-    { name: 'kind', label: 'نوع الحصة', type: 'select', value: kind, options: [{ v: 'regular', l: 'حصة عادية' }, { v: 'trial', l: '🧪 تجريبية مجانية (نص ساعة)' }, { v: 'revision', l: 'مراجعة (وقت ومدة مرنين)' }] },
+    { name: 'kind', label: 'نوع الحصة', type: 'select', value: kind, options: [{ v: 'regular', l: 'حصة عادية' }, { v: 'trial', l: '🧪 تجريبية مجانية (نص ساعة)' }, { v: 'revision', l: 'مراجعة (وقت ومدة مرنين)' }, ...(s ? [] : [{ v: 'group', l: '👥 مجموعة (أكتر من طالب)' }])] },
     { name: 'student_id', label: 'الطالب', type: 'select', searchable: true, required: true, placeholder: 'اختر الطالب…', options: studentOptions(), value: s?.student_id || prefill.student_id },
     { name: 'tutor_id', label: 'المعلم', type: 'select', searchable: true, required: true, placeholder: 'اختر المعلم…', options: tutorOptions(), value: s?.tutor_id || prefill.tutor_id },
     { name: 'subject', label: 'المادة', value: s?.subject ?? prefill.subject, placeholder: 'مثال: رياضيات', list: [...new Set([...SUBJECT_LIST, ...state.subjects.map(x => x.subject)])] },
@@ -778,6 +782,7 @@ async function openSessionForm(id, prefill = {}) {
   let prevKind = $('kind').value;
   const kindChanged = () => {
     const k = $('kind').value;
+    if (k === 'group') { closeModal(); return openGroupForm(null, { tutor_id: tuSel.value, subject: $('subject').value, day: $('date').value, students: stSel.value ? [stSel.value] : [] }); }
     const rep = document.getElementById('wrap_repeat'); if (rep) rep.classList.toggle('hidden', k !== 'regular');
     if (k === 'revision' && !s && Number(durIn.value) === 60) durIn.value = 120;
     const priceIn = $('student_price');
@@ -910,10 +915,10 @@ function renderWeek() {
   document.getElementById('week-panel').innerHTML = `
     <div class="row-gap mb"><button class="btn btn-ghost sm" onclick="openFamilySchedules()">📋 جداول الأسر للأسبوع (رسائل جاهزة)</button></div>
     <div class="stats">
-      <div class="card stat"><div class="v">${active.length}</div><div class="l">حصص الأسبوع</div></div>
-      <div class="card stat"><div class="v num">${fmt(active.reduce((a, s) => a + sMins(s), 0) / 60, 1)}</div><div class="l">ساعة</div></div>
+      <div class="card stat"><div class="v">${occurrences(active).length}</div><div class="l">حصص الأسبوع</div></div>
+      <div class="card stat"><div class="v num">${fmt(occurrences(active).reduce((a, s) => a + sMins(s), 0) / 60, 1)}</div><div class="l">ساعة</div></div>
       <div class="card stat"><div class="v num">${totalNeed ? Math.round(totalBooked / totalNeed * 100) : 0}%</div><div class="l">من خطط الطلاب محجوزة</div></div>
-      <div class="card stat"><div class="v">${ws.filter(needsConfirm).length}</div><div class="l">محتاجة تسجيل</div></div>
+      <div class="card stat"><div class="v">${occurrences(ws.filter(needsConfirm)).length}</div><div class="l">محتاجة تسجيل</div></div>
     </div>
     <div class="card item mb">
       <div class="item-head"><h3 style="margin:0">حصص ناقصة الأسبوع ده حسب خطة الطلاب (${missing.length})</h3></div>
@@ -929,18 +934,18 @@ function renderWeek() {
     </div>
     ${days.map(d => {
       const ds = dateStr(d);
-      const list = ws.filter(s => dateStr(new Date(s.scheduled_at)) === ds);
+      const list = occurrences(ws.filter(s => dateStr(new Date(s.scheduled_at)) === ds));
       const label = d.toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'long' });
       return `<div class="card item week-day ${ds === todayStr() ? 'is-today' : ''}">
         <div class="item-head">
           <a href="javascript:void(0)" class="item-title" onclick="setDayMode('day'); setDay(${jsq(ds)})">${label}${ds === todayStr() ? ' · النهارده' : ''}</a>
-          <span class="row-gap" style="align-items:center"><span class="sub small">${list.length ? `${list.length} حصة · ${fmt(list.filter(s => !s.status.startsWith('cancelled')).reduce((a, s) => a + sMins(s), 0) / 60, 1)} ساعة` : 'فاضي'}</span>
+          <span class="row-gap" style="align-items:center"><span class="sub small">${list.length ? `${list.length} حصة · ${fmt(list.filter(s => s._members ? s._members.some(m => !isCancelled(m)) : !isCancelled(s)).reduce((a, s) => a + sMins(s), 0) / 60, 1)} ساعة` : 'فاضي'}</span>
           <button class="btn btn-ghost sm icon" title="حصة في اليوم ده" onclick="openSessionForm(null, {day:${jsq(ds)}})">+</button></span>
         </div>
-        ${list.map(s => { const v = sessionView(s); const b = needsConfirm(s) ? { label: 'محتاجة تسجيل', cls: 'b-pending' } : STATUS[s.status];
-          return `<button class="wk-row" onclick="openSessionForm(${jsq(s.id)})">
+        ${list.map(s => { const v = sessionView(s); const b = s.group_key ? groupStatus(s._members) : needsConfirm(s) ? { label: 'محتاجة تسجيل', cls: 'b-pending' } : STATUS[s.status];
+          return `<button class="wk-row" onclick="${s.group_key ? `openGroupActions(${jsq(s.group_key)})` : `openSessionForm(${jsq(s.id)})`}">
             <span class="num"><b>${timeStr(new Date(s.scheduled_at))}</b> <span class="sub small">${durLabel(sMins(s))}</span></span>
-            <span>${esc(v.st?.name || '')}${' ' + kindBadge(s)} <span class="sub small">${esc(s.subject || '')} · ${esc(v.tu?.name || '')}</span></span>
+            <span>${s.group_key ? `👥 ${esc(s.group_name || 'مجموعة')} <span class="sub small">(${esc(groupNames(s._members))})</span>` : esc(v.st?.name || '') + ' ' + kindBadge(s)} <span class="sub small">${esc(s.subject || '')} · ${esc(v.tu?.name || '')}</span></span>
             <span class="badge ${b.cls}">${b.label}</span></button>`; }).join('')}
       </div>`;
     }).join('')}`;
@@ -1163,7 +1168,8 @@ function openStudentForm(familyId, id) {
     { name: 'name', label: 'اسم الطالب', required: true, value: s?.name },
     [{ name: 'grade_level', label: 'الصف الدراسي', required: true, value: s?.grade_level, list: GRADES },
      { name: 'curriculum', label: 'المنهج', type: 'select', required: true, value: s?.curriculum || 'arabic', options: Object.entries(CURRICULA).map(([v, l]) => ({ v, l })) }],
-    { name: 'default_price', label: `سعر الساعة (${fam.currency})`, type: 'number', value: s?.default_price, hint: 'الحصة بتتحسب بالساعة: لو الحصة ساعة ونص بتتحسب 1.5 × السعر. بيتملى تلقائي في الحصص وتقدر تغيّره.' },
+    [{ name: 'default_price', label: `سعر الساعة برايفت (${fam.currency})`, type: 'number', value: s?.default_price, hint: 'بيتحسب على المدة الفعلية (ساعة ونص = 1.5 × السعر).' },
+     { name: 'group_price', label: `سعر الساعة في المجموعة (${fam.currency})`, type: 'number', value: s?.group_price, hint: 'اختياري — لو بياخد حصص مجموعات.' }],
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: s?.notes },
   ];
   const plans = s ? plansOf(s.id) : [];
@@ -1175,7 +1181,7 @@ function openStudentForm(familyId, id) {
   const del = s && isAdmin ? `<button type="button" class="btn btn-danger" style="margin-top:6px" onclick="closeModal(); confirmDelete(${jsq('الطالب ' + s.name)}, () => q(sb.from('students').delete().eq('id', ${jsq(s.id)})))">حذف الطالب</button>` : '';
   openModal(`${s ? 'تعديل طالب' : 'طالب جديد'} — ${fam.name}`, formHtml(fields, 'حفظ', planBlock + del));
   window._formSubmit = () => runSubmit(async () => {
-    const row = { family_id: familyId, name: fv('name'), grade_level: fv('grade_level'), curriculum: fv('curriculum'), default_price: fnum('default_price'), notes: fv('notes') || null };
+    const row = { family_id: familyId, name: fv('name'), grade_level: fv('grade_level'), curriculum: fv('curriculum'), default_price: fnum('default_price'), group_price: fnum('group_price'), notes: fv('notes') || null };
     let sid = s?.id;
     if (s) await q(sb.from('students').update(row).eq('id', s.id));
     else { const [ns] = await q(sb.from('students').insert(row).select()); sid = ns.id; }
@@ -1362,12 +1368,13 @@ async function openTutorPeriodMessage(tutorId) {
       q(sb.from('sessions').select('*').eq('tutor_id', tutorId).eq('status', 'done').gte('scheduled_at', r.fromD.toISOString()).lt('scheduled_at', r.toD.toISOString()).order('scheduled_at')),
       q(sb.from('tutor_payouts').select('*').eq('tutor_id', tutorId).eq('paid', true).gte('created_at', r.fromD.toISOString()).lt('created_at', r.toD.toISOString())),
     ]);
-    const earned = ss.reduce((a, s) => a + charges(s).tut, 0), mins = ss.reduce((a, s) => a + sMins(s), 0);
+    const oc = occurrences(ss);
+    const earned = ss.reduce((a, s) => a + charges(s).tut, 0), mins = oc.reduce((a, s) => a + sMins(s), 0);
     const paid = po.reduce((a, p) => a + Number(p.total_egp), 0);
     const b = tutBalance(t);
     const label = r.fromD.getDate() === 1 && new Date(r.toD.getTime() - 1).getMonth() === r.fromD.getMonth()
       ? `شهر ${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` : `الفترة ${r.from} إلى ${r.toIncl}`;
-    const lines = ss.map(s => { const v = sessionView(s); return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${v.st?.name || ''}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'regular' ? '' : ' ' + kindWord(s)} — ${durLabel(sMins(s))} = ${fmt(charges(s).tut, 2)} ج`; }).join('\n');
+    const lines = oc.map(s => `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ' ' + kindWord(s)} — ${durLabel(sMins(s))} = ${fmt(occTut(s), 2)} ج`).join('\n');
     const text = `${greetTutor(t.name)}
 كشف حصصك عن ${label}:
 ${lines || '— لا توجد حصص —'}
@@ -1498,7 +1505,7 @@ async function openTutorStatement(tutorId) {
       q(sb.from('tutor_payouts').select('*').eq('tutor_id', tutorId)),
     ]);
     const rows = [
-      ...ss.map(s => ({ at: s.scheduled_at, desc: `${kindWord(s)} ${byId(state.students, s.student_id)?.name || ''}${s.subject ? ' — ' + s.subject : ''} (${durLabel(sMins(s))})`, amt: charges(s).tut })),
+      ...occurrences(ss).map(s => ({ at: s.scheduled_at, desc: `${s.group_key ? '' : kindWord(s) + ' '}${occWho(s)}${s.subject ? ' — ' + s.subject : ''} (${durLabel(sMins(s))})`, amt: occTut(s) })),
       ...po.filter(p => p.paid).map(p => ({ at: p.paid_at || p.created_at, desc: `صرف${p.method ? ' (' + p.method + ')' : ''}${p.note ? ' — ' + p.note : ''}`, amt: -Number(p.total_egp), id: p.id })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at));
     let run = 0;
@@ -1577,7 +1584,7 @@ function renderFinance() {
   const cancelled = sessions.filter(s => s.status.startsWith('cancelled'));
   const rev = done.reduce((a, s) => a + Number(s.revenue_egp || 0), 0);
   const cost = done.reduce((a, s) => a + charges(s).tut, 0);
-  const hoursDone = done.reduce((a, s) => a + sMins(s), 0) / 60;
+  const hoursDone = occurrences(done).reduce((a, s) => a + sMins(s), 0) / 60;
   const margin = rev - cost;
   const byCur = {};
   done.forEach(s => { const c = byCur[s.student_currency] ||= { amt: 0, egp: 0, n: 0 }; c.amt += charges(s).fam; c.egp += Number(s.revenue_egp || 0); c.n++; });
@@ -1593,7 +1600,7 @@ function renderFinance() {
 
   // المعلمين — تسوية الفترة (بالجنيه)
   const perTutor = {};
-  done.forEach(s => { const x = perTutor[s.tutor_id] ||= { n: 0, egp: 0, h: 0 }; x.n++; x.h += sMins(s) / 60; x.egp += charges(s).tut; });
+  occurrences(done).forEach(s => { const x = perTutor[s.tutor_id] ||= { n: 0, egp: 0, h: 0 }; x.n++; x.h += sMins(s) / 60; x.egp += occTut(s); });
   const paidPerTutor = {};
   payouts.filter(p => p.paid).forEach(p => paidPerTutor[p.tutor_id] = (paidPerTutor[p.tutor_id] || 0) + Number(p.total_egp));
   const tutorRows = state.tutors.map(t => ({ t, p: perTutor[t.id] || { n: 0, egp: 0, h: 0 }, paid: paidPerTutor[t.id] || 0, b: tutBalance(t) }))
@@ -1611,7 +1618,7 @@ function renderFinance() {
   const fxRows = (state.fxRows || []).filter(r => r.currency !== 'EGP');
   document.getElementById('fin-content').innerHTML = `
     <div class="kpis">
-      <div class="card kpi"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP بسعر السوق يوم الحصة · ${done.length} ${done.length > 2 && done.length < 11 ? 'حصص' : 'حصة'} · ${fmt(hoursDone, 1)} ساعة</div></div>
+      <div class="card kpi"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP بسعر السوق يوم الحصة · ${occurrences(done).length} ${occurrences(done).length > 2 && occurrences(done).length < 11 ? 'حصص' : 'حصة'} · ${fmt(hoursDone, 1)} ساعة</div></div>
       <div class="card kpi"><div class="l">مستحقات المعلمين عن الفترة</div><div class="v num">${fmt(cost)}</div><div class="s">EGP</div></div>
       <div class="card kpi"><div class="l">هامش الأكاديمية</div><div class="v num ${margin >= 0 ? 'pos' : 'neg'}">${fmt(margin)}</div><div class="s">EGP · ${rev ? Math.round(margin / rev * 100) : 0}% من الإيراد</div></div>
       <div class="card kpi"><div class="l">المحصّل فعلياً بالجنيه</div><div class="v num">${fmt(cashIn)}</div><div class="s">${Object.entries(collected).map(([c, v]) => `${fmt(v)} ${c}`).join(' + ') || '—'}${estCount ? ` · ${estCount} دفعة لسه مقدّرة` : ''}</div></div>
@@ -1860,11 +1867,11 @@ function renderAttention() {
   const items = [];
   const ns = state.nextSession;
   if (ns) {
-    const v = sessionView(ns), mins = Math.round((sStart(ns) - Date.now()) / 60e3);
+    const v = sessionView(ns); if (ns.group_key) v.st = { name: '👥 ' + (ns.group_name || 'مجموعة') }; const mins = Math.round((sStart(ns) - Date.now()) / 60e3);
     items.push(`<button class="att att-next" onclick="setDayMode('day'); setDay(todayStr())">⏰ الجاية: <b>${esc(v.st?.name || '')}</b> ${esc(ns.subject || '')} — ${timeStr(new Date(ns.scheduled_at))} <span class="sub">(${mins < 60 ? `بعد ${mins} د` : `بعد ${durLabel(Math.round(mins / 5) * 5)}`})</span></button>`);
   }
   const un = state.unrecorded || [];
-  if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${un.length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
+  if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${occurrences(un).length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
   const pt = (state.pendingTrials || []).length;
   if (pt) items.push(`<button class="att att-warn" onclick="openPendingTrials()">🧪 <b>${pt}</b> تجريبية مستنية نتيجة</button>`);
   const relay = state.relay.filter(r => r.status !== 'done').length;
@@ -1882,13 +1889,13 @@ function renderAttention() {
 }
 function openUnrecorded() {
   const un = state.unrecorded || [];
-  openModal(`حصص محتاجة تسجيل (${un.length})`, `
+  openModal(`حصص محتاجة تسجيل (${occurrences(un).length})`, `
     <p class="sub">دي حصص معادها عدّى ولسه متسجلتش "تمت" أو "ملغاة". الحصة مش بتتحسب على الأسرة ولا للمعلم غير لما تتسجل.</p>
-    <div class="list">${un.map(s => { const v = sessionView(s); return `<div class="card item">
-      <div class="item-head"><div><b>${esc(v.st?.name || '')}</b> <span class="sub small">${esc(v.fam?.name || '')}</span>
+    <div class="list">${occurrences(un).map(s => { const v = sessionView(s); return `<div class="card item">
+      <div class="item-head"><div><b>${esc(s.group_key ? occWho(s) : v.st?.name || '')}</b> <span class="sub small">${s.group_key ? '' : esc(v.fam?.name || '')}</span>
         <div class="small">${fmtShortDate(s.scheduled_at)} · ${timeStr(new Date(s.scheduled_at))} · ${durLabel(sMins(s))} · ${esc(s.subject || '')} · ${esc(v.tu?.name || '')}</div></div></div>
       <div class="actions"><button class="btn btn-ok sm" onclick="openDone(${jsq(s.id)})">✓ تمت…</button>
-        <button class="btn btn-ghost sm" onclick="openCancel(${jsq(s.id)})">اتلغت…</button></div></div>`; }).join('') || '<div class="empty">مفيش 👌</div>'}</div>`);
+        <button class="btn btn-ghost sm" onclick="${s.group_key ? `openGroupCancel(${jsq(s.group_key)})` : `openCancel(${jsq(s.id)})`}">اتلغت…</button></div></div>`; }).join('') || '<div class="empty">مفيش 👌</div>'}</div>`);
 }
 
 /* ============================================================
@@ -1915,8 +1922,8 @@ const SIGN_F = 'فريق الإشراف – أكاديمية أستاذ أونل
 
 // جدول اليوم لكل معلمة
 function tutorDayMessage(tu, list, dayIso) {
-  const lines = list.map(s => { const v = sessionView(s);
-    return `• ${fmtTime(s.scheduled_at, CAIRO_TZ)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), CAIRO_TZ)}: ${v.st?.name || ''} (${v.st?.grade_level || ''})${s.subject ? ' — ' + s.subject : ''}${s.kind === 'regular' ? '' : ` [${kindWord(s)}]`}${s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : ''}`; }).join('\n');
+  const lines = occurrences(list).map(s => { const v = sessionView(s);
+    return `• ${fmtTime(s.scheduled_at, CAIRO_TZ)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), CAIRO_TZ)}: ${s.group_key ? `👥 ${s.group_name || 'مجموعة'}: ${groupNames(s._members)}` : `${v.st?.name || ''} (${v.st?.grade_level || ''})`}${s.subject ? ' — ' + s.subject : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ` [${kindWord(s)}]`}${s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : ''}`; }).join('\n');
   return `${greetTutor(tu?.name)}
 جدول حصصك ${relDayLabel(dayIso, CAIRO_TZ)} (${fmtDate(dayIso, CAIRO_TZ)}) بتوقيت القاهرة:
 ${lines}
@@ -1931,7 +1938,7 @@ function openTutorSchedules() {
   const dayIso = parseDay(state.day).toISOString();
   const blocks = Object.entries(byTutor).map(([tid, ss]) => {
     const tu = byId(state.tutors, tid);
-    return msgBlock(`${tu?.name || ''} — ${ss.length} حصة`, tutorDayMessage(tu, ss, ss[0].scheduled_at || dayIso),
+    return msgBlock(`${tu?.name || ''} — ${occurrences(ss).length} حصة`, tutorDayMessage(tu, ss, ss[0].scheduled_at || dayIso),
       { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tid });
   });
   openModal(`جداول المعلمين — ${fmtDate(dayIso)}`, blocks.length
@@ -1997,8 +2004,8 @@ async function openTutorStatementMessage(tutorId) {
     if (since) qq = qq.gt('scheduled_at', since);
     const ss = await q(qq);
     const b = tutBalance(t);
-    const lines = ss.map(s => { const v = sessionView(s); return `• ${fmtShortDate(s.scheduled_at)} — ${v.st?.name || ''}${s.subject ? ' (' + s.subject + ')' : ''} — ${durLabel(sMins(s))} = ${fmt(charges(s).tut, 2)} ج`; }).join('\n');
-    const totalMins = ss.reduce((a, s) => a + sMins(s), 0);
+    const lines = occurrences(ss).map(s => `• ${fmtShortDate(s.scheduled_at)} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''} — ${durLabel(sMins(s))} = ${fmt(occTut(s), 2)} ج`).join('\n');
+    const totalMins = occurrences(ss).reduce((a, s) => a + sMins(s), 0);
     const text = `${greetTutor(t.name)}
 كشف حصصك${since ? ` من بعد آخر تحويل (${fmtShortDate(since)})` : ''}:
 ${lines || '— لا توجد حصص مسجلة —'}
@@ -2017,6 +2024,7 @@ ${SIGN_T}`;
    ============================================================ */
 function openPostpone(id) {
   const s = findSession(id); if (!s) return;
+  if (s.group_key) return openGroupPostpone(s.group_key);
   const d = new Date(s.scheduled_at); d.setDate(d.getDate() + 1);
   openModal('تأجيل / تغيير موعد الحصة', formHtml([
     [{ name: 'date', label: 'التاريخ الجديد', type: 'date', required: true, value: dateStr(d) },
@@ -2078,10 +2086,10 @@ function exportSessionsCSV() {
       s.kind === 'regular' ? 'عادية' : kindWord(s), (STATUS[s.status] || {}).label, s.duration_minutes, s.actual_minutes ?? '',
       s.student_price, s.student_currency, done ? c.fam.toFixed(2) : '', s.tutor_cost_egp, done ? c.tut.toFixed(2) : '',
       done ? Number(s.fx_rate_to_egp).toFixed(4) : '', done ? Number(s.revenue_egp).toFixed(2) : '', done ? Number(s.margin_egp).toFixed(2) : '',
-      s.cancel_reason || '', s.cancel_note || '', cancelNoticeHours(s) == null ? '' : cancelNoticeHours(s).toFixed(1), s.makeup_of ? 'نعم' : '', s.notes];
+      s.cancel_reason || '', s.cancel_note || '', cancelNoticeHours(s) == null ? '' : cancelNoticeHours(s).toFixed(1), s.makeup_of ? 'نعم' : '', s.group_name || '', s.group_rate_egp ?? '', s.notes];
   });
   downloadCSV(`حصص_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الوقت', 'الطالب', 'الأسرة', 'المعلم', 'المادة', 'النوع', 'الحالة', 'المدة المخططة (د)', 'المدة الفعلية (د)',
-    'سعر الساعة للأسرة', 'العملة', 'إجمالي الأسرة', 'أجر الساعة للمعلم (EGP)', 'إجمالي المعلم (EGP)', 'سعر الصرف', 'الإيراد (EGP)', 'الهامش (EGP)', 'سبب الإلغاء', 'تفاصيل الإلغاء', 'الإلغاء قبلها بكام ساعة', 'تعويضية', 'ملاحظات'], rows);
+    'سعر الساعة للأسرة', 'العملة', 'إجمالي الأسرة', 'أجر الساعة للمعلم (EGP)', 'إجمالي المعلم (EGP)', 'سعر الصرف', 'الإيراد (EGP)', 'الهامش (EGP)', 'سبب الإلغاء', 'تفاصيل الإلغاء', 'الإلغاء قبلها بكام ساعة', 'تعويضية', 'المجموعة', 'أجر ساعة المجموعة (EGP)', 'ملاحظات'], rows);
 }
 function exportPaymentsCSV() {
   if (!state.fin) return;
@@ -2132,7 +2140,7 @@ function renderReports() {
   const byParty = k => past.filter(s => s.status === k);
   const cS = byParty('cancelled_by_student'), cT = byParty('cancelled_by_tutor'), cA = byParty('cancelled_by_academy');
   const cancels = [...cS, ...cT, ...cA];
-  const hours = done.reduce((a, s) => a + sMins(s), 0) / 60;
+  const hours = occurrences(done).reduce((a, s) => a + sMins(s), 0) / 60;
   const attend = done.length + cS.length + cT.length ? done.length / (done.length + cS.length + cT.length) : null;
   const makeups = rows.filter(s => s.makeup_of).length;
   const unrec = past.filter(needsConfirm).length;
@@ -2144,7 +2152,8 @@ function renderReports() {
 
   // أسبوعي
   const weeks = {};
-  past.forEach(s => { const w = dateStr(weekStart(dateStr(new Date(s.scheduled_at)))); const x = weeks[w] ||= { h: 0, c: 0 }; if (s.status === 'done') x.h += sMins(s) / 60; else if (s.status.startsWith('cancelled')) x.c++; });
+  occurrences(past.filter(s => s.status === 'done')).forEach(s => { const w = dateStr(weekStart(dateStr(new Date(s.scheduled_at)))); const x = weeks[w] ||= { h: 0, c: 0 }; x.h += sMins(s) / 60; });
+  past.filter(s => s.status.startsWith('cancelled')).forEach(s => { const w = dateStr(weekStart(dateStr(new Date(s.scheduled_at)))); const x = weeks[w] ||= { h: 0, c: 0 }; x.c++; });
   const wk = Object.entries(weeks).sort();
   const maxH = Math.max(1, ...wk.map(([, v]) => v.h));
 
@@ -2158,7 +2167,8 @@ function renderReports() {
     .sort((a, b) => (a.k.rate ?? 1) - (b.k.rate ?? 1) || b.x.c - a.x.c);
   // المعلمين
   const tut = {};
-  past.forEach(s => { const x = tut[s.tutor_id] ||= { d: 0, h: 0, c: 0, late: 0, ns: 0 };
+  const seenOcc = new Set();
+  past.forEach(s => { if (s.group_key) { const k = s.group_key + '|' + s.status; if (seenOcc.has(k)) return; seenOcc.add(k); } const x = tut[s.tutor_id] ||= { d: 0, h: 0, c: 0, late: 0, ns: 0 };
     if (s.status === 'done') { x.d++; x.h += sMins(s) / 60; }
     else if (s.status === 'cancelled_by_tutor') { x.c++; if (isLate(s)) x.late++; if (s.cancel_reason === 'لم يحضر') x.ns++; } });
   const tutRows = Object.entries(tut).map(([id, x]) => ({ t: byId(state.tutors, id), x, k: commitment(x.d, x.c) })).filter(r => r.t)
@@ -2167,7 +2177,7 @@ function renderReports() {
   el.innerHTML = `
     <div class="chips">${[['this', 'الشهر ده'], ['last', 'الشهر اللي فات'], ['3m', 'آخر 3 شهور'], ['year', 'السنة دي']].map(([k, l]) => `<button class="chip ${state.repPeriod === k ? 'active' : ''}" onclick="setRepPeriod('${k}')">${l}</button>`).join('')}</div>
     <div class="kpis">
-      <div class="card kpi"><div class="l">حصص تمت</div><div class="v num">${done.length}</div><div class="s">${fmt(hours, 1)} ساعة تدريس</div></div>
+      <div class="card kpi"><div class="l">حصص تمت</div><div class="v num">${occurrences(done).length}</div><div class="s">${fmt(hours, 1)} ساعة تدريس</div></div>
       <div class="card kpi"><div class="l">نسبة الالتزام العامة</div><div class="v num ${attend == null ? '' : attend >= .9 ? 'pos' : attend >= .75 ? 'warn-txt' : 'neg'}">${attend == null ? '—' : Math.round(attend * 100) + '%'}</div><div class="s">حصص تمت ÷ (تمت + إلغاء أسرة/معلم)</div></div>
       <div class="card kpi"><div class="l">إلغاءات</div><div class="v num">${cancels.length}</div><div class="s">أسر ${cS.length} · معلمين ${cT.length} · أكاديمية ${cA.length}</div></div>
       <div class="card kpi"><div class="l">إلغاءات متأخرة</div><div class="v num ${cancels.filter(isLate).length ? 'neg' : ''}">${cancels.filter(isLate).length}</div><div class="s">أقل من ${LATE_HOURS} ساعات قبل الحصة</div></div>
@@ -2297,10 +2307,498 @@ function openMenu() {
 }
 
 /* ============================================================
+   حصص المجموعات: صف لكل طالب بسعره وعملة أسرته،
+   والمعلمة لها أجر ساعة ثابت عن المجموعة كلها (بيتقسم تلقائياً على اللي حضروا)
+   ============================================================ */
+const isCancelled = s => String(s.status).startsWith('cancelled');
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
+// يدمج صفوف نفس حصة المجموعة في عنصر واحد (للساعات والعدّ وكشوف المعلمة)
+function occurrences(list) {
+  const out = [], idx = {};
+  for (const s of list) {
+    if (!s.group_key) { out.push(s); continue; }
+    const g = idx[s.group_key];
+    if (g) { g._members.push(s); continue; }
+    const o = { ...s, _members: [s] }; idx[s.group_key] = o; out.push(o);
+  }
+  return out;
+}
+const occTut = o => o._members ? o._members.reduce((a, m) => a + charges(m).tut, 0) : charges(o).tut;
+const groupNames = rows => rows.map(m => byId(state.students, m.student_id)?.name || '').filter(Boolean).join('، ');
+const occWho = o => o._members && o.group_key ? `👥 ${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : (byId(state.students, o.student_id)?.name || '');
+function loadedGroup(key) {
+  const seen = new Set();
+  return allLoadedSessions().filter(s => s.group_key === key && !seen.has(s.id) && seen.add(s.id)).sort((a, b) => a.id < b.id ? -1 : 1);
+}
+async function fetchGroup(key) {
+  const rows = await q(sb.from('sessions').select('*').eq('group_key', key));
+  return rows.sort((a, b) => (byId(state.students, a.student_id)?.name || '').localeCompare(byId(state.students, b.student_id)?.name || '', 'ar'));
+}
+function groupStatus(rows) {
+  const active = rows.filter(r => !isCancelled(r));
+  if (!active.length) return { ...STATUS[rows[0].status], label: 'المجموعة اتلغت' };
+  if (active.some(needsConfirm)) return { label: 'محتاجة تسجيل', cls: 'b-pending' };
+  if (active.every(r => r.status === 'done')) return STATUS.done;
+  if (active.some(isNow)) return { label: 'دلوقتي', cls: 'b-now' };
+  return STATUS[active.some(r => r.status === 'in_progress') ? 'in_progress' : 'scheduled'];
+}
+function groupMoney(rows) {
+  const active = rows.filter(r => !isCancelled(r));
+  const s0 = active[0] || rows[0];
+  const done = active.filter(r => r.status === 'done');
+  const mins = sMins(s0);
+  const rev = active.reduce((a, r) => a + charges(r).rev, 0);
+  const tut = done.length ? done.reduce((a, r) => a + charges(r).tut, 0) : (active.length ? Number(s0.group_rate_egp || 0) * mins / 60 : 0);
+  return { mins, rev, tut, margin: rev - tut, final: active.length && done.length === active.length };
+}
+
+function groupCard(rows) {
+  const s = rows.find(r => !isCancelled(r)) || rows[0];
+  const K = jsq(s.group_key);
+  const tu = byId(state.tutors, s.tutor_id);
+  const badge = groupStatus(rows);
+  const m = groupMoney(rows);
+  const open = rows.some(r => r.status === 'scheduled' || r.status === 'in_progress');
+  const confirmNeeded = rows.some(needsConfirm);
+  const now = rows.some(isNow);
+  const extended = s.actual_minutes && s.actual_minutes !== s.duration_minutes;
+  const tzs = [...new Set(rows.map(r => sessionView(r).fam?.country).filter(c => c && c !== 'مصر'))];
+  const member = r => {
+    const { st, fam } = sessionView(r);
+    const b = isCancelled(r) ? { label: r.cancel_reason === 'لم يحضر' ? 'غاب' : 'اعتذر', cls: 'b-cancel' } : r.status === 'done' ? { label: 'حضر', cls: 'b-done' } : null;
+    return `<div class="gm-row">
+      <a href="javascript:void(0)" onclick="openStudentProfile(${jsq(r.student_id)})"><b>${esc(st?.name || 'طالب محذوف')}</b></a>
+      <span class="sub small">${esc(fam?.name || '')} · ${fmt(r.student_price, 2)} ${r.student_currency}/س</span>
+      <span class="gm-act">${b ? `<span class="badge ${b.cls}">${b.label}</span>` : ''}
+        ${r.status === 'scheduled' || r.status === 'in_progress' ? `<button class="btn btn-ghost sm" title="الطالب ده بس مش هيحضر" onclick="openCancel(${jsq(r.id)})">✖ اعتذار</button>` : ''}
+        ${isCancelled(r) && open ? `<button class="btn btn-ghost sm" title="رجّعه للمجموعة" onclick="setStatus(${jsq(r.id)},'scheduled')">↺</button>` : ''}</span>
+    </div>`;
+  };
+  return `<div class="card item session group-card ${now ? 's-now' : ''} ${confirmNeeded ? 's-confirm' : ''}">
+    <div class="left">
+      <div class="time">${esc(timeStr(new Date(s.scheduled_at)))}</div>
+      <div class="sub small">حتى ${esc(timeStr(new Date(sEnd(s))))}</div>
+      ${tzs.map(c => `<div class="sub small">${COUNTRIES[c].flag} ${esc(fmtTime(s.scheduled_at, COUNTRIES[c].tz))}</div>`).join('')}
+    </div>
+    <div>
+      <div class="item-head">
+        <div>
+          <div class="item-title">👥 ${esc(s.group_name || 'مجموعة')} <span class="badge b-group">${rows.some(r => r.status === 'done') ? `حضر ${rows.filter(r => r.status === 'done').length} من ${rows.length}` : `${rows.filter(r => !isCancelled(r)).length} طلاب`}</span></div>
+          <div class="sub small">${[...new Set(rows.map(r => sessionView(r).fam?.name).filter(Boolean))].map(esc).join(' · ')}</div>
+        </div>
+        <span class="badge ${badge.cls}">${badge.label}</span>
+      </div>
+      <div class="meta">
+        <span>المعلم: <b>${esc(tu?.name || '—')}</b></span>
+        ${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b></span>` : ''}
+        <span>المدة: <b>${durLabel(m.mins)}</b>${extended ? ` <span class="${s.actual_minutes > s.duration_minutes ? 'pos' : 'neg'}">(المخطط ${durLabel(s.duration_minutes)})</span>` : ''}</span>
+        ${s.meeting_link ? `<span><a href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">رابط الحصة ↗</a></span>` : (open ? '<span class="neg">لا يوجد رابط</span>' : '')}
+      </div>
+      <div class="gm-list">${rows.map(member).join('')}</div>
+      ${s.notes ? `<div class="sub small mt">📝 ${esc(s.notes)}</div>` : ''}
+      ${m.rev || m.tut ? `<div class="money">
+        <span class="pill" title="مجموع اللي على الأسر بالجنيه">الأسر: ${fmt(m.rev)} EGP</span>
+        <span class="pill" title="${fmt(s.group_rate_egp)} EGP في الساعة عن المجموعة كلها">المعلم: ${money(m.tut, 'EGP')}</span>
+        <span class="pill ${m.margin >= 0 ? 'ok' : 'bad'}">الهامش: ${fmt(m.margin)} EGP${m.final ? '' : ' (تقديري)'}</span>
+      </div>` : ''}
+      <div class="actions">
+        ${open && !confirmNeeded ? `
+          <button class="btn btn-wa sm" onclick="openGroupReminder(${K},'parent')">📲 الأسر</button>
+          <button class="btn btn-wa sm" onclick="openGroupReminder(${K},'tutor')">📲 المعلم</button>` : ''}
+        ${open ? `<button class="btn btn-ok sm" onclick="openGroupDone(${K})">✓ تمت… (الحضور)</button>` : ''}
+        <button class="btn btn-ghost sm" onclick="openGroupActions(${K})">⋯ المزيد</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ----- تذكير المجموعة: رسالة لكل أسرة (بتوقيتها) + رسالة واحدة للمعلمة ----- */
+function groupReminderText(rows, who, fam) {
+  const s = rows[0];
+  const link = s.meeting_link ? linkHref(s.meeting_link) : '(سيتم إرسال الرابط قبل الحصة)';
+  const durLine = `\n⏳ المدة: ${durLabel(s.duration_minutes || 60)}`;
+  if (who === 'parent') {
+    const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+    const mine = rows.filter(r => sessionView(r).fam?.id === fam?.id).map(r => byId(state.students, r.student_id)?.name).filter(Boolean);
+    return `السلام عليكم ورحمة الله 🌷
+تذكير بحصة المجموعة لـ ${mine.join(' و')} ${relDayLabel(s.scheduled_at, c.tz)}
+👥 ${s.group_name || 'مجموعة'}${s.subject ? ` — ${s.subject}` : ''}
+⏰ الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}${durLine}
+🔗 رابط الحصة: ${link}
+
+برجاء الدخول قبل الموعد بدقيقتين. لأي تعديل أو ملاحظات تواصلوا معنا هنا مباشرة.
+${SIGN_F}`;
+  }
+  const tu = byId(state.tutors, s.tutor_id);
+  const list = rows.map(r => { const st = byId(state.students, r.student_id); return `• ${st?.name || ''}${st?.grade_level ? ` (${st.grade_level})` : ''}`; }).join('\n');
+  return `${greetTutor(tu?.name)}
+تذكير بحصة المجموعة ${relDayLabel(s.scheduled_at, CAIRO_TZ)}
+👥 ${s.group_name || 'مجموعة'}${s.subject ? ` — ${s.subject}` : ''} (${rows.length} طلاب)
+${list}
+⏰ الساعة ${fmtTime(s.scheduled_at, CAIRO_TZ)} بتوقيت القاهرة${durLine}
+🔗 رابط الحصة: ${link}
+
+بعد الحصة بلّغينا مين حضر ومين غاب، ولو الوقت اتمد اكتبي المدة الفعلية.
+${SIGN_T}`;
+}
+async function openGroupReminder(key, who) {
+  const rows = (await fetchGroup(key)).filter(r => !isCancelled(r));
+  if (!rows.length) return showToast('مفيش طلاب في المجموعة دي', true);
+  const tu = byId(state.tutors, rows[0].tutor_id);
+  let blocks;
+  if (who === 'tutor') blocks = [msgBlock(`للمعلم — ${tu?.name || ''}`, groupReminderText(rows, 'tutor'), { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id })];
+  else {
+    const fams = [...new Map(rows.map(r => sessionView(r).fam).filter(Boolean).map(f => [f.id, f])).values()];
+    blocks = fams.map(f => msgBlock(f.name, groupReminderText(rows, 'parent', f), { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id }));
+  }
+  openModal(who === 'tutor' ? 'تذكير المعلم — المجموعة' : `تذكير الأسر (${blocks.length})`,
+    `${who === 'parent' ? '<p class="sub small">رسالة لكل أسرة في جروبها، بتوقيت بلدها — ومن غير أسماء أو بيانات الأسر التانية.</p>' : ''}<div class="list">${blocks.join('')}</div>`);
+  if (blocks.length <= 3) document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
+
+/* ----- تسجيل المجموعة "تمت": المدة الفعلية + مين حضر ----- */
+async function openGroupDone(key) {
+  const rows = (await fetchGroup(key)).filter(r => !isCancelled(r) || r.cancel_reason === 'لم يحضر');
+  if (!rows.length) return;
+  const s = rows[0];
+  const planned = s.duration_minutes || 60;
+  const current = s.actual_minutes || planned;
+  const present = new Set(rows.filter(r => !isCancelled(r)).map(r => r.id));
+  const opts = [...new Set([planned, planned + 15, planned + 30, planned + 60, Math.max(15, planned - 15), Math.max(15, planned - 30)])].sort((a, b) => a - b);
+  openModal(`👥 ${s.group_name || 'المجموعة'}: الحضور والمدة`, `
+    <div class="field"><label>مين حضر؟</label><div class="gm-list" id="gd-list">
+      ${rows.map(r => { const v = sessionView(r); return `<label class="gm-row gm-check"><input type="checkbox" data-id="${esc(r.id)}" ${present.has(r.id) ? 'checked' : ''} onchange="_gdPrev()">
+        <b>${esc(v.st?.name || '')}</b> <span class="sub small">· ${esc(v.fam?.name || '')}</span></label>`; }).join('')}
+    </div><div class="hint">اللي مش متعلّم عليه بيتسجل "لم يحضر" ومش بيتحسب على أسرته، وأجر المعلمة الثابت بيتقسم على اللي حضروا.</div></div>
+    <div class="field"><label>المدة الفعلية</label>
+      <div class="chips" id="dur-chips">${opts.map(m => `<button type="button" class="chip" data-m="${m}" onclick="_pickDur(${m})">${durLabel(m)}${m === planned ? ' (المخطط)' : ''}</button>`).join('')}</div>
+      <input id="f_actual" class="input" type="number" min="5" max="720" step="5" inputmode="numeric" value="${current}"></div>
+    <div id="done-preview" class="card item" style="background:var(--bg)"></div>
+    <div id="form-error" class="err hidden"></div>
+    <div class="modal-foot"><button class="btn btn-ok" id="form-submit" onclick="_saveGroupDone()">حفظ</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>`);
+  const inp = document.getElementById('f_actual');
+  const picked = () => [...document.querySelectorAll('#gd-list input')].filter(x => x.checked).map(x => x.dataset.id);
+  const preview = () => {
+    const m = Number(inp.value) || planned, ids = picked();
+    document.querySelectorAll('#dur-chips .chip').forEach(c => c.classList.toggle('active', Number(c.dataset.m) === m));
+    const att = rows.filter(r => ids.includes(r.id));
+    const rev = att.reduce((a, r) => a + toEGP(Number(r.student_price) * m / 60, r.student_currency), 0);
+    const tut = att.length ? Number(s.group_rate_egp || 0) * m / 60 : 0;
+    document.getElementById('done-preview').innerHTML = `<div class="meta" style="margin:0">
+      <span>حضر: <b>${att.length} من ${rows.length}</b></span><span>المدة: <b>${durLabel(m)}</b></span>
+      <span>الأسر: <b>≈ ${fmt(rev)} EGP</b></span><span>للمعلم: <b>${money(tut, 'EGP')}</b></span>
+      <span>الهامش: <b>${fmt(rev - tut)} EGP</b></span></div>
+      <div class="sub small mt">كل طالب بيتحسب بسعر ساعته (${att.map(r => `${byId(state.students, r.student_id)?.name || ''} ${fmt(r.student_price, 2)} ${r.student_currency}`).join('، ') || '—'}).</div>`;
+  };
+  window._gdPrev = preview;
+  window._pickDur = m => { inp.value = m; preview(); };
+  inp.addEventListener('input', preview); preview();
+  window._saveGroupDone = () => runSubmit(async () => {
+    const m = Math.round(Number(inp.value));
+    if (!(m >= 5 && m <= 720)) return formError('المدة لازم تكون بين 5 دقايق و12 ساعة');
+    const ids = picked();
+    if (!ids.length) return formError('محدش حضر؟ استخدم "إلغاء المجموعة" من ⋯ المزيد بدل كده');
+    const absent = rows.filter(r => !ids.includes(r.id)).map(r => r.id);
+    await q(sb.from('sessions').update({ status: 'done', actual_minutes: m, cancel_reason: null, cancel_note: null, cancelled_at: null, cancel_scope: null, cancelled_by_user: null }).in('id', ids));
+    if (absent.length) await q(sb.from('sessions').update({ status: 'cancelled_by_student', cancel_reason: 'لم يحضر', cancel_scope: 'once',
+      cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, actual_minutes: null }).in('id', absent));
+    closeModal(); showToast(`تم تسجيل المجموعة ✓ (حضر ${ids.length})`); await refreshAll();
+  });
+}
+
+/* ----- قائمة إجراءات المجموعة ----- */
+async function openGroupActions(key) {
+  const rows = await fetchGroup(key); if (!rows.length) return;
+  const s = rows.find(r => !isCancelled(r)) || rows[0];
+  const open = rows.some(r => r.status === 'scheduled' || r.status === 'in_progress');
+  const allCancelled = rows.every(isCancelled), anyDone = rows.some(r => r.status === 'done');
+  const K = jsq(key);
+  const a = (icon, label, fn, cls = '') => `<button class="wk-row ${cls}" onclick="closeModal(); ${fn}"><span>${icon}</span><span><b>${label}</b></span><span></span></button>`;
+  openModal(`👥 ${s.group_name || 'مجموعة'} · ${timeStr(new Date(s.scheduled_at))}`, `<div class="list">
+    ${rows.some(r => r.status === 'scheduled') ? a('▶', 'الحصة بدأت', `_groupSet(${K},'in_progress')`) : ''}
+    ${open ? a('🔁', 'تأجيل / تغيير الموعد (للمجموعة كلها)', `openGroupPostpone(${K})`) : ''}
+    ${open ? a('✖', 'إلغاء المجموعة…', `openGroupCancel(${K})`) : ''}
+    ${anyDone ? a('⏱', 'تعديل الحضور / المدة', `openGroupDone(${K})`) : ''}
+    ${anyDone || allCancelled ? a('↺', 'إرجاع المجموعة لمجدولة', `_groupSet(${K},'scheduled')`) : ''}
+    ${a('✏️', 'تعديل المجموعة (الطلاب، الأسعار، الموعد)', `openGroupForm(${K})`)}
+    ${a('📋', 'رسائل التذكير', `openGroupReminder(${K},'parent')`)}
+    ${a('🔁', 'مهمة ترحيل', `openRelayForm({tutor_id:${jsq(s.tutor_id)}, session_id:${jsq(s.id)}, requested_by:'tutor'})`)}
+    ${isAdmin ? a('🗑', 'حذف حصة المجموعة', `confirmDelete('حصة المجموعة دي (كل الطلاب)', () => q(sb.from('sessions').delete().eq('group_key', ${K})))`, 'danger-row') : ''}
+  </div>`);
+}
+async function _groupSet(key, status) {
+  try {
+    const patch = { status };
+    if (status === 'scheduled') Object.assign(patch, { cancel_reason: null, cancel_note: null, cancelled_at: null, cancelled_by_user: null, cancel_scope: null, actual_minutes: null });
+    let qq = sb.from('sessions').update(patch).eq('group_key', key);
+    if (status === 'in_progress') qq = qq.eq('status', 'scheduled');
+    await q(qq);
+    showToast('تم تحديث المجموعة ✓'); await refreshAll();
+  } catch (e) { showToast(dbError(e), true); }
+}
+
+/* ----- إلغاء المجموعة كلها (مرة أو كل الجاي) ----- */
+async function openGroupCancel(key) {
+  const rows = (await fetchGroup(key)).filter(r => r.status === 'scheduled' || r.status === 'in_progress');
+  if (!rows.length) return;
+  const s = rows[0];
+  let later = [];
+  if (s.group_series) try {
+    later = await q(sb.from('sessions').select('*').eq('group_series', s.group_series).eq('status', 'scheduled').gt('scheduled_at', s.scheduled_at).order('scheduled_at'));
+  } catch (e) {}
+  const laterKeys = [...new Set(later.map(r => r.group_key))];
+  const cs = { party: 'cancelled_by_tutor', reason: '', scope: 'once', note: '' };
+  window._gc = cs;
+  const render = () => {
+    const P = CANCEL_PARTIES[cs.party];
+    document.getElementById('modal-body').innerHTML = `
+      <div class="sub small mb">👥 ${esc(s.group_name || 'مجموعة')} · ${esc(s.subject || '')} · ${fmtDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))} · ${rows.length} طلاب</div>
+      <p class="sub small">لو طالب واحد بس هو اللي مش هيحضر، استخدم "✖ اعتذار" جنب اسمه في الكارت بدل إلغاء المجموعة.</p>
+      <div class="field"><label>مين اللي لغى؟</label><div class="seg-wrap">
+        ${Object.entries(CANCEL_PARTIES).map(([k, p]) => `<button type="button" class="chip ${cs.party === k ? 'active' : ''}" onclick="_gc.party='${k}'; _gc.reason=''; _gcRender()">${p.icon} ${p.l}</button>`).join('')}
+      </div></div>
+      <div class="field"><label>السبب</label><div class="chips" style="margin:0">
+        ${P.reasons.map(r => `<button type="button" class="chip ${cs.reason === r ? 'active' : ''}" onclick="_gc.reason=${esc(JSON.stringify(r))}; _gcRender()">${r}</button>`).join('')}
+      </div></div>
+      <div class="field"><label>تفاصيل (اختياري)</label><input class="input" value="${esc(cs.note)}" oninput="_gc.note=this.value"></div>
+      ${laterKeys.length ? `<div class="field"><label>الإلغاء لحد إمتى؟</label>
+        <label class="radio"><input type="radio" name="gc-scope" ${cs.scope === 'once' ? 'checked' : ''} onchange="_gc.scope='once'"> الحصة دي بس</label>
+        <label class="radio"><input type="radio" name="gc-scope" ${cs.scope === 'permanent' ? 'checked' : ''} onchange="_gc.scope='permanent'"> كل حصص المجموعة الجاية (${laterKeys.length}) — إيقاف المجموعة</label></div>` : ''}
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-danger" style="background:var(--danger);color:#fff" id="form-submit" onclick="_saveGroupCancel()">تأكيد الإلغاء</button>
+        <button class="btn btn-ghost" onclick="closeModal()">رجوع</button></div>`;
+  };
+  window._gcRender = render;
+  openModal('إلغاء حصة المجموعة', ''); render();
+  window._saveGroupCancel = () => runSubmit(async () => {
+    if (!cs.reason) return formError('اختار سبب الإلغاء');
+    const patch = { status: cs.party, cancel_reason: cs.reason, cancel_note: cs.note || null, cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, cancel_scope: cs.scope };
+    await q(sb.from('sessions').update(patch).eq('group_key', key).in('status', ['scheduled', 'in_progress']));
+    if (cs.scope === 'permanent' && later.length) await q(sb.from('sessions').update(patch).in('id', later.map(r => r.id)));
+    await refreshAll();
+    const tu = byId(state.tutors, s.tutor_id);
+    const dates = tz => [s, ...(cs.scope === 'permanent' ? laterKeys.map(k => later.find(r => r.group_key === k)) : [])].slice(0, 8)
+      .map(r => `• ${fmtDate(r.scheduled_at, tz)} الساعة ${fmtTime(r.scheduled_at, tz)}`).join('\n');
+    const blocks = [];
+    if (cs.party !== 'cancelled_by_tutor') blocks.push(msgBlock(`للمعلم — ${tu?.name || ''}`, `${greetTutor(tu?.name)}
+تم إلغاء حصة المجموعة (${s.group_name || ''}${s.subject ? ' — ' + s.subject : ''}):
+${dates(CAIRO_TZ)}
+${cs.scope === 'permanent' ? 'ده إيقاف للمجموعة لحد إشعار آخر.' : 'هنبلغك بأي موعد تعويضي.'}
+${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }));
+    const fams = [...new Map(rows.map(r => sessionView(r).fam).filter(Boolean).map(f => [f.id, f])).values()];
+    fams.forEach(f => { const c = COUNTRIES[f.country] || COUNTRIES['مصر'];
+      blocks.push(msgBlock(f.name, `السلام عليكم ورحمة الله 🌷
+نعتذر عن إلغاء حصة المجموعة${s.subject ? ` (${s.subject})` : ''}${cs.party === 'cancelled_by_tutor' ? ' لظرف طارئ عند المعلمة' : cs.reason === 'إجازة رسمية' ? ' بمناسبة الإجازة الرسمية' : ''}:
+${dates(c.tz)}
+${cs.scope === 'permanent' ? 'وهنرتب مع حضراتكم البديل المناسب في أقرب وقت.' : 'وهنبلغكم بالموعد التعويضي قريب إن شاء الله.'}
+شكراً لتفهمكم 🙏
+${SIGN_F}`, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })); });
+    openModal('تم إلغاء المجموعة ✓ — بلّغ الأطراف', `<div class="list">${blocks.join('')}</div>`);
+  });
+}
+
+/* ----- تأجيل المجموعة كلها ----- */
+async function openGroupPostpone(key) {
+  const rows = (await fetchGroup(key)).filter(r => !isCancelled(r));
+  if (!rows.length) return;
+  const s = rows[0];
+  const d = new Date(s.scheduled_at); d.setDate(d.getDate() + 1);
+  openModal('تأجيل حصة المجموعة', formHtml([
+    [{ name: 'date', label: 'التاريخ الجديد', type: 'date', required: true, value: dateStr(d) },
+     { name: 'time', label: 'الوقت الجديد (بتوقيتك)', type: 'time', required: true, value: timeStr(d) }],
+    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s.duration_minutes || 60, step: 5, min: 5 },
+    { name: 'reason', label: 'السبب (اختياري)', placeholder: 'مثال: طلب المعلمة' },
+  ], 'تأجيل المجموعة'));
+  window._formSubmit = () => runSubmit(async () => {
+    const start = new Date(`${fv('date')}T${fv('time')}`);
+    if (isNaN(start)) return formError('التاريخ أو الوقت غير صحيح');
+    const dur = fnum('duration_minutes');
+    const conflicts = await groupConflicts(s.tutor_id, rows.map(r => r.student_id), [{ start: start.getTime(), dur }], [key]);
+    if (conflicts.length && !confirm(`⚠️ الموعد الجديد فيه تعارض:\n${conflicts.slice(0, 4).join('\n')}\n\nتكمل برضه؟`)) return;
+    const oldIso = s.scheduled_at, reason = fv('reason');
+    const row = { scheduled_at: start.toISOString(), duration_minutes: dur, status: 'scheduled', actual_minutes: null };
+    if (reason) row.notes = [s.notes, `تأجيل من ${fmtShortDate(oldIso)} ${timeStr(new Date(oldIso))}: ${reason}`].filter(Boolean).join(' | ');
+    await q(sb.from('sessions').update(row).eq('group_key', key).in('status', ['scheduled', 'in_progress', 'done']));
+    await refreshAll();
+    const tu = byId(state.tutors, s.tutor_id), nsIso = row.scheduled_at;
+    const blocks = [msgBlock(`للمعلم — ${tu?.name || ''}`, `${greetTutor(tu?.name)}
+تم تغيير موعد حصة المجموعة (${s.group_name || ''}${s.subject ? ' — ' + s.subject : ''}):
+❌ القديم: ${fmtDate(oldIso, CAIRO_TZ)} الساعة ${fmtTime(oldIso, CAIRO_TZ)}
+✅ الجديد: ${fmtDate(nsIso, CAIRO_TZ)} الساعة ${fmtTime(nsIso, CAIRO_TZ)} بتوقيت القاهرة (${durLabel(dur)})
+برجاء التأكيد 🙏
+${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id })];
+    const fams = [...new Map(rows.map(r => sessionView(r).fam).filter(Boolean).map(f => [f.id, f])).values()];
+    fams.forEach(f => { const c = COUNTRIES[f.country] || COUNTRIES['مصر'];
+      blocks.push(msgBlock(f.name, `السلام عليكم ورحمة الله 🌷
+تم تغيير موعد حصة المجموعة${s.subject ? ` (${s.subject})` : ''}:
+❌ الموعد القديم: ${fmtDate(oldIso, c.tz)} الساعة ${fmtTime(oldIso, c.tz)}
+✅ الموعد الجديد: ${fmtDate(nsIso, c.tz)} الساعة ${fmtTime(nsIso, c.tz)} بتوقيت ${c.tzName}
+هنبعت الرابط والتذكير قبل الحصة إن شاء الله.
+${SIGN_F}`, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })); });
+    openModal('تم التأجيل ✓ — بلّغ الأطراف', `<div class="list">${blocks.join('')}</div>`);
+  });
+}
+
+/* ----- تعارض مواعيد للمعلمة أو أي طالب في المجموعة ----- */
+async function groupConflicts(tutorId, studentIds, slots, excludeKeys = []) {
+  if (!slots.length) return [];
+  const starts = slots.map(x => x.start);
+  const from = new Date(Math.min(...starts) - 12 * 3600e3).toISOString(), to = new Date(Math.max(...starts) + 12 * 3600e3).toISOString();
+  const ors = [`tutor_id.eq.${tutorId}`, ...studentIds.map(id => `student_id.eq.${id}`)].join(',');
+  const others = await q(sb.from('sessions').select('*').or(ors).gte('scheduled_at', from).lte('scheduled_at', to)
+    .not('status', 'in', '(cancelled_by_student,cancelled_by_tutor,cancelled_by_academy)'));
+  const out = [], seen = new Set();
+  for (const { start, dur } of slots) for (const o of others) {
+    if (o.group_key && excludeKeys.includes(o.group_key)) continue;
+    const k = o.group_key || o.id;
+    if (seen.has(k)) continue;
+    if (start < sEnd(o) && sStart(o) < start + dur * 60e3) {
+      seen.add(k);
+      const v = sessionView(o);
+      out.push(`• ${fmtShortDate(o.scheduled_at)} ${timeStr(new Date(o.scheduled_at))}–${timeStr(new Date(sEnd(o)))}: ${o.group_key ? '👥 ' + (o.group_name || 'مجموعة') : v.st?.name || ''} مع ${v.tu?.name || ''}`);
+    }
+  }
+  return out;
+}
+
+/* ----- إنشاء / تعديل مجموعة ----- */
+async function openGroupForm(key, prefill = {}) {
+  if (!state.students.length || !state.tutors.length) return showToast('لازم تضيف طلاب ومعلم الأول', true);
+  const rows = key ? await fetchGroup(key) : [];
+  const s = rows.find(r => !isCancelled(r)) || rows[0] || null;
+  const when = s ? new Date(s.scheduled_at) : (() => { const d = parseDay(prefill.day || state.day); const n = new Date(); d.setHours(Math.min(n.getHours() + 1, 22), 0, 0, 0); return d; })();
+  // الأعضاء: {sid, price, rowId?}
+  const members = s ? rows.map(r => ({ sid: r.student_id, price: r.student_price, rowId: r.id, status: r.status }))
+    : (prefill.students || []).map(sid => { const st = byId(state.students, sid); return { sid, price: st?.group_price ?? '' }; });
+  const fields = [
+    { name: 'group_name', label: 'اسم المجموعة', required: true, value: s?.group_name ?? prefill.group_name, placeholder: 'مثال: مجموعة إنجليزي — خامسة ابتدائي' },
+    { name: 'tutor_id', label: 'المعلم', type: 'select', searchable: true, required: true, placeholder: 'اختر المعلم…', options: tutorOptions(), value: s?.tutor_id || prefill.tutor_id },
+    { name: 'subject', label: 'المادة', value: s?.subject ?? prefill.subject, placeholder: 'مثال: إنجليزي', list: [...new Set([...SUBJECT_LIST, ...state.subjects.map(x => x.subject)])] },
+    { name: 'add_student', label: 'الطلاب', type: 'select', searchable: true, placeholder: '+ أضف طالب للمجموعة…', options: studentOptions() },
+    [{ name: 'date', label: 'التاريخ', type: 'date', required: true, value: dateStr(when) },
+     { name: 'time', label: 'الوقت (بتوقيتك)', type: 'time', required: true, value: timeStr(when) }],
+    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s?.duration_minutes ?? prefill.duration ?? 60, step: 5, min: 5 },
+    { name: 'group_rate_egp', label: 'أجر الساعة للمعلم عن المجموعة كلها (EGP)', type: 'number', required: true, value: s?.group_rate_egp,
+      hint: 'مبلغ ثابت مهما كان عدد الطلاب — بيتقسم تلقائياً على اللي حضروا في الحسابات.' },
+    { name: 'meeting_link', label: 'رابط الحصة', value: s?.meeting_link, placeholder: 'meet.google.com/…' },
+    { name: 'notes', label: 'ملاحظات', type: 'textarea', value: s?.notes },
+  ];
+  if (!s) fields.push({ name: 'repeat', label: 'تكرار أسبوعي', type: 'select', value: '1',
+    options: [1, 2, 4, 8, 12, 16].map(n => ({ v: n, l: n === 1 ? 'بدون تكرار (حصة واحدة)' : `نفس الموعد لمدة ${n} أسابيع` })) });
+  let futureCount = 0;
+  if (s?.group_series) try {
+    const fut = await q(sb.from('sessions').select('group_key').eq('group_series', s.group_series).eq('status', 'scheduled').gt('scheduled_at', s.scheduled_at));
+    futureCount = new Set(fut.map(r => r.group_key)).size;
+  } catch (e) {}
+  const extra = futureCount ? `<label class="radio mb"><input type="checkbox" id="f_apply_future" checked> طبّق التعديل كمان على حصص المجموعة الجاية (${futureCount})</label>` : '';
+  openModal(s ? '✏️ تعديل المجموعة' : '👥 حصة مجموعة جديدة', formHtml(fields, s ? 'حفظ التعديل' : 'إضافة المجموعة', extra));
+  const $ = n => document.getElementById('f_' + n);
+  document.getElementById('wrap_add_student').insertAdjacentHTML('beforeend', '<div id="grp-members" class="gm-list mt"></div>');
+  document.getElementById('wrap_duration_minutes').insertAdjacentHTML('beforeend',
+    `<div class="chips" id="dur-chips" style="margin:6px 0 0">${DUR_CHOICES.map(m => `<button type="button" class="chip" data-m="${m}" onclick="_setDur(${m})">${durLabel(m)}</button>`).join('')}</div>`);
+  document.getElementById('wrap_group_rate_egp').insertAdjacentHTML('afterend', '<div id="sess-total" class="card item" style="background:var(--bg);margin-bottom:12px"></div>');
+  const durIn = $('duration_minutes');
+  const totals = () => {
+    const m = Number(durIn.value) || 60, rate = Number($('group_rate_egp').value) || 0;
+    document.querySelectorAll('#dur-chips .chip').forEach(x => x.classList.toggle('active', Number(x.dataset.m) === m));
+    const rev = members.reduce((a, x) => { const f = byId(state.families, byId(state.students, x.sid)?.family_id); return a + toEGP(Number(x.price || 0) * m / 60, f?.currency); }, 0);
+    const tut = rate * m / 60;
+    document.getElementById('sess-total').innerHTML = `<div class="meta" style="margin:0">
+      <span>الحصة (${durLabel(m)}) لو الكل حضر:</span><span>الأسر <b>≈ ${fmt(rev)} EGP</b></span>
+      <span>المعلم <b>${money(tut, 'EGP')}</b></span><span>الهامش <b class="${rev - tut >= 0 ? 'pos' : 'neg'}">${fmt(rev - tut)} EGP</b></span></div>
+      ${members.length ? `<div class="sub small mt">نصيب كل طالب من أجر المعلم: ${fmt(tut / members.length, 2)} ج</div>` : ''}`;
+  };
+  const renderMembers = () => {
+    document.getElementById('grp-members').innerHTML = members.length ? members.map((x, i) => {
+      const st = byId(state.students, x.sid), f = st ? byId(state.families, st.family_id) : null;
+      return `<div class="gm-row gm-edit"><span><b>${esc(st?.name || '')}</b> <span class="sub small">${esc(f?.name || '')} · ${esc(st?.grade_level || '')}</span></span>
+        <span class="gm-price"><input class="input" type="number" min="0" step="0.5" inputmode="decimal" value="${esc(x.price ?? '')}" placeholder="سعر الساعة" oninput="_gm[${i}].price=this.value; _gmTot()"><span class="sub small">${f?.currency || ''}/س</span></span>
+        <button type="button" class="btn btn-ghost icon" title="شيله من المجموعة" onclick="_gmDel(${i})">✕</button></div>`;
+    }).join('') : '<div class="sub small">لسه مفيش طلاب — اختار من القائمة فوق.</div>';
+    totals();
+  };
+  window._gm = members; window._gmTot = totals;
+  window._gmDel = i => { members.splice(i, 1); renderMembers(); };
+  window._setDur = m => { durIn.value = m; totals(); };
+  $('add_student').addEventListener('change', () => {
+    const sid = $('add_student').value; if (!sid) return;
+    if (!members.some(x => x.sid === sid)) {
+      const st = byId(state.students, sid);
+      members.push({ sid, price: st?.group_price ?? '' });
+    } else showToast('الطالب ده موجود في المجموعة بالفعل');
+    $('add_student').value = '';
+    renderMembers();
+  });
+  $('tutor_id').addEventListener('change', () => { if (!$('subject').value) { const t = state.subjects.filter(x => x.tutor_id === $('tutor_id').value); if (t.length === 1) $('subject').value = t[0].subject; } });
+  ['input', 'change'].forEach(ev => [durIn, $('group_rate_egp')].forEach(el => el.addEventListener(ev, totals)));
+  renderMembers();
+
+  window._formSubmit = () => runSubmit(async () => {
+    if (members.length < 2) return formError('المجموعة لازم يكون فيها طالبين على الأقل');
+    const noPrice = members.filter(x => x.price === '' || x.price == null || isNaN(Number(x.price)));
+    if (noPrice.length) return formError(`اكتب سعر الساعة لـ: ${noPrice.map(x => byId(state.students, x.sid)?.name).join('، ')}`);
+    const start = new Date(`${fv('date')}T${fv('time')}`);
+    if (isNaN(start)) return formError('التاريخ أو الوقت غير صحيح');
+    const dur = fnum('duration_minutes');
+    if (!(dur >= 5 && dur <= 720)) return formError('المدة لازم تكون بين 5 دقايق و12 ساعة');
+    const rate = fnum('group_rate_egp');
+    if (rate == null || rate < 0) return formError('اكتب أجر الساعة للمعلم عن المجموعة');
+    const common = { kind: 'group', group_name: fv('group_name'), tutor_id: fv('tutor_id'), subject: fv('subject') || null, duration_minutes: dur,
+      meeting_link: fv('meeting_link') || null, notes: fv('notes') || null, group_rate_egp: rate };
+    const memberRow = x => { const st = byId(state.students, x.sid), f = byId(state.families, st.family_id);
+      return { student_id: x.sid, student_price: Number(x.price), student_currency: f.currency, tutor_cost_egp: Math.round(rate / members.length * 100) / 100 }; };
+    const sids = members.map(x => x.sid);
+
+    if (!s) {
+      const n = Number(fv('repeat') || 1), series = uuid();
+      const slots = Array.from({ length: n }, (_, i) => ({ start: start.getTime() + i * 7 * 864e5, dur }));
+      const conflicts = await groupConflicts(common.tutor_id, sids, slots);
+      if (conflicts.length && !confirm(`⚠️ فيه تعارض في المواعيد (المعلم أو أحد الطلاب):\n${conflicts.slice(0, 5).join('\n')}${conflicts.length > 5 ? `\n… و${conflicts.length - 5} كمان` : ''}\n\nتكمل الحفظ برضه؟`)) return;
+      const ins = [];
+      slots.forEach(sl => { const gk = uuid(); members.forEach(x => ins.push({ ...common, ...memberRow(x), group_key: gk, group_series: series, scheduled_at: new Date(sl.start).toISOString() })); });
+      await q(sb.from('sessions').insert(ins));
+      const newPrices = members.filter(x => byId(state.students, x.sid)?.group_price == null);
+      for (const x of newPrices) await sb.from('students').update({ group_price: Number(x.price) }).eq('id', x.sid);
+      showToast(n > 1 ? `تمت إضافة ${n} حصص للمجموعة ✓` : 'تمت إضافة حصة المجموعة ✓');
+      state.day = fv('date');
+      closeModal(); await refreshAll(); return;
+    }
+
+    // تعديل: الحصة دي (+ الجاية لو متعلّم)
+    const delta = start.getTime() - new Date(s.scheduled_at).getTime();
+    const applyFuture = document.getElementById('f_apply_future')?.checked;
+    let targets = [{ key, rows, at: start.getTime() }];
+    if (applyFuture) {
+      const fut = await q(sb.from('sessions').select('*').eq('group_series', s.group_series).gt('scheduled_at', s.scheduled_at));
+      const byKey = {}; fut.forEach(r => (byKey[r.group_key] ||= []).push(r));
+      Object.entries(byKey).filter(([, rs]) => rs.some(r => r.status === 'scheduled')).forEach(([k, rs]) => targets.push({ key: k, rows: rs, at: new Date(rs[0].scheduled_at).getTime() + delta }));
+    }
+    const conflicts = await groupConflicts(common.tutor_id, sids, targets.map(t => ({ start: t.at, dur })), targets.map(t => t.key));
+    if (conflicts.length && !confirm(`⚠️ فيه تعارض في المواعيد:\n${conflicts.slice(0, 5).join('\n')}\n\nتكمل الحفظ برضه؟`)) return;
+    let skipped = 0;
+    for (const t of targets) {
+      await q(sb.from('sessions').update({ ...common, scheduled_at: new Date(t.at).toISOString() }).eq('group_key', t.key));
+      for (const x of members) {
+        const ex = t.rows.find(r => r.student_id === x.sid);
+        if (ex) { if (Number(ex.student_price) !== Number(x.price)) await q(sb.from('sessions').update({ student_price: Number(x.price) }).eq('id', ex.id)); }
+        else await q(sb.from('sessions').insert({ ...common, ...memberRow(x), group_key: t.key, group_series: s.group_series, scheduled_at: new Date(t.at).toISOString() }));
+      }
+      const gone = t.rows.filter(r => !sids.includes(r.student_id));
+      const del = gone.filter(r => r.status === 'scheduled'); skipped += gone.length - del.length;
+      if (del.length) await q(sb.from('sessions').delete().in('id', del.map(r => r.id)));
+    }
+    closeModal();
+    showToast(`تم حفظ التعديل ✓${targets.length > 1 ? ` (${targets.length} حصص)` : ''}${skipped ? ` — ${skipped} طالب ماتشالش لأن حصته متسجلة` : ''}`);
+    await refreshAll();
+  });
+}
+
+/* ============================================================
    قائمة إجراءات الحصة (⋯)
    ============================================================ */
 function openSessionActions(id) {
   const s = findSession(id); if (!s) return;
+  if (s.group_key) return openGroupActions(s.group_key);
   const v = sessionView(s), open = s.status === 'scheduled' || s.status === 'in_progress', cancelled = s.status.startsWith('cancelled');
   const I = jsq(id);
   const a = (icon, label, fn, cls = '') => `<button class="wk-row ${cls}" onclick="closeModal(); ${fn}"><span>${icon}</span><span><b>${label}</b></span><span></span></button>`;

@@ -262,3 +262,19 @@ td{padding:10px 8px;border-bottom:1px solid var(--border);vertical-align:middle;
 .danger-row b{color:var(--danger);}
 #view-admin .list{margin-top:4px;}
 @media (max-width:700px){ #reports-content .scrollx table{min-width:560px;} }
+
+/* ===== حصص المجموعات ===== */
+.b-group{background:#fef3c7;color:#b45309;font-size:11px;vertical-align:middle;}
+.group-card{border-inline-start:4px solid #f59e0b;}
+.gm-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}
+.gm-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg);min-width:0;}
+.gm-row > a, .gm-row > b{flex:0 0 auto;}
+.gm-row > .sub{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gm-act{margin-inline-start:auto;display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.gm-act .btn.sm{padding:4px 8px;}
+.field label.gm-check,.gm-check{display:flex;cursor:pointer;margin:0;font-weight:400;font-size:14.5px;color:var(--text);}
+.gm-check input{width:18px;height:18px;flex:0 0 auto;}
+.gm-edit{display:grid;grid-template-columns:1fr auto auto;}
+.gm-edit > span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gm-price{display:flex;align-items:center;gap:4px;}
+.gm-price .input{width:78px;padding:6px 8px;}

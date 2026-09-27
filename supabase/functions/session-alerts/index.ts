@@ -85,15 +85,19 @@ Deno.serve(async (req) => {
 
   const now = Date.now();
   const { data: sessions, error } = await admin.from('sessions')
-    .select('id, scheduled_at, duration_minutes, status, kind, subject, student_id, tutor_id, meeting_link')
+    .select('id, scheduled_at, duration_minutes, status, kind, subject, student_id, tutor_id, meeting_link, group_key, group_name')
     .in('status', ['scheduled', 'in_progress'])
     .gte('scheduled_at', new Date(now - 13 * 3600e3).toISOString())
     .lte('scheduled_at', new Date(now + 15 * 60e3 + 30e3).toISOString());
   if (error) return json({ error: error.message }, 500);
 
   // the dedupe key includes the scheduled time, so a rescheduled session is announced again
+  // a group occurrence has one row per student → announce it once, via its first row
+  const members: Record<string, any[]> = {};
+  for (const s of sessions || []) if (s.group_key) (members[s.group_key] ||= []).push(s);
+  const reps = (sessions || []).filter((s: any) => !s.group_key || members[s.group_key].map((x: any) => x.id).sort()[0] === s.id);
   const due: { session_id: string; kind: string }[] = [];
-  for (const s of sessions || []) {
+  for (const s of reps) {
     const t = new Date(s.scheduled_at).getTime();
     const end = t + (s.duration_minutes || 60) * 60e3;
     if (s.status === 'scheduled' && now >= t - 15 * 60e3 - 30e3 && now < t - 60e3) due.push({ session_id: s.id, kind: `before15@${t}` });
@@ -109,7 +113,7 @@ Deno.serve(async (req) => {
   if (!claimed?.length) return json({ checked: sessions!.length, sent: 0, note: 'already sent' });
 
   const byId = Object.fromEntries(sessions!.map((s: any) => [s.id, s]));
-  const stuIds = [...new Set(claimed.map((c: any) => byId[c.session_id].student_id))];
+  const stuIds = [...new Set(claimed.flatMap((c: any) => { const s = byId[c.session_id]; return s.group_key ? members[s.group_key].map((x: any) => x.student_id) : [s.student_id]; }))];
   const tutIds = [...new Set(claimed.map((c: any) => byId[c.session_id].tutor_id))];
   const [{ data: students }, { data: tutors }, { data: supervisors }] = await Promise.all([
     admin.from('students').select('id,name,family_id,families(name)').in('id', stuIds),
@@ -127,9 +131,11 @@ Deno.serve(async (req) => {
     const st: any = students?.find((x: any) => x.id === s.student_id);
     const tu: any = tutors?.find((x: any) => x.id === s.tutor_id);
     const mins = Math.max(1, Math.round((new Date(s.scheduled_at).getTime() - now) / 60e3));
-    const who = `${st?.name || 'طالب'}${st?.families?.name ? ' (' + st.families.name + ')' : ''}`;
+    const who = s.group_key
+      ? `👥 ${s.group_name || 'مجموعة'}: ${members[s.group_key].map((m: any) => students?.find((x: any) => x.id === m.student_id)?.name || '').filter(Boolean).join('، ')}`
+      : `${st?.name || 'طالب'}${st?.families?.name ? ' (' + st.families.name + ')' : ''}`;
     const what = `${s.subject ? s.subject + ' مع ' : 'مع '}${tu?.name || 'المعلم'}`;
-    const rev = s.kind === 'revision' ? ' (مراجعة)' : '';
+    const rev = s.kind === 'revision' ? ' (مراجعة)' : s.kind === 'group' ? ' (مجموعة)' : '';
     const endIso = new Date(new Date(s.scheduled_at).getTime() + (s.duration_minutes || 60) * 60e3).toISOString();
     const payload = c.kind.startsWith('before15')
       ? { title: `⏰ حصة${rev} بعد ${mins} دقيقة — ${cairoTime(s.scheduled_at)}`, body: `${who}\n${what}\nابعت التذكير للأسرة والمعلم.` }
