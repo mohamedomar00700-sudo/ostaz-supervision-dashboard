@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="أستاذ أونلاين">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=12">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -95,7 +95,8 @@
 
     <!-- الجدول اليومي -->
     <section id="view-daily">
-      <div class="toolbar">
+      <div id="attention" class="attention hidden"></div>
+      <div class="toolbar toolbar-top">
         <div class="seg" id="mode-chips">
           <button class="chip active" data-mode="day" onclick="setDayMode('day')">يوم</button>
           <button class="chip" data-mode="week" onclick="setDayMode('week')">أسبوع</button>
@@ -103,14 +104,15 @@
         <button class="btn btn-brand" onclick="openSessionForm()">+ حصة جديدة</button>
       </div>
       <div class="daynav mb">
-        <button class="btn btn-ghost" id="btn-prev" onclick="shiftDay(-1)">→ السابق</button>
+        <button class="btn btn-ghost icon" id="btn-prev" title="اليوم السابق" onclick="shiftDay(-1)">→</button>
         <input type="date" id="day-input" class="input" onchange="setDay(this.value)">
-        <button class="btn btn-ghost" id="btn-next" onclick="shiftDay(1)">التالي ←</button>
+        <button class="btn btn-ghost icon" id="btn-next" title="اليوم التالي" onclick="shiftDay(1)">←</button>
         <button class="btn btn-ghost" onclick="setDay(todayStr())">النهارده</button>
       </div>
       <div id="day-panel">
         <div class="stats" id="day-stats"></div>
-        <div class="chips" id="filters"></div>
+        <div class="toolbar" style="margin-bottom:6px"><div class="chips" id="filters" style="margin:0"></div>
+          <button class="btn btn-ghost sm" onclick="openTutorSchedules()">📋 جداول المعلمين</button></div>
         <div id="daily-list" class="list"></div>
       </div>
       <div id="week-panel" class="hidden"></div>
@@ -157,6 +159,8 @@
         </div>
         <div class="row-gap">
           <button class="btn btn-brand" onclick="openPaymentForm()">+ تسجيل دفعة</button>
+          <button class="btn btn-ghost" onclick="exportSessionsCSV()">⬇️ الحصص Excel</button>
+          <button class="btn btn-ghost" onclick="exportPaymentsCSV()">⬇️ المدفوعات Excel</button>
         </div>
       </div>
       <div id="fin-content"></div>
@@ -184,6 +188,6 @@
 <div class="toast" id="toast"></div>
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

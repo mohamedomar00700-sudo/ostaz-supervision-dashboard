@@ -241,7 +241,7 @@ async function loadUpcomingForAlerts() {
 async function refreshAll() {
   setLoading(true);
   try {
-    await Promise.all([loadMasters(), loadDay(), loadRelay(), state.dayMode === 'week' ? loadWeek() : null]);
+    await Promise.all([loadMasters(), loadDay(), loadRelay(), loadAttention(), state.dayMode === 'week' ? loadWeek() : null]);
     if (currentTab === 'fin') await loadFinance(true);
     if (currentTab === 'admin') await loadSupervisorsList();
     renderAll();
@@ -266,7 +266,7 @@ function subscribeRealtime() {
 }
 
 function renderAll() {
-  renderDaily(); if (state.dayMode === 'week') renderWeek(); renderRelay(); renderFamilies(); renderTutors();
+  renderAttention(); renderDaily(); if (state.dayMode === 'week') renderWeek(); renderRelay(); renderFamilies(); renderTutors();
   if (currentTab === 'fin' && state.fin) renderFinance();
 }
 
@@ -331,7 +331,7 @@ const DAY_FILTERS = [
   { k: 'done', l: 'تمت', f: s => s.status === 'done' },
   { k: 'cancel', l: 'ملغاة', f: s => s.status.startsWith('cancelled') },
 ];
-function allLoadedSessions() { return [...state.daySessions, ...(state.weekSessions || [])]; }
+function allLoadedSessions() { return [...state.daySessions, ...(state.weekSessions || []), ...(state.unrecorded || []), ...(state.nextSession ? [state.nextSession] : [])]; }
 function findSession(id) { return allLoadedSessions().find(x => x.id === id) || (state.alertSessions || []).find(x => x.id === id); }
 
 function setDay(v) {
@@ -346,8 +346,8 @@ function setDayMode(m) {
   document.querySelectorAll('#mode-chips .chip').forEach(c => c.classList.toggle('active', c.dataset.mode === m));
   document.getElementById('day-panel').classList.toggle('hidden', m !== 'day');
   document.getElementById('week-panel').classList.toggle('hidden', m !== 'week');
-  document.getElementById('btn-prev').textContent = m === 'week' ? '→ الأسبوع السابق' : '→ السابق';
-  document.getElementById('btn-next').textContent = m === 'week' ? 'الأسبوع التالي ←' : 'التالي ←';
+  document.getElementById('btn-prev').title = m === 'week' ? 'الأسبوع السابق' : 'اليوم السابق';
+  document.getElementById('btn-next').title = m === 'week' ? 'الأسبوع التالي' : 'اليوم التالي';
   setDay(state.day);
 }
 
@@ -428,6 +428,7 @@ function sessionCard(s) {
         ${s.status === 'scheduled' && !confirmNeeded ? `<button class="btn btn-ghost sm" onclick="setStatus(${id},'in_progress')">▶ بدأت</button>` : ''}
         ${open ? `<button class="btn btn-ok sm" onclick="openDone(${id})">✓ تمت…</button>` : ''}
         ${s.status === 'done' ? `<button class="btn btn-ghost sm" onclick="openDone(${id})">⏱ تعديل المدة</button>` : ''}
+        ${open ? `<button class="btn btn-ghost sm" onclick="openPostpone(${id})">🔁 تأجيل</button>` : ''}
         ${open ? `<button class="btn btn-ghost sm" onclick="openCancel(${id})">إلغاء…</button>` : ''}
         ${s.status === 'done' || cancelled ? `<button class="btn btn-ghost sm" onclick="setStatus(${id},'scheduled')">↺ إرجاع</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openSessionForm(${id})">تعديل</button>
@@ -718,6 +719,7 @@ function renderWeek() {
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(from); d.setDate(d.getDate() + i); return d; });
   const showAll = state.covShowAll;
   document.getElementById('week-panel').innerHTML = `
+    <div class="row-gap mb"><button class="btn btn-ghost sm" onclick="openFamilySchedules()">📋 جداول الأسر للأسبوع (رسائل جاهزة)</button></div>
     <div class="stats">
       <div class="card stat"><div class="v">${active.length}</div><div class="l">حصص الأسبوع</div></div>
       <div class="card stat"><div class="v num">${fmt(active.reduce((a, s) => a + sMins(s), 0) / 60, 1)}</div><div class="l">ساعة</div></div>
@@ -869,6 +871,7 @@ function renderFamilies() {
       </div>
       <div class="actions">
         <button class="btn btn-brand sm" onclick="openPaymentForm(${fid})">+ دفعة</button>
+        ${b.balance < 0 ? `<button class="btn btn-wa sm" onclick="openPaymentReminder(${fid})">📲 مطالبة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openFamilyStatement(${fid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openFamilyForm(${fid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('أسرة ' + f.name + ' وكل طلابها')}, () => q(sb.from('families').delete().eq('id', ${fid})))">حذف</button>` : ''}
@@ -1058,7 +1061,8 @@ function renderTutors() {
           return `<button class="stu" onclick="openStudentForm(${jsq(st?.family_id)}, ${jsq(p.student_id)})" title="${esc(fam?.name || '')}">${esc(st?.name || '')} · ${esc(p.subject)}${p.weekly_sessions ? ' ×' + p.weekly_sessions : ''}</button>`; }).join('')}</div>`; })()}
       ${t.notes ? `<div class="sub small mt">📝 ${esc(t.notes)}</div>` : ''}
       <div class="actions">
-        ${b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${tid})">صرف مستحقات</button>` : ''}
+        ${b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${tid})">صرف مستحقات</button>
+        <button class="btn btn-wa sm" onclick="openTutorStatementMessage(${tid})">📲 كشف للمعلمة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openTutorStatement(${tid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openTutorForm(${tid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('المعلم ' + t.name)}, () => q(sb.from('tutors').delete().eq('id', ${tid})))">حذف</button>` : ''}
@@ -1126,7 +1130,8 @@ async function openTutorStatement(tutorId) {
       <div class="kpis mb"><div class="card kpi"><div class="l">المستحق الآن</div><div class="v num">${money(run, 'EGP')}</div></div></div>
       <div class="scrollx"><table><thead><tr><th>التاريخ</th><th>البيان</th><th>EGP</th><th>الرصيد</th><th></th></tr></thead>
       <tbody>${body || '<tr><td colspan="5" class="empty">لا توجد حركات بعد</td></tr>'}</tbody></table></div>
-      ${run > 0 ? `<div class="modal-foot"><button class="btn btn-brand" onclick="openPayoutForm(${jsq(tutorId)})">صرف المستحقات</button></div>` : ''}`);
+      ${run > 0 ? `<div class="modal-foot"><button class="btn btn-brand" onclick="openPayoutForm(${jsq(tutorId)})">صرف المستحقات</button>
+        <button class="btn btn-wa" onclick="openTutorStatementMessage(${jsq(tutorId)})">📲 إرسال الكشف للمعلمة</button></div>` : ''}`);
   } catch (e) { showToast(dbError(e), true); }
 }
 function openPayoutForm(tutorId) {
@@ -1237,6 +1242,7 @@ function renderFinance() {
     <div class="card scrollx"><table><thead><tr><th>الأسرة</th><th>المستحق</th><th></th></tr></thead><tbody>
       ${owing.map(x => `<tr><td>${esc(x.f.name)}</td><td class="num neg">${money(-x.b.balance, x.f.currency)}</td>
         <td class="row-gap"><button class="btn btn-brand sm" onclick="openPaymentForm(${jsq(x.f.id)})">+ دفعة</button>
+        <button class="btn btn-wa sm" onclick="openPaymentReminder(${jsq(x.f.id)})">📲 مطالبة</button>
         <button class="btn btn-ghost sm" onclick="openFamilyStatement(${jsq(x.f.id)})">كشف</button></td></tr>`).join('')
         || '<tr><td colspan="3" class="empty">كل الأسر رصيدها سليم 👌</td></tr>'}
     </tbody></table></div>
@@ -1420,6 +1426,251 @@ function checkAlerts() {
 }
 
 /* ============================================================
+   شريط "محتاج انتباهك" أعلى الجدول
+   ============================================================ */
+async function loadAttention() {
+  const now = new Date();
+  state.unrecorded = await q(sb.from('sessions').select('*').in('status', ['scheduled', 'in_progress'])
+    .gte('scheduled_at', new Date(now.getTime() - 21 * 864e5).toISOString())
+    .lte('scheduled_at', now.toISOString()).order('scheduled_at'));
+  state.unrecorded = state.unrecorded.filter(needsConfirm);
+  const todayEnd = parseDay(todayStr()); todayEnd.setDate(todayEnd.getDate() + 1);
+  const nxt = await q(sb.from('sessions').select('*').eq('status', 'scheduled')
+    .gte('scheduled_at', now.toISOString()).lt('scheduled_at', todayEnd.toISOString()).order('scheduled_at').limit(1));
+  state.nextSession = nxt[0] || null;
+}
+function renderAttention() {
+  const el = document.getElementById('attention'); if (!el) return;
+  const items = [];
+  const ns = state.nextSession;
+  if (ns) {
+    const v = sessionView(ns), mins = Math.round((sStart(ns) - Date.now()) / 60e3);
+    items.push(`<button class="att att-next" onclick="setDayMode('day'); setDay(todayStr())">⏰ الجاية: <b>${esc(v.st?.name || '')}</b> ${esc(ns.subject || '')} — ${timeStr(new Date(ns.scheduled_at))} <span class="sub">(${mins < 60 ? `بعد ${mins} د` : `بعد ${durLabel(Math.round(mins / 5) * 5)}`})</span></button>`);
+  }
+  const un = state.unrecorded || [];
+  if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${un.length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
+  const relay = state.relay.filter(r => r.status !== 'done').length;
+  if (relay) items.push(`<button class="att" onclick="switchTab('relay')">🔁 <b>${relay}</b> مهمة ترحيل مفتوحة</button>`);
+  const owing = state.families.filter(f => famBalance(f).balance < 0).length;
+  if (owing) items.push(`<button class="att" onclick="switchTab('fin')">💸 <b>${owing}</b> أسرة عليها مستحقات</button>`);
+  const noRate = state.tutors.filter(t => t.default_rate_egp == null).length;
+  if (noRate) items.push(`<button class="att" onclick="switchTab('tutors')">🧑‍🏫 <b>${noRate}</b> معلم بدون أجر ساعة</button>`);
+  const noPrice = state.students.filter(s => s.default_price == null).length;
+  if (noPrice) items.push(`<button class="att" onclick="switchTab('families')">🏷️ <b>${noPrice}</b> طالب بدون سعر ساعة</button>`);
+  el.innerHTML = items.join('');
+  el.classList.toggle('hidden', !items.length);
+}
+function openUnrecorded() {
+  const un = state.unrecorded || [];
+  openModal(`حصص محتاجة تسجيل (${un.length})`, `
+    <p class="sub">دي حصص معادها عدّى ولسه متسجلتش "تمت" أو "ملغاة". الحصة مش بتتحسب على الأسرة ولا للمعلم غير لما تتسجل.</p>
+    <div class="list">${un.map(s => { const v = sessionView(s); return `<div class="card item">
+      <div class="item-head"><div><b>${esc(v.st?.name || '')}</b> <span class="sub small">${esc(v.fam?.name || '')}</span>
+        <div class="small">${fmtShortDate(s.scheduled_at)} · ${timeStr(new Date(s.scheduled_at))} · ${durLabel(sMins(s))} · ${esc(s.subject || '')} · ${esc(v.tu?.name || '')}</div></div></div>
+      <div class="actions"><button class="btn btn-ok sm" onclick="openDone(${jsq(s.id)})">✓ تمت…</button>
+        <button class="btn btn-ghost sm" onclick="openCancel(${jsq(s.id)})">اتلغت…</button></div></div>`; }).join('') || '<div class="empty">مفيش 👌</div>'}</div>`);
+}
+
+/* ============================================================
+   رسائل جاهزة (نسخ + فتح الجروب) — بدون كشف أرقام أي طرف للتاني
+   ============================================================ */
+function msgActionsHtml(text, { group, phone, country, editFamily, editTutor } = {}) {
+  const key = 'm' + Math.random().toString(36).slice(2, 8);
+  (window._msgs ||= {})[key] = text;
+  const num = phone ? waNumber(phone, country || 'مصر') : '';
+  return `<div class="modal-foot" style="flex-wrap:wrap;position:static;padding:8px 0 0">
+    ${group ? `<button class="btn btn-wa sm" onclick="copyAndOpen(window._msgs[${jsq(key)}], ${jsq(group)})">نسخ وفتح الجروب</button>` : ''}
+    ${num ? `<a class="btn ${group ? 'btn-ghost' : 'btn-wa'} sm" href="https://wa.me/${num}?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">رقم خاص</a>` : ''}
+    <button class="btn btn-ghost sm" onclick="copyText(window._msgs[${jsq(key)}],'تم نسخ الرسالة ✓')">نسخ النص</button>
+    ${!group && !num ? `<span class="sub small">مفيش جروب ولا رقم — <a href="javascript:void(0)" onclick="${editFamily ? `openFamilyForm(${jsq(editFamily)})` : `openTutorForm(${jsq(editTutor)})`}">أضفهم</a></span>` : ''}
+  </div>`;
+}
+function msgBlock(title, text, opts) {
+  return `<details class="card item msg-item"><summary><b>${esc(title)}</b></summary>
+    <div class="msg-preview mt">${esc(text)}</div>${msgActionsHtml(text, opts)}</details>`;
+}
+const greetTutor = n => `أهلاً ${/^(أ\.|أ\/|أستاذ|م\.|د\.)/.test(n || '') ? n : 'أ/ ' + (n || '')} 👋`;
+const SIGN_T = 'فريق الإشراف – أستاذ أونلاين';
+const SIGN_F = 'فريق الإشراف – أكاديمية أستاذ أونلاين';
+
+// جدول اليوم لكل معلمة
+function tutorDayMessage(tu, list, dayIso) {
+  const lines = list.map(s => { const v = sessionView(s);
+    return `• ${fmtTime(s.scheduled_at, CAIRO_TZ)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), CAIRO_TZ)}: ${v.st?.name || ''} (${v.st?.grade_level || ''})${s.subject ? ' — ' + s.subject : ''}${s.kind === 'revision' ? ' [مراجعة]' : ''}${s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : ''}`; }).join('\n');
+  return `${greetTutor(tu?.name)}
+جدول حصصك ${relDayLabel(dayIso, CAIRO_TZ)} (${fmtDate(dayIso, CAIRO_TZ)}) بتوقيت القاهرة:
+${lines}
+
+لو فيه أي تعارض أو الطالب طلب وقت زيادة بلّغينا هنا.
+${SIGN_T}`;
+}
+function openTutorSchedules() {
+  const list = state.daySessions.filter(s => s.status === 'scheduled' || s.status === 'in_progress');
+  const byTutor = {};
+  list.forEach(s => (byTutor[s.tutor_id] ||= []).push(s));
+  const dayIso = parseDay(state.day).toISOString();
+  const blocks = Object.entries(byTutor).map(([tid, ss]) => {
+    const tu = byId(state.tutors, tid);
+    return msgBlock(`${tu?.name || ''} — ${ss.length} حصة`, tutorDayMessage(tu, ss, ss[0].scheduled_at || dayIso),
+      { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tid });
+  });
+  openModal(`جداول المعلمين — ${fmtDate(dayIso)}`, blocks.length
+    ? `<p class="sub small">رسالة واحدة لكل معلمة فيها كل حصصها في اليوم ده. افتح أي واحدة وابعتها لجروبها.</p><div class="list">${blocks.join('')}</div>`
+    : '<div class="empty">مفيش حصص مجدولة في اليوم ده.</div>');
+}
+
+// جدول الأسبوع لكل أسرة (بتوقيت بلدها)
+function familyWeekMessage(fam, list) {
+  const c = COUNTRIES[fam.country] || COUNTRIES['مصر'];
+  const byDay = {};
+  list.forEach(s => { const k = new Intl.DateTimeFormat('en-CA', { timeZone: c.tz }).format(new Date(s.scheduled_at)); (byDay[k] ||= []).push(s); });
+  const body = Object.keys(byDay).sort().map(k => {
+    const ss = byDay[k];
+    return `*${fmtDate(ss[0].scheduled_at, c.tz)}*\n` + ss.map(s => { const v = sessionView(s);
+      return `• ${fmtTime(s.scheduled_at, c.tz)} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''} (${durLabel(s.duration_minutes || 60)})${s.kind === 'revision' ? ' — مراجعة' : ''}`; }).join('\n');
+  }).join('\n\n');
+  return `السلام عليكم ورحمة الله 🌷
+جدول حصص الأسبوع بتوقيت ${c.tzName}:
+
+${body}
+
+لأي تعديل في المواعيد تواصلوا معنا هنا.
+${SIGN_F}`;
+}
+function openFamilySchedules() {
+  const ws = (state.weekSessions || []).filter(s => !s.status.startsWith('cancelled') && sStart(s) >= Date.now() - 3600e3);
+  const byFam = {};
+  ws.forEach(s => { const v = sessionView(s); if (v.fam) (byFam[v.fam.id] ||= []).push(s); });
+  const blocks = Object.entries(byFam).map(([fid, ss]) => {
+    const fam = byId(state.families, fid);
+    return msgBlock(`${fam.name} — ${ss.length} حصة`, familyWeekMessage(fam, ss),
+      { group: fam.whatsapp_group, phone: fam.whatsapp, country: fam.country, editFamily: fid });
+  });
+  openModal('جداول الأسر — الحصص الجاية في الأسبوع ده', blocks.length
+    ? `<p class="sub small">رسالة لكل أسرة فيها حصصها الجاية الأسبوع ده، بتوقيت بلدها. (من غير أسماء أو أرقام المعلمين.)</p><div class="list">${blocks.join('')}</div>`
+    : '<div class="empty">مفيش حصص جاية في الأسبوع ده.</div>');
+}
+
+// مطالبة بالسداد
+async function openPaymentReminder(familyId) {
+  const f = byId(state.families, familyId);
+  const b = famBalance(f);
+  let last = null;
+  try { const tx = await q(sb.from('family_transactions').select('*').eq('family_id', familyId).eq('type', 'payment').order('created_at', { ascending: false }).limit(1)); last = tx[0]; } catch (e) {}
+  const text = `السلام عليكم ورحمة الله 🌷
+نحيطكم علماً إن رصيد حصص الأسرة حالياً عليه مستحقات بقيمة *${fmt(-b.balance, 2)} ${f.currency}*.
+عدد الحصص اللي تمت حتى الآن: ${b.count}${last ? `\nآخر دفعة: ${fmt(last.amount, 2)} ${last.currency} بتاريخ ${fmtShortDate(last.created_at)}` : ''}
+
+برجاء التكرم بالسداد لضمان استمرار الحصص بدون انقطاع، ولو حابين كشف حساب تفصيلي نبعتهولكم فوراً.
+شكراً لتعاونكم 🙏
+${SIGN_F}`;
+  openModal(`مطالبة — ${f.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}`);
+}
+
+// كشف مستحقات للمعلمة (من بعد آخر صرف)
+async function openTutorStatementMessage(tutorId) {
+  const t = byId(state.tutors, tutorId);
+  try {
+    const po = await q(sb.from('tutor_payouts').select('*').eq('tutor_id', tutorId).eq('paid', true).order('paid_at', { ascending: false }).limit(1));
+    const since = po[0]?.paid_at || po[0]?.created_at || null;
+    let qq = sb.from('sessions').select('*').eq('tutor_id', tutorId).eq('status', 'done').order('scheduled_at');
+    if (since) qq = qq.gt('scheduled_at', since);
+    const ss = await q(qq);
+    const b = tutBalance(t);
+    const lines = ss.map(s => { const v = sessionView(s); return `• ${fmtShortDate(s.scheduled_at)} — ${v.st?.name || ''}${s.subject ? ' (' + s.subject + ')' : ''} — ${durLabel(sMins(s))} = ${fmt(charges(s).tut, 2)} ج`; }).join('\n');
+    const totalMins = ss.reduce((a, s) => a + sMins(s), 0);
+    const text = `${greetTutor(t.name)}
+كشف حصصك${since ? ` من بعد آخر تحويل (${fmtShortDate(since)})` : ''}:
+${lines || '— لا توجد حصص مسجلة —'}
+
+إجمالي الوقت: ${durLabel(totalMins)}
+*المستحق: ${fmt(b.due, 2)} جنيه*${t.default_rate_egp != null ? ` (أجر الساعة ${fmt(t.default_rate_egp)} ج)` : ''}
+
+لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل.
+${SIGN_T}`;
+    openModal(`كشف للمعلمة — ${t.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id })}`);
+  } catch (e) { showToast(dbError(e), true); }
+}
+
+/* ============================================================
+   تأجيل سريع + رسائل للطرفين
+   ============================================================ */
+function openPostpone(id) {
+  const s = findSession(id); if (!s) return;
+  const d = new Date(s.scheduled_at); d.setDate(d.getDate() + 1);
+  openModal('تأجيل / تغيير موعد الحصة', formHtml([
+    [{ name: 'date', label: 'التاريخ الجديد', type: 'date', required: true, value: dateStr(d) },
+     { name: 'time', label: 'الوقت الجديد (بتوقيتك)', type: 'time', required: true, value: timeStr(d) }],
+    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s.duration_minutes || 60, step: 5, min: 5 },
+    { name: 'reason', label: 'السبب (اختياري — بيتكتب في ملاحظات الحصة)', placeholder: 'مثال: طلب ولي الأمر' },
+  ], 'تأجيل الحصة'));
+  window._formSubmit = () => runSubmit(async () => {
+    const start = new Date(`${fv('date')}T${fv('time')}`);
+    if (isNaN(start)) return formError('التاريخ أو الوقت غير صحيح');
+    const dur = fnum('duration_minutes');
+    const row = { scheduled_at: start.toISOString(), duration_minutes: dur, status: 'scheduled', actual_minutes: null };
+    const conflicts = await findConflicts([{ ...s, ...row }], s.id);
+    if (conflicts.length && !confirm(`⚠️ الموعد الجديد فيه تعارض:\n${conflicts.slice(0, 4).map(({ o }) => { const v = sessionView(o); return `• ${timeStr(new Date(o.scheduled_at))}: ${v.st?.name || ''} مع ${v.tu?.name || ''}`; }).join('\n')}\n\nتكمل برضه؟`)) return;
+    const oldIso = s.scheduled_at;
+    const reason = fv('reason');
+    if (reason) row.notes = [s.notes, `تأجيل من ${fmtShortDate(oldIso)} ${timeStr(new Date(oldIso))}: ${reason}`].filter(Boolean).join(' | ');
+    await q(sb.from('sessions').update(row).eq('id', s.id));
+    await refreshAll();
+    const ns = { ...s, ...row };
+    const { st, fam, tu } = sessionView(ns);
+    const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+    const parentText = `السلام عليكم ورحمة الله 🌷
+تم تغيير موعد حصة ${st?.name || ''}${s.subject ? ` (${s.subject})` : ''}:
+❌ الموعد القديم: ${fmtDate(oldIso, c.tz)} الساعة ${fmtTime(oldIso, c.tz)}
+✅ الموعد الجديد: ${fmtDate(ns.scheduled_at, c.tz)} الساعة ${fmtTime(ns.scheduled_at, c.tz)} بتوقيت ${c.tzName}
+هنبعت الرابط والتذكير قبل الحصة إن شاء الله.
+${SIGN_F}`;
+    const tutorText = `${greetTutor(tu?.name)}
+تم تغيير موعد حصة ${st?.name || ''}${s.subject ? ` (${s.subject})` : ''}:
+❌ القديم: ${fmtDate(oldIso, CAIRO_TZ)} الساعة ${fmtTime(oldIso, CAIRO_TZ)}
+✅ الجديد: ${fmtDate(ns.scheduled_at, CAIRO_TZ)} الساعة ${fmtTime(ns.scheduled_at, CAIRO_TZ)} بتوقيت القاهرة (${durLabel(dur)})
+برجاء التأكيد 🙏
+${SIGN_T}`;
+    openModal('تم التأجيل ✓ — بلّغ الطرفين', `<div class="list">
+      ${msgBlock('رسالة ولي الأمر', parentText, { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id })}
+      ${msgBlock('رسالة المعلم', tutorText, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id })}</div>`);
+    document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+  });
+}
+
+/* ============================================================
+   تصدير Excel (CSV)
+   ============================================================ */
+function downloadCSV(filename, header, rows) {
+  const escCsv = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const csv = '﻿' + [header, ...rows].map(r => r.map(escCsv).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function exportSessionsCSV() {
+  if (!state.fin) return;
+  const r = state.fin.range;
+  const rows = [...state.fin.sessions].sort((a, b) => sStart(a) - sStart(b)).map(s => {
+    const v = sessionView(s), c = charges(s);
+    const done = s.status === 'done';
+    return [dateStr(new Date(s.scheduled_at)), timeStr(new Date(s.scheduled_at)), v.st?.name, v.fam?.name, v.tu?.name, s.subject,
+      s.kind === 'revision' ? 'مراجعة' : 'عادية', (STATUS[s.status] || {}).label, s.duration_minutes, s.actual_minutes ?? '',
+      s.student_price, s.student_currency, done ? c.fam.toFixed(2) : '', s.tutor_cost_egp, done ? c.tut.toFixed(2) : '',
+      done ? Number(s.fx_rate_to_egp).toFixed(4) : '', done ? Number(s.revenue_egp).toFixed(2) : '', done ? Number(s.margin_egp).toFixed(2) : '', s.notes];
+  });
+  downloadCSV(`حصص_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الوقت', 'الطالب', 'الأسرة', 'المعلم', 'المادة', 'النوع', 'الحالة', 'المدة المخططة (د)', 'المدة الفعلية (د)',
+    'سعر الساعة للأسرة', 'العملة', 'إجمالي الأسرة', 'أجر الساعة للمعلم (EGP)', 'إجمالي المعلم (EGP)', 'سعر الصرف', 'الإيراد (EGP)', 'الهامش (EGP)', 'ملاحظات'], rows);
+}
+function exportPaymentsCSV() {
+  if (!state.fin) return;
+  const r = state.fin.range;
+  const rows = state.fin.tx.map(t => [dateStr(new Date(t.created_at)), byId(state.families, t.family_id)?.name, t.type === 'refund' ? 'استرداد' : 'دفعة', t.amount, t.currency, t.note]);
+  const po = state.fin.payouts.map(p => [dateStr(new Date(p.paid_at || p.created_at)), byId(state.tutors, p.tutor_id)?.name, 'صرف لمعلم', p.total_egp, 'EGP', [p.method, p.note].filter(Boolean).join(' — ')]);
+  downloadCSV(`مدفوعات_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الأسرة / المعلم', 'النوع', 'المبلغ', 'العملة', 'ملاحظة'], [...rows, ...po]);
+}
+
+/* ============================================================
    المصادقة وموافقة الأدمن
    ============================================================ */
 function toggleAuthMode() {
@@ -1502,6 +1753,12 @@ async function enterApp() {
   showView('app');
   await refreshAll();
   subscribeRealtime();
+  if (!window._tick) window._tick = setInterval(() => {
+    if (document.hidden) return;
+    loadAttention().then(renderAttention).catch(() => {});
+    if (currentTab === 'daily' && state.dayMode === 'day' && document.getElementById('modal').classList.contains('hidden')) renderDaily();
+  }, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && currentUser) scheduleRefresh(); });
   let savedAlerts = false; try { savedAlerts = localStorage.getItem('ostaz_alerts') === '1'; } catch (e) {}
   if (savedAlerts && !alertsOn) { alertsOn = true; startAlerts(); }
   await registerSW();
