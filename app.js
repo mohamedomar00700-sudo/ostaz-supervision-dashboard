@@ -2348,7 +2348,8 @@ function groupMoney(rows) {
   const done = active.filter(r => r.status === 'done');
   const mins = sMins(s0);
   const rev = active.reduce((a, r) => a + charges(r).rev, 0);
-  const tut = done.length ? done.reduce((a, r) => a + charges(r).tut, 0) : (active.length ? Number(s0.group_rate_egp || 0) * mins / 60 : 0);
+  const enrolled = rows.filter(r => !(isCancelled(r) && r.cancel_scope === 'permanent')).length || 1;
+  const tut = done.length ? done.reduce((a, r) => a + charges(r).tut, 0) : Number(s0.group_rate_egp || 0) * mins / 60 * active.length / enrolled;
   return { mins, rev, tut, margin: rev - tut, final: active.length && done.length === active.length };
 }
 
@@ -2469,7 +2470,7 @@ async function openGroupDone(key) {
     <div class="field"><label>مين حضر؟</label><div class="gm-list" id="gd-list">
       ${rows.map(r => { const v = sessionView(r); return `<label class="gm-row gm-check"><input type="checkbox" data-id="${esc(r.id)}" ${present.has(r.id) ? 'checked' : ''} onchange="_gdPrev()">
         <b>${esc(v.st?.name || '')}</b> <span class="sub small">· ${esc(v.fam?.name || '')}</span></label>`; }).join('')}
-    </div><div class="hint">اللي مش متعلّم عليه بيتسجل "لم يحضر" ومش بيتحسب على أسرته، وأجر المعلمة الثابت بيتقسم على اللي حضروا.</div></div>
+    </div><div class="hint">اللي مش متعلّم عليه بيتسجل "لم يحضر" ومش بيتحسب على أسرته، ونصيبه بيتخصم من أجر المعلمة في الحصة دي.</div></div>
     <div class="field"><label>المدة الفعلية</label>
       <div class="chips" id="dur-chips">${opts.map(m => `<button type="button" class="chip" data-m="${m}" onclick="_pickDur(${m})">${durLabel(m)}${m === planned ? ' (المخطط)' : ''}</button>`).join('')}</div>
       <input id="f_actual" class="input" type="number" min="5" max="720" step="5" inputmode="numeric" value="${current}"></div>
@@ -2483,10 +2484,10 @@ async function openGroupDone(key) {
     document.querySelectorAll('#dur-chips .chip').forEach(c => c.classList.toggle('active', Number(c.dataset.m) === m));
     const att = rows.filter(r => ids.includes(r.id));
     const rev = att.reduce((a, r) => a + toEGP(Number(r.student_price) * m / 60, r.student_currency), 0);
-    const tut = att.length ? Number(s.group_rate_egp || 0) * m / 60 : 0;
+    const tut = Number(s.group_rate_egp || 0) * m / 60 * att.length / (rows.length || 1);
     document.getElementById('done-preview').innerHTML = `<div class="meta" style="margin:0">
       <span>حضر: <b>${att.length} من ${rows.length}</b></span><span>المدة: <b>${durLabel(m)}</b></span>
-      <span>الأسر: <b>≈ ${fmt(rev)} EGP</b></span><span>للمعلم: <b>${money(tut, 'EGP')}</b></span>
+      <span>الأسر: <b>≈ ${fmt(rev)} EGP</b></span><span>للمعلم: <b>${money(tut, 'EGP')}</b>${att.length < rows.length ? ` <span class="sub small">(من ${fmt(Number(s.group_rate_egp || 0) * m / 60)} — اتخصم نصيب ${rows.length - att.length})</span>` : ''}</span>
       <span>الهامش: <b>${fmt(rev - tut)} EGP</b></span></div>
       <div class="sub small mt">كل طالب بيتحسب بسعر ساعته (${att.map(r => `${byId(state.students, r.student_id)?.name || ''} ${fmt(r.student_price, 2)} ${r.student_currency}`).join('، ') || '—'}).</div>`;
   };
@@ -2679,7 +2680,7 @@ async function openGroupForm(key, prefill = {}) {
      { name: 'time', label: 'الوقت (بتوقيتك)', type: 'time', required: true, value: timeStr(when) }],
     { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s?.duration_minutes ?? prefill.duration ?? 60, step: 5, min: 5 },
     { name: 'group_rate_egp', label: 'أجر الساعة للمعلم عن المجموعة كلها (EGP)', type: 'number', required: true, value: s?.group_rate_egp,
-      hint: 'مبلغ ثابت مهما كان عدد الطلاب — بيتقسم تلقائياً على اللي حضروا في الحسابات.' },
+      hint: 'سعر المجموعة كلها. بيتقسم على عدد الطلاب، ولو طالب غاب بيتخصم نصيبه من الحصة دي (150 ج ÷ 3 = 50 لكل طالب → لو واحد غاب المعلمة تاخد 100).' },
     { name: 'meeting_link', label: 'رابط الحصة', value: s?.meeting_link, placeholder: 'meet.google.com/…' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: s?.notes },
   ];
@@ -2706,7 +2707,8 @@ async function openGroupForm(key, prefill = {}) {
     document.getElementById('sess-total').innerHTML = `<div class="meta" style="margin:0">
       <span>الحصة (${durLabel(m)}) لو الكل حضر:</span><span>الأسر <b>≈ ${fmt(rev)} EGP</b></span>
       <span>المعلم <b>${money(tut, 'EGP')}</b></span><span>الهامش <b class="${rev - tut >= 0 ? 'pos' : 'neg'}">${fmt(rev - tut)} EGP</b></span></div>
-      ${members.length ? `<div class="sub small mt">نصيب كل طالب من أجر المعلم: ${fmt(tut / members.length, 2)} ج</div>` : ''}`;
+      ${members.length ? `<div class="sub small mt">نصيب كل طالب من أجر المعلم: ${fmt(tut / members.length, 2)} ج — لو غاب بيتخصم من الحصة دي بس.</div>` : ''}
+      ${s && members.length < rows.length ? `<div class="warn-txt small mt">⚠️ شلت طالب من المجموعة — اتفق مع المعلمة: سعر المجموعة هيفضل ${fmt(rate)} ج ولا هيتغير؟ عدّله فوق لو اتغير.</div>` : ''}`;
   };
   const renderMembers = () => {
     document.getElementById('grp-members').innerHTML = members.length ? members.map((x, i) => {
