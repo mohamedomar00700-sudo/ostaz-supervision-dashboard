@@ -1798,8 +1798,51 @@ async function delayedTestPush() {
     showToast('اقفل الموبايل دلوقتي 🔒 — الإشعار هيوصل خلال دقيقة لدقيقتين');
   } catch (e) { showToast(dbError(e), true); }
 }
+/* ----- منبه بصوت عالي عبر تطبيق ntfy (مجاني) ----- */
+async function loadAlarm() { try { return (await q(sb.from('alarm_channels').select('*').eq('user_id', currentUser.id)))[0] || null; } catch (e) { return null; } }
+function newAlarmTopic() { const a = crypto.getRandomValues(new Uint8Array(18)); return 'ostaz-' + [...a].map(b => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join(''); }
+async function enableAlarm() {
+  try { await q(sb.from('alarm_channels').insert({ user_id: currentUser.id, ntfy_topic: newAlarmTopic(), enabled: true })); await openAlertsPanel(); document.getElementById('alarm-box')?.scrollIntoView({ block: 'start' }); }
+  catch (e) { showToast(dbError(e), true); }
+}
+async function setAlarmEnabled(v) {
+  try { await q(sb.from('alarm_channels').update({ enabled: v }).eq('user_id', currentUser.id)); await openAlertsPanel(); } catch (e) { showToast(dbError(e), true); }
+}
+async function testAlarm(delay) {
+  showToast(delay ? 'اقفل الموبايل دلوقتي 🔒 — هيرن خلال 20 ثانية' : 'جاري الإرسال…');
+  try {
+    const { data, error } = await sb.functions.invoke('session-alerts', { body: { action: 'alarm_test', delay } });
+    if (error) throw error;
+    const ok = (data.sent || []).some(r => r.status >= 200 && r.status < 300);
+    if (!delay || !ok) showToast(ok ? 'اتبعت ✓ لو ماسمعتش حاجة راجع إنك مشترك في القناة في تطبيق ntfy' : 'فشل الإرسال — جرّب تاني', !ok);
+  } catch (e) { showToast('فشل الإرسال: ' + (e.message || e), true); }
+}
+function alarmHtml(ch) {
+  const help = `<p class="sub small" style="margin:0 0 8px">تنبيه إضافي من تطبيق <b>ntfy</b> المجاني بيرن بصوت عالي قبل الحصة بـ 15 دقيقة وعند بدايتها، حتى والموبايل مقفول وبعيد عنك. على أندرويد ممكن يفضل يرن زي المنبه لحد ما تفتحه.</p>`;
+  if (!ch) return `<div id="alarm-box"><b>🔊 منبه بصوت عالي (مجاني)</b>${help}<button class="btn btn-brand sm" onclick="enableAlarm()">تفعيل المنبه</button></div>`;
+  const t = ch.ntfy_topic;
+  return `<div id="alarm-box"><div class="item-head"><b>🔊 منبه بصوت عالي (ntfy)</b>
+      <span class="badge ${ch.enabled ? 'b-done' : 'b-cancel'}">${ch.enabled ? (ch.last_ok_at ? 'شغال' : 'مستني الاشتراك') : 'متوقف'}</span></div>${help}
+    <ol class="steps small">
+      <li>نزّل تطبيق <b>ntfy</b>: ${isIOS ? '' : '<a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">أندرويد (Google Play)</a>'}${!isIOS && !isAndroid ? ' · ' : ''}${isAndroid ? '' : '<a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener">آيفون (App Store)</a>'}</li>
+      <li>اشترك في قناتك: ${isAndroid ? `<a class="btn btn-ghost sm" href="ntfy://ntfy.sh/${esc(t)}">فتح في ntfy واشتراك</a> أو ` : ''}افتح ntfy ودوس <b>+</b> والصق اسم القناة ده:
+        <div class="row-gap mt"><code dir="ltr" style="user-select:all;padding:4px 8px;border-radius:6px;background:var(--bg)">${esc(t)}</code>
+        <button class="btn btn-ghost sm" onclick="copyText(${jsq(t)}, 'تم نسخ اسم القناة ✓')">نسخ</button></div></li>
+      ${isIOS ? `<li>لما يسألك اسمح بالإشعارات، ومن إعدادات الآيفون ← الإشعارات ← ntfy فعّل <b>الأصوات</b> و<b>Time Sensitive</b>.</li>`
+        : `<li>في ntfy: ⋮ ← <b>Settings</b> ← Notifications ← فعّل <b>"Keep alerting for highest priority"</b> عشان يفضل يرن لحد ما تفتحه.</li>
+           <li>من إعدادات الموبايل ← التطبيقات ← ntfy ← البطارية ← <b>بدون قيود</b>.</li>`}
+      <li>جرّب: دوس "تجربة بعد 20 ثانية" واقفل الشاشة.</li>
+    </ol>
+    <div class="modal-foot" style="flex-wrap:wrap;position:static;padding:8px 0 0">
+      <button class="btn btn-brand sm" onclick="testAlarm(20)">🔒 تجربة بعد 20 ثانية</button>
+      <button class="btn btn-ghost sm" onclick="testAlarm(0)">رن دلوقتي</button>
+      <button class="btn btn-ghost sm" onclick="setAlarmEnabled(${!ch.enabled})">${ch.enabled ? 'إيقاف المنبه' : 'تشغيل المنبه'}</button>
+    </div>
+    <p class="sub small">اسم القناة سري وخاص بيك — ماتبعتهوش لحد.</p></div>`;
+}
 async function openAlertsPanel() {
   const on = await refreshAlertIcon();
+  const alarmCh = await loadAlarm();
   let body = '';
   if (isIOS && !isStandalone()) {
     body = `<p><b>على الآيفون، الإشعارات بتشتغل بس لو اللوحة متثبتة كتطبيق على الشاشة الرئيسية:</b></p>
@@ -1836,6 +1879,7 @@ async function openAlertsPanel() {
       <div class="modal-foot"><button class="btn btn-brand" id="push-enable" onclick="enablePush()">🔔 تفعيل الإشعارات</button></div>
       ${isAndroid && isBrave() ? '<p class="warn-txt small">⚠️ إنت على Brave: قبل التفعيل افتح brave://settings/privacy وفعّل "Use Google services for push messaging".</p>' : ''}${isAndroid ? ANDROID_HELP : ''}`;
   }
+  body += `<hr class="sep">${alarmHtml(alarmCh)}`;
   body += `<hr class="sep"><div class="item-head"><div><b>صوت تنبيه واللوحة مفتوحة</b><div class="sub small">صفارة قوية من جوه الصفحة وهي مفتوحة قدامك (إضافي).</div></div>
     <button class="btn ${alertsOn ? 'btn-ok' : 'btn-ghost'} sm" onclick="toggleInPageAlerts()">${alertsOn ? 'شغال' : 'تشغيل'}</button></div>`;
   openModal('إشعارات الحصص', body);

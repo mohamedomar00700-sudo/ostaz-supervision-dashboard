@@ -38,6 +38,21 @@ async function pushToSubs(subs: Sub[], payload: object, vapid: any) {
   return results;
 }
 
+// Loud alarm channel: ntfy app (free). Max priority + the Android setting
+// "Keep alerting for highest priority" loops the alarm sound until dismissed.
+const APP_URL = 'https://mohamedomar00700-sudo.github.io/ostaz-supervision-dashboard/';
+type Alarm = { user_id: string; ntfy_topic: string };
+async function ntfySend(chans: Alarm[], msg: { title: string; message: string; priority: number; tags?: string[]; click?: string }) {
+  return Promise.all(chans.map(async (c) => {
+    try {
+      const r = await fetch('https://ntfy.sh/', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: c.ntfy_topic, ...msg }) });
+      if (r.ok) await admin.from('alarm_channels').update({ last_ok_at: new Date().toISOString() }).eq('user_id', c.user_id);
+      return { user: c.user_id, status: r.status };
+    } catch (e) { return { user: c.user_id, status: 0, err: String(e).slice(0, 120) }; }
+  }));
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
@@ -63,6 +78,19 @@ Deno.serve(async (req) => {
       tag: 'test-' + Date.now(), url: './',
     }, vapid);
     return json({ sent: results.filter(r => r.status >= 200 && r.status < 300).length, results });
+  }
+
+  // ---------- test of the loud alarm (ntfy) for the calling supervisor ----------
+  if (body.action === 'alarm_test') {
+    const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+    const { data: { user } } = await admin.auth.getUser(token);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    const { data: ch } = await admin.from('alarm_channels').select('user_id,ntfy_topic').eq('user_id', user.id).maybeSingle();
+    if (!ch) return json({ error: 'no alarm channel' }, 404);
+    const delay = Math.min(Math.max(Number(body.delay) || 0, 0), 25);
+    if (delay) await new Promise((r) => setTimeout(r, delay * 1000));
+    const r = await ntfySend([ch as Alarm], { title: '⏰ تجربة منبه أستاذ أونلاين', message: 'لو سامع/ة الصوت ده والموبايل مقفول يبقى المنبه شغال ✅', priority: 5, tags: ['alarm_clock'], click: APP_URL });
+    return json({ sent: r });
   }
 
   // ---------- scheduled run (pg_cron) ----------
@@ -124,6 +152,9 @@ Deno.serve(async (req) => {
   const { data: subs } = activeIds.length
     ? await admin.from('push_subscriptions').select('*').in('user_id', activeIds)
     : { data: [] as Sub[] };
+  const { data: alarms } = activeIds.length
+    ? await admin.from('alarm_channels').select('user_id,ntfy_topic').eq('enabled', true).in('user_id', activeIds)
+    : { data: [] as Alarm[] };
 
   const report: any[] = [];
   for (const c of claimed as any[]) {
@@ -147,7 +178,11 @@ Deno.serve(async (req) => {
     const results = await pushToSubs((subs || []) as Sub[], {
       ...payload, tag: `${s.id}:${c.kind}`, url: `./?day=${dayStr}`, requireInteraction: true,
     }, vapid);
-    report.push({ session: s.id, kind: c.kind, results });
+    const alarm = alarms?.length ? await ntfySend(alarms as Alarm[], {
+      title: payload.title, message: payload.body, priority: c.kind.startsWith('end') ? 4 : 5,
+      tags: [c.kind.startsWith('end') ? 'hourglass' : 'alarm_clock'], click: `${APP_URL}?day=${dayStr}`,
+    }) : [];
+    report.push({ session: s.id, kind: c.kind, results, alarm });
   }
   return json({ checked: sessions!.length, sent: report.length, report, tests: testReport.length });
 });
