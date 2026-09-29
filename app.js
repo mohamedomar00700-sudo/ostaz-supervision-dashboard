@@ -1721,6 +1721,17 @@ async function toggleInPageAlerts() {
 /* ----- إشعارات حقيقية (Web Push) — بتوصل والتطبيق مقفول ----- */
 const VAPID_PUBLIC = 'BNg8dUDp2rzXqgQHiFpGdVOpnISXlN-0HO36wH9C9_ENwGFm0zi7KApfg_D4KmdhGJDVc0L4TQrzzdCiciFJgzs';
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/i.test(navigator.userAgent);
+const isBrave = () => !!navigator.brave;
+const ANDROID_HELP = `<details class="mt" open><summary><b>📱 أندرويد: عشان التنبيه يوصل والموبايل مقفول</b></summary>
+  <ol class="steps small">
+    <li>استخدم <b>Google Chrome</b>. لو بتستخدم <b>Brave</b>: افتح brave://settings/privacy وفعّل <b>"Use Google services for push messaging"</b>، وإلا الإشعارات مش هتوصل خالص.</li>
+    <li>ثبّت اللوحة: قائمة Chrome <b>⋮</b> ← <b>"إضافة إلى الشاشة الرئيسية" / Install app</b>، وافتحها من الأيقونة.</li>
+    <li>الإعدادات ← التطبيقات ← <b>Chrome</b> ← الإشعارات: مسموح، وخلي إشعارات موقع اللوحة على <b>"تنبيه / صوت"</b> مش "صامت".</li>
+    <li>الإعدادات ← التطبيقات ← <b>Chrome</b> ← البطارية: <b>"غير مقيّد / Unrestricted"</b> (مهم جداً في شاومي، أوبو، ريلمي، هواوي، سامسونج).</li>
+    <li>شاومي/ريدمي: فعّل <b>"التشغيل التلقائي / Autostart"</b> لـ Chrome. سامسونج: شيل Chrome من <b>"التطبيقات النائمة"</b>.</li>
+    <li>اتأكد إن "عدم الإزعاج" مقفول، وبعدها جرّب زرار <b>"تجربة والتطبيق مقفول"</b> واقفل الشاشة.</li>
+  </ol></details>`;
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 function b64uToUint8(s) {
@@ -1756,7 +1767,12 @@ async function enablePush() {
     await q(sb.from('push_subscriptions').upsert({ user_id: currentUser.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent.slice(0, 200) }, { onConflict: 'endpoint' }));
     showToast('تم تفعيل الإشعارات على الجهاز ده ✓');
     await sendTestPush(true);
-  } catch (e) { showToast('تعذر التفعيل: ' + (e.message || e), true); }
+  } catch (e) {
+    const m = String(e.message || e);
+    if (/push service|Registration failed|AbortError/i.test(m) && (isBrave() || isAndroid)) {
+      showToast(isBrave() ? 'Brave قافل خدمة الإشعارات: فعّل "Use Google services for push messaging" من brave://settings/privacy أو استخدم Chrome' : 'خدمة الإشعارات مش متاحة: اتأكد إن Google Play Services شغالة أو جرّب Chrome', true);
+    } else showToast('تعذر التفعيل: ' + m, true);
+  }
   finally { await refreshAlertIcon(); openAlertsPanel(); }
 }
 async function disablePush() {
@@ -1796,10 +1812,10 @@ async function openAlertsPanel() {
       <p class="sub small">محتاج iOS 16.4 أو أحدث.</p>
       <div class="modal-foot"><button class="btn btn-ghost" onclick="copyText(location.origin + location.pathname, 'تم نسخ الرابط ✓ الصقه في Safari')">نسخ رابط اللوحة</button></div>`;
   } else if (!pushSupported()) {
-    body = `<p>المتصفح ده مش بيدعم الإشعارات في الخلفية. جرّب Chrome على أندرويد أو الكمبيوتر، أو Safari على الآيفون بعد تثبيت اللوحة على الشاشة الرئيسية.</p>`;
+    body = `<p>المتصفح ده مش بيدعم الإشعارات في الخلفية. جرّب Chrome على أندرويد أو الكمبيوتر، أو Safari على الآيفون بعد تثبيت اللوحة على الشاشة الرئيسية.</p>${isAndroid ? ANDROID_HELP : ''}`;
   } else if (Notification.permission === 'denied') {
     body = `<p class="neg"><b>الإشعارات مقفولة للوحة دي من إعدادات الجهاز/المتصفح.</b></p>
-      <p>${isIOS ? 'افتح الإعدادات ← الإشعارات ← "أستاذ أونلاين" ← فعّل السماح بالإشعارات والأصوات.' : 'دوس على القفل 🔒 جنب الرابط ← الأذونات ← الإشعارات ← سماح، وبعدين حدّث الصفحة.'}</p>`;
+      <p>${isIOS ? 'افتح الإعدادات ← الإشعارات ← "أستاذ أونلاين" ← فعّل السماح بالإشعارات والأصوات.' : 'دوس على القفل 🔒 جنب الرابط ← الأذونات ← الإشعارات ← سماح، وبعدين حدّث الصفحة.'}</p>${isAndroid ? ANDROID_HELP : ''}`;
   } else if (on) {
     body = `<p class="pos"><b>✓ الإشعارات شغالة على الجهاز ده.</b></p>
       <p class="sub">هيوصلك تنبيه قبل كل حصة بـ 15 دقيقة، وتاني عند موعدها، حتى لو التطبيق مقفول والموبايل مقفول. التنبيه بيوصل لكل المشرفين اللي مفعّلينه.</p>
@@ -1814,10 +1830,11 @@ async function openAlertsPanel() {
           <li>اتأكد إن وضع التركيز (Focus / عدم الإزعاج) مقفول أو إن "أستاذ أونلاين" مسموح له.</li>
           <li>لازم تفتح اللوحة دايماً من <b>الأيقونة على الشاشة الرئيسية</b>، مش من Safari.</li>
           <li>لو لسه مش شغال: دوس "إيقاف على الجهاز ده" وبعدين فعّل تاني.</li>
-        </ol></details>` : ''}`;
+        </ol></details>` : ''}${isAndroid ? ANDROID_HELP.replace('<details class="mt" open>', '<details class="mt">') : ''}`;
   } else {
     body = `<p>فعّل الإشعارات عشان يوصلك تنبيه <b>قبل كل حصة بـ 15 دقيقة وعند موعدها</b> — حتى والتطبيق مقفول والموبايل مقفول.</p>
-      <div class="modal-foot"><button class="btn btn-brand" id="push-enable" onclick="enablePush()">🔔 تفعيل الإشعارات</button></div>`;
+      <div class="modal-foot"><button class="btn btn-brand" id="push-enable" onclick="enablePush()">🔔 تفعيل الإشعارات</button></div>
+      ${isAndroid && isBrave() ? '<p class="warn-txt small">⚠️ إنت على Brave: قبل التفعيل افتح brave://settings/privacy وفعّل "Use Google services for push messaging".</p>' : ''}${isAndroid ? ANDROID_HELP : ''}`;
   }
   body += `<hr class="sep"><div class="item-head"><div><b>صوت تنبيه واللوحة مفتوحة</b><div class="sub small">صفارة قوية من جوه الصفحة وهي مفتوحة قدامك (إضافي).</div></div>
     <button class="btn ${alertsOn ? 'btn-ok' : 'btn-ghost'} sm" onclick="toggleInPageAlerts()">${alertsOn ? 'شغال' : 'تشغيل'}</button></div>`;
