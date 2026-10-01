@@ -809,7 +809,8 @@ async function openSessionForm(id, prefill = {}) {
     if (p.tutor_id) {
       tuSel.value = p.tutor_id;
       const t = byId(state.tutors, p.tutor_id);
-      if (t && t.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp;
+      if (p.tutor_rate_egp != null) $('tutor_cost_egp').value = p.tutor_rate_egp;
+      else if (t && t.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp;
     }
     document.querySelectorAll('#plan-picks .stu').forEach(b => b.classList.toggle('picked', b.dataset.pid === p.id));
     totals();
@@ -833,7 +834,9 @@ async function openSessionForm(id, prefill = {}) {
   stSel.addEventListener('change', () => { updateHints(true); renderPicks(true); });
   tuSel.addEventListener('change', () => {
     const t = byId(state.tutors, tuSel.value);
-    if (t && t.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp;
+    const pr = plansOf(stSel.value).find(p => p.tutor_id === tuSel.value && p.tutor_rate_egp != null);
+    if (pr) $('tutor_cost_egp').value = pr.tutor_rate_egp;
+    else if (t && t.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp;
     totals();
   });
   updateHints(!s && !!prefill.student_id);
@@ -1176,7 +1179,7 @@ function openStudentForm(familyId, id) {
   const plans = s ? plansOf(s.id) : [];
   const planBlock = `<div class="field"><label>المواد والمعلمين</label>
     <datalist id="subj-list2">${SUBJECT_LIST.map(x => `<option value="${x}">`).join('')}</datalist>
-    <div class="plan-head small sub"><span>المادة</span><span>بالأسبوع</span><span>المعلم</span><span></span></div>
+    <div class="plan-head small sub"><span>المادة</span><span>بالأسبوع</span><span>المعلم</span><span>أجره/س</span><span></span></div>
     <div id="plan-rows">${(plans.length ? plans : [{}]).map(planRowHtml).join('')}</div>
     <button type="button" class="btn btn-ghost sm" onclick="document.getElementById('plan-rows').insertAdjacentHTML('beforeend', planRowHtml())">+ مادة</button></div>`;
   const del = s && isAdmin ? `<button type="button" class="btn btn-danger" style="margin-top:6px" onclick="closeModal(); confirmDelete(${jsq('الطالب ' + s.name)}, () => q(sb.from('students').delete().eq('id', ${jsq(s.id)})))">حذف الطالب</button>` : '';
@@ -1190,6 +1193,7 @@ function openStudentForm(familyId, id) {
       student_id: sid, subject: r.querySelector('.pl-subject').value.trim(),
       weekly_sessions: r.querySelector('.pl-weekly').value ? Number(r.querySelector('.pl-weekly').value) : null,
       tutor_id: r.querySelector('.pl-tutor').value || null,
+      tutor_rate_egp: r.querySelector('.pl-rate').value ? Number(r.querySelector('.pl-rate').value) : null,
     })).filter(x => x.subject);
     if (s) await q(sb.from('student_subjects').delete().eq('student_id', sid));
     if (rows.length) await q(sb.from('student_subjects').insert(rows));
@@ -1199,8 +1203,9 @@ function openStudentForm(familyId, id) {
 function planRowHtml(p = {}) {
   return `<div class="plan-row">
     <input class="input pl-subject" placeholder="المادة" value="${esc(p.subject || '')}" list="subj-list2">
-    <input class="input pl-weekly" type="number" min="1" max="14" inputmode="numeric" placeholder="—" value="${esc(p.weekly_sessions ?? '')}">
+    <input class="input pl-weekly" type="number" min="1" max="14" inputmode="numeric" placeholder="×أسبوع" value="${esc(p.weekly_sessions ?? '')}">
     <select class="input pl-tutor"><option value="">— بدون —</option>${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === p.tutor_id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+    <input class="input pl-rate" type="number" min="0" step="5" inputmode="numeric" placeholder="أجر/س" title="أجر المعلم في الساعة للطالب ده (لو مختلف عن أجره الافتراضي)" value="${esc(p.tutor_rate_egp ?? '')}">
     <button type="button" class="btn btn-ghost icon" onclick="this.parentElement.remove()">✕</button>
   </div>`;
 }
