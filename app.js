@@ -1336,20 +1336,23 @@ function finPeriod() { // فترة قسم المالية المختارة
 // ملخص لكل طالب: عدد الحصص لكل مادة والوقت والمبلغ
 function perStudentSummary(ss) {
   const m = {};
-  ss.forEach(s => { const x = m[s.student_id] ||= { n: 0, mins: 0, amt: 0, subj: {} }; x.n++; x.mins += sMins(s); x.amt += charges(s).fam; const k = s.subject || 'حصة'; x.subj[k] = (x.subj[k] || 0) + 1; });
-  return Object.entries(m).map(([sid, x]) => ({ st: byId(state.students, sid), ...x })).sort((a, b) => (a.st?.name || '').localeCompare(b.st?.name || '', 'ar'));
+  ss.forEach(s => { const x = m[s.student_id] ||= { mins: 0, amt: 0, subj: {} }; x.mins += sMins(s); x.amt += charges(s).fam; const k = s.subject || 'حصة'; x.subj[k] = (x.subj[k] || 0) + sMins(s) / 60; });
+  return Object.entries(m).map(([sid, x]) => ({ st: byId(state.students, sid), ...x, n: x.mins / 60, subj: Object.fromEntries(Object.entries(x.subj).map(([k, v]) => [k, fmtU(v)])) })).sort((a, b) => (a.st?.name || '').localeCompare(b.st?.name || '', 'ar'));
 }
 // حصص معلمة واحدة مجمّعة لكل طالب (المجموعة سطر لوحدها)
 function tutorStudentSummary(ss) {
   const m = {};
   occurrences(ss).forEach(o => {
     const key = o.group_key ? 'g:' + (o.group_series || o.group_name || o.group_key) : 's:' + o.student_id;
-    const x = m[key] ||= { who: o.group_key ? `👥 ${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : (byId(state.students, o.student_id)?.name || ''), fam: o.group_key ? '' : byId(state.families, byId(state.students, o.student_id)?.family_id)?.name || '', n: 0, mins: 0, amt: 0, subjects: {} };
-    x.n++; x.mins += sMins(o); x.amt += occTut(o); const k = o.subject || 'حصة'; x.subjects[k] = (x.subjects[k] || 0) + 1;
+    const x = m[key] ||= { mins0: 0, who: o.group_key ? `👥 ${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : (byId(state.students, o.student_id)?.name || ''), fam: o.group_key ? '' : byId(state.families, byId(state.students, o.student_id)?.family_id)?.name || '', n: 0, mins: 0, amt: 0, subjects: {} };
+    x.mins += sMins(o); x.amt += occTut(o); const k = o.subject || 'حصة'; x.subjects[k] = (x.subjects[k] || 0) + sMins(o) / 60;
   });
-  return Object.values(m).map(x => ({ ...x, subj: Object.keys(x.subjects).length > 1 ? Object.entries(x.subjects).map(([k, n]) => `${k} ${n}`).join('، ') : Object.keys(x.subjects)[0] })).sort((a, b) => b.n - a.n);
+  return Object.values(m).map(x => ({ ...x, n: x.mins / 60, subj: Object.keys(x.subjects).length > 1 ? Object.entries(x.subjects).map(([k, v]) => `${k} ${fmtU(v)}`).join('، ') : Object.keys(x.subjects)[0] })).sort((a, b) => b.n - a.n);
 }
-const nSess = n => n === 1 ? 'حصة واحدة' : n === 2 ? 'حصتين' : `${n} ${n <= 10 ? 'حصص' : 'حصة'}`;
+// عدد الحصص بالساعة: الساعة = حصة، نص الساعة = نص حصة
+const fmtU = u => { u = Math.round(u * 100) / 100; return Number.isInteger(u) ? String(u) : fmt(u, 2).replace(/0$/, ''); };
+const nSess = n => { n = Math.round(n * 100) / 100; return n === 1 ? 'حصة واحدة' : n === 2 ? 'حصتين' : n === 0.5 ? 'نص حصة' : `${fmtU(n)} ${Number.isInteger(n) && n >= 3 && n <= 10 ? 'حصص' : 'حصة'}`; };
+const unitsOf = rows => rows.reduce((a, s) => a + sMins(s), 0) / 60;
 async function openFamilyInvoice(familyId, which = null, detailed = false) {
   const f = byId(state.families, familyId);
   const cycle = f.billing_cycle || 'monthly';
@@ -1383,7 +1386,7 @@ ${cycle === 'prepaid' ? 'كشف رصيد الباقة' : 'فاتورة حصص'} 
 
 ${lines || '— لا توجد حصص منفذة في الفترة —'}
 
-عدد الحصص: ${ss.length} · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
+عدد الحصص: ${fmtU(unitsOf(ss))} (الساعة = حصة) · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
 إجمالي الحصص: *${fmt(total, 2)} ${cur}*${Math.abs(prev) >= 0.01 ? `\n${prev < 0 ? 'متأخرات سابقة' : 'رصيد سابق لصالحكم'}: ${fmt(Math.abs(prev), 2)} ${cur}` : ''}${paid ? `\nالمدفوع في الفترة: ${fmt(paid, 2)} ${cur}` : ''}
 ${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}
 
@@ -1667,7 +1670,7 @@ function renderFinance() {
   const fxRows = (state.fxRows || []).filter(r => r.currency !== 'EGP');
   document.getElementById('fin-content').innerHTML = `
     <div class="kpis">
-      <div class="card kpi"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP بسعر السوق يوم الحصة · ${occurrences(done).length} ${occurrences(done).length > 2 && occurrences(done).length < 11 ? 'حصص' : 'حصة'} · ${fmt(hoursDone, 1)} ساعة</div></div>
+      <div class="card kpi"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP بسعر السوق يوم الحصة · ${nSess(unitsOf(occurrences(done)))} · ${fmt(hoursDone, 1)} ساعة</div></div>
       <div class="card kpi"><div class="l">مستحقات المعلمين عن الفترة</div><div class="v num">${fmt(cost)}</div><div class="s">EGP</div></div>
       <div class="card kpi"><div class="l">هامش الأكاديمية</div><div class="v num ${margin >= 0 ? 'pos' : 'neg'}">${fmt(margin)}</div><div class="s">EGP · ${rev ? Math.round(margin / rev * 100) : 0}% من الإيراد</div></div>
       <div class="card kpi"><div class="l">المحصّل فعلياً بالجنيه</div><div class="v num">${fmt(cashIn)}</div><div class="s">${Object.entries(collected).map(([c, v]) => `${fmt(v)} ${c}`).join(' + ') || '—'}${estCount ? ` · ${estCount} دفعة لسه مقدّرة` : ''}</div></div>
@@ -1678,7 +1681,7 @@ function renderFinance() {
     <div class="section-title"><h2>تسوية المعلمين (بالجنيه)</h2></div>
     <div class="card scrollx"><table><thead><tr><th>المعلم</th><th>الفترة</th><th>مستحق الفترة</th><th>اتحوّل في الفترة</th><th>المتبقي الكلي</th><th></th></tr></thead><tbody>
       ${tutorRows.map(x => `<tr><td>${esc(x.t.name)}${x.t.default_rate_egp == null ? '<div class="small neg">بدون أجر ساعة</div>' : ''}</td>
-        <td class="num">${x.p.n} حصة<div class="sub small">${fmt(x.p.h || 0, 1)} ساعة</div></td>
+        <td class="num">${nSess(x.p.h || 0)}</td>
         <td class="num">${fmt(x.p.egp)}</td><td class="num">${x.paid ? fmt(x.paid) : '—'}</td>
         <td class="num ${x.b.due > 0 ? 'neg' : ''}">${fmt(x.b.due)}</td>
         <td class="row-gap">${x.b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${jsq(x.t.id)})">صرف</button>` : '<span class="pill ok">مصروف</span>'}
@@ -1701,9 +1704,9 @@ function renderFinance() {
     <div class="list mb">${(() => { const byT = {}; done.forEach(s => (byT[s.tutor_id] ||= []).push(s));
       return Object.entries(byT).map(([tid, ss]) => ({ t: byId(state.tutors, tid), ss, sum: tutorStudentSummary(ss) })).filter(x => x.t).sort((a, b) => b.ss.length - a.ss.length)
         .map(x => `<details class="card item"><summary class="item-head" style="cursor:pointer"><b>${esc(x.t.name)}</b>
-          <span class="sub small">${x.sum.length === 1 ? 'طالب واحد' : x.sum.length === 2 ? 'طالبين' : x.sum.length + (x.sum.length < 11 ? ' طلاب' : ' طالب')} · ${nSess(occurrences(x.ss).length)} · ${fmt(x.sum.reduce((a, r) => a + r.amt, 0))} ج</span></summary>
+          <span class="sub small">${x.sum.length === 1 ? 'طالب واحد' : x.sum.length === 2 ? 'طالبين' : x.sum.length + (x.sum.length < 11 ? ' طلاب' : ' طالب')} · ${nSess(unitsOf(occurrences(x.ss)))} · ${fmt(x.sum.reduce((a, r) => a + r.amt, 0))} ج</span></summary>
           <div class="scrollx mt"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>الوقت</th><th>للمعلم</th></tr></thead><tbody>
-          ${x.sum.map(r => `<tr><td><b>${esc(r.who)}</b>${r.fam ? `<div class="sub small">${esc(r.fam)}</div>` : ''}</td><td class="num"><b>${r.n}</b></td><td class="small">${esc(r.subj || '')}</td><td class="num">${durLabel(r.mins)}</td><td class="num">${fmt(r.amt, 2)}</td></tr>`).join('')}
+          ${x.sum.map(r => `<tr><td><b>${esc(r.who)}</b>${r.fam ? `<div class="sub small">${esc(r.fam)}</div>` : ''}</td><td class="num"><b>${fmtU(r.n)}</b></td><td class="small">${esc(r.subj || '')}</td><td class="num">${durLabel(r.mins)}</td><td class="num">${fmt(r.amt, 2)}</td></tr>`).join('')}
           </tbody></table></div>
           <div class="actions"><button class="btn btn-wa sm" onclick="openTutorPeriodMessage(${jsq(x.t.id)})">📲 ابعت الكشف للمعلمة</button></div></details>`).join('') || '<div class="card empty">لا توجد حصص في الفترة</div>'; })()}</div>
 
@@ -1712,7 +1715,7 @@ function renderFinance() {
     <div class="card scrollx"><table id="stu-count-table"><thead><tr><th>الطالب</th><th>الحصص</th><th>المواد</th><th>الوقت</th><th>المبلغ</th></tr></thead><tbody>
       ${perStudentSummary(done).sort((a, b) => b.n - a.n).map(x => { const fam = x.st ? byId(state.families, x.st.family_id) : null;
         return `<tr class="clickable" data-q="${esc(normAr((x.st?.name || '') + ' ' + (fam?.name || '')))}" onclick="openStudentProfile(${jsq(x.st?.id)})"><td><b>${esc(x.st?.name || '')}</b><div class="sub small">${esc(fam?.name || '')}</div></td>
-        <td class="num"><b>${x.n}</b></td><td class="small">${Object.entries(x.subj).map(([k, n]) => `${esc(k)} ${n}`).join('، ')}</td>
+        <td class="num"><b>${fmtU(x.n)}</b></td><td class="small">${Object.entries(x.subj).map(([k, n]) => `${esc(k)} ${n}`).join('، ')}</td>
         <td class="num">${durLabel(x.mins)}</td><td class="num">${fmt(x.amt, 2)} ${fam?.currency || ''}</td></tr>`; }).join('')
         || '<tr><td colspan="5" class="empty">لا توجد حصص في الفترة</td></tr>'}
     </tbody></table></div>
@@ -2383,7 +2386,7 @@ async function openStudentProfile(studentId) {
         const list = rows.filter(r => r.status === 'done' && sStart(r) >= from.getTime() && sStart(r) < to.getTime()); const x = perStudentSummary(list)[0];
         return { label: from.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' }), x }; });
       return `<h3>الحصص اللي تمت</h3><div class="card scrollx mb"><table><thead><tr><th>الشهر</th><th>الحصص</th><th>المواد</th><th>الوقت</th></tr></thead><tbody>
-        ${months.map(m => `<tr><td>${m.label}</td><td class="num"><b>${m.x?.n || 0}</b></td><td class="small">${m.x ? Object.entries(m.x.subj).map(([k, n]) => `${esc(k)} ${n}`).join('، ') : '—'}</td><td class="num">${m.x ? durLabel(m.x.mins) : '—'}</td></tr>`).join('')}
+        ${months.map(m => `<tr><td>${m.label}</td><td class="num"><b>${m.x ? fmtU(m.x.n) : 0}</b></td><td class="small">${m.x ? Object.entries(m.x.subj).map(([k, n]) => `${esc(k)} ${n}`).join('، ') : '—'}</td><td class="num">${m.x ? durLabel(m.x.mins) : '—'}</td></tr>`).join('')}
         </tbody></table></div>`; })()}
     ${plansOf(st.id).length ? `<h3>المواد</h3><div class="plan-lines mb">${plansOf(st.id).map(p => `<span class="plan ${p.tutor_id ? '' : 'no-tutor'}">${esc(planLabel(p))}</span>`).join('')}</div>` : ''}
     ${st.notes ? `<div class="warn-note small mb">⚠️ ${esc(st.notes)}</div>` : ''}
