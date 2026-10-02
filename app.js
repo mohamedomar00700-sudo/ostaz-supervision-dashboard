@@ -1339,7 +1339,17 @@ function perStudentSummary(ss) {
   ss.forEach(s => { const x = m[s.student_id] ||= { n: 0, mins: 0, amt: 0, subj: {} }; x.n++; x.mins += sMins(s); x.amt += charges(s).fam; const k = s.subject || 'حصة'; x.subj[k] = (x.subj[k] || 0) + 1; });
   return Object.entries(m).map(([sid, x]) => ({ st: byId(state.students, sid), ...x })).sort((a, b) => (a.st?.name || '').localeCompare(b.st?.name || '', 'ar'));
 }
-const nSess = n => `${n} ${n === 1 ? 'حصة' : n === 2 ? 'حصتين' : n <= 10 ? 'حصص' : 'حصة'}`;
+// حصص معلمة واحدة مجمّعة لكل طالب (المجموعة سطر لوحدها)
+function tutorStudentSummary(ss) {
+  const m = {};
+  occurrences(ss).forEach(o => {
+    const key = o.group_key ? 'g:' + (o.group_series || o.group_name || o.group_key) : 's:' + o.student_id;
+    const x = m[key] ||= { who: o.group_key ? `👥 ${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : (byId(state.students, o.student_id)?.name || ''), fam: o.group_key ? '' : byId(state.families, byId(state.students, o.student_id)?.family_id)?.name || '', n: 0, mins: 0, amt: 0, subjects: {} };
+    x.n++; x.mins += sMins(o); x.amt += occTut(o); const k = o.subject || 'حصة'; x.subjects[k] = (x.subjects[k] || 0) + 1;
+  });
+  return Object.values(m).map(x => ({ ...x, subj: Object.keys(x.subjects).length > 1 ? Object.entries(x.subjects).map(([k, n]) => `${k} ${n}`).join('، ') : Object.keys(x.subjects)[0] })).sort((a, b) => b.n - a.n);
+}
+const nSess = n => n === 1 ? 'حصة واحدة' : n === 2 ? 'حصتين' : `${n} ${n <= 10 ? 'حصص' : 'حصة'}`;
 async function openFamilyInvoice(familyId, which = null, detailed = false) {
   const f = byId(state.families, familyId);
   const cycle = f.billing_cycle || 'monthly';
@@ -1394,7 +1404,7 @@ ${SIGN_F}`;
 }
 
 /* ----- كشف المعلمة عن فترة (للتسوية الشهرية) ----- */
-async function openTutorPeriodMessage(tutorId) {
+async function openTutorPeriodMessage(tutorId, detailed = false) {
   const t = byId(state.tutors, tutorId), r = state.fin?.range || finRange();
   try {
     const [ss, po] = await Promise.all([
@@ -1407,7 +1417,9 @@ async function openTutorPeriodMessage(tutorId) {
     const b = tutBalance(t);
     const label = r.fromD.getDate() === 1 && new Date(r.toD.getTime() - 1).getMonth() === r.fromD.getMonth()
       ? `شهر ${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` : `الفترة ${r.from} إلى ${r.toIncl}`;
-    const lines = oc.map(s => `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ' ' + kindWord(s)} — ${durLabel(sMins(s))} = ${fmt(occTut(s), 2)} ج`).join('\n');
+    const lines = detailed
+      ? oc.map(s => `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ' ' + kindWord(s)} — ${durLabel(sMins(s))} = ${fmt(occTut(s), 2)} ج`).join('\n')
+      : tutorStudentSummary(ss).map(x => `• ${x.who}: ${nSess(x.n)}${x.subj ? ` (${x.subj})` : ''} — ${durLabel(x.mins)} = ${fmt(x.amt, 2)} ج`).join('\n');
     const text = `${greetTutor(t.name)}
 كشف حصصك عن ${label}:
 ${lines || '— لا توجد حصص —'}
@@ -1418,7 +1430,10 @@ ${b.due > 0 ? `المتبقي لكِ حالياً: *${fmt(b.due, 2)} جنيه*` 
 
 لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل.
 ${SIGN_T}`;
-    openModal(`كشف ${label} — ${t.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id })}`);
+    const T = jsq(tutorId);
+    openModal(`كشف ${label} — ${t.name}`, `<div class="chips"><button class="chip ${!detailed ? 'active' : ''}" onclick="openTutorPeriodMessage(${T}, false)">ملخص لكل طالب</button>
+      <button class="chip ${detailed ? 'active' : ''}" onclick="openTutorPeriodMessage(${T}, true)">بالتفصيل حصة حصة</button></div>
+      <div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id })}`);
   } catch (e) { showToast(dbError(e), true); }
 }
 
@@ -1681,6 +1696,16 @@ function renderFinance() {
           <button class="btn btn-brand sm" onclick="openPaymentForm(${jsq(x.f.id)})">+ دفعة</button></td></tr>`; }).join('')
         || '<tr><td colspan="5" class="empty">لا توجد حصص أو مستحقات في الفترة</td></tr>'}
     </tbody></table></div>
+
+    <div class="section-title"><h2>كل معلم ادّى كام حصة لكل طالب</h2></div>
+    <div class="list mb">${(() => { const byT = {}; done.forEach(s => (byT[s.tutor_id] ||= []).push(s));
+      return Object.entries(byT).map(([tid, ss]) => ({ t: byId(state.tutors, tid), ss, sum: tutorStudentSummary(ss) })).filter(x => x.t).sort((a, b) => b.ss.length - a.ss.length)
+        .map(x => `<details class="card item"><summary class="item-head" style="cursor:pointer"><b>${esc(x.t.name)}</b>
+          <span class="sub small">${x.sum.length === 1 ? 'طالب واحد' : x.sum.length === 2 ? 'طالبين' : x.sum.length + (x.sum.length < 11 ? ' طلاب' : ' طالب')} · ${nSess(occurrences(x.ss).length)} · ${fmt(x.sum.reduce((a, r) => a + r.amt, 0))} ج</span></summary>
+          <div class="scrollx mt"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>الوقت</th><th>للمعلم</th></tr></thead><tbody>
+          ${x.sum.map(r => `<tr><td><b>${esc(r.who)}</b>${r.fam ? `<div class="sub small">${esc(r.fam)}</div>` : ''}</td><td class="num"><b>${r.n}</b></td><td class="small">${esc(r.subj || '')}</td><td class="num">${durLabel(r.mins)}</td><td class="num">${fmt(r.amt, 2)}</td></tr>`).join('')}
+          </tbody></table></div>
+          <div class="actions"><button class="btn btn-wa sm" onclick="openTutorPeriodMessage(${jsq(x.t.id)})">📲 ابعت الكشف للمعلمة</button></div></details>`).join('') || '<div class="card empty">لا توجد حصص في الفترة</div>'; })()}</div>
 
     <div class="section-title"><h2>حصص كل طالب في الفترة</h2></div>
     <input class="input search mb" placeholder="ابحث باسم الطالب أو الأسرة…" oninput="_stuFilter(this.value)">
