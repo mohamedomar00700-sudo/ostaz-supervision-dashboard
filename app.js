@@ -1328,41 +1328,68 @@ function lowPrepaid(f) {
   const hour = Math.max(20, ...prices);
   return famBalance(f).balance < 2 * hour;
 }
-async function openFamilyInvoice(familyId, which = 0) {
+function finPeriod() { // فترة قسم المالية المختارة
+  const r = state.fin?.range || finRange();
+  const whole = r.fromD.getDate() === 1 && r.toD.getDate() === 1 && (r.toD.getMonth() - r.fromD.getMonth() + 12) % 12 === 1;
+  return { from: r.fromD, to: r.toD, label: whole ? `شهر ${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` : `الفترة من ${r.from} إلى ${r.toIncl}` };
+}
+// ملخص لكل طالب: عدد الحصص لكل مادة والوقت والمبلغ
+function perStudentSummary(ss) {
+  const m = {};
+  ss.forEach(s => { const x = m[s.student_id] ||= { n: 0, mins: 0, amt: 0, subj: {} }; x.n++; x.mins += sMins(s); x.amt += charges(s).fam; const k = s.subject || 'حصة'; x.subj[k] = (x.subj[k] || 0) + 1; });
+  return Object.entries(m).map(([sid, x]) => ({ st: byId(state.students, sid), ...x })).sort((a, b) => (a.st?.name || '').localeCompare(b.st?.name || '', 'ar'));
+}
+const nSess = n => `${n} ${n === 1 ? 'حصة' : n === 2 ? 'حصتين' : n <= 10 ? 'حصص' : 'حصة'}`;
+async function openFamilyInvoice(familyId, which = null, detailed = false) {
   const f = byId(state.families, familyId);
   const cycle = f.billing_cycle || 'monthly';
-  const p = periodFor(cycle, which);
+  if (which === null) which = cycle === 'monthly' && new Date().getDate() <= 10 ? -1 : 0; // أول الشهر: الفاتورة غالباً عن الشهر اللي فات
+  const p = which === 'fin' ? finPeriod() : periodFor(cycle, which);
   const studIds = state.students.filter(s => s.family_id === familyId).map(s => s.id);
   try {
-    const [ss, tx] = await Promise.all([
+    const [ss, tx, ssBefore, txBefore] = await Promise.all([
       studIds.length ? q(sb.from('sessions').select('*').in('student_id', studIds).eq('status', 'done')
         .gte('scheduled_at', p.from.toISOString()).lt('scheduled_at', p.to.toISOString()).order('scheduled_at')) : [],
       q(sb.from('family_transactions').select('*').eq('family_id', familyId).gte('created_at', p.from.toISOString()).lt('created_at', p.to.toISOString())),
+      studIds.length ? q(sb.from('sessions').select('*').in('student_id', studIds).eq('status', 'done').lt('scheduled_at', p.from.toISOString())) : [],
+      q(sb.from('family_transactions').select('*').eq('family_id', familyId).lt('created_at', p.from.toISOString())),
     ]);
     const c = COUNTRIES[f.country] || COUNTRIES['مصر'];
-    const total = ss.reduce((a, s) => a + charges(s).fam, 0), mins = ss.reduce((a, s) => a + sMins(s), 0);
-    const paid = tx.reduce((a, t) => a + (t.type === 'refund' ? -1 : 1) * Number(t.amount), 0);
-    const bal = famBalance(f).balance;
-    const lines = ss.map(s => { const v = sessionView(s);
-      return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'regular' ? '' : ` (${kindWord(s)})`} — ${durLabel(sMins(s))} = ${s.kind === 'trial' ? 'مجانية 🎁' : `${fmt(charges(s).fam, 2)} ${f.currency}`}`; }).join('\n');
+    const sum = (rows) => rows.reduce((a, s) => a + charges(s).fam, 0);
+    const paidOf = (rows) => rows.reduce((a, t) => a + (t.type === 'refund' ? -1 : 1) * Number(t.amount), 0);
+    const total = sum(ss), mins = ss.reduce((a, s) => a + sMins(s), 0), paid = paidOf(tx);
+    const prev = paidOf(txBefore) - sum(ssBefore);          // رصيد قبل الفترة (+ لصالحهم / − عليهم)
+    const bal = prev + paid - total;                         // الرصيد في نهاية الفترة
+    const cur = f.currency;
+    const lines = detailed
+      ? ss.map(s => { const v = sessionView(s);
+          return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ` (${kindWord(s)})`}${s.group_key ? ' 👥' : ''} — ${durLabel(sMins(s))} = ${s.kind === 'trial' ? 'مجانية 🎁' : `${fmt(charges(s).fam, 2)} ${cur}`}`; }).join('\n')
+      : perStudentSummary(ss).map(x => `• *${x.st?.name || ''}*: ${nSess(x.n)} (${Object.entries(x.subj).map(([k, n]) => `${k} ${n}`).join('، ')}) — ${durLabel(x.mins)} = ${fmt(x.amt, 2)} ${cur}`).join('\n');
     const closing = cycle === 'prepaid'
       ? (bal <= 0 ? 'رصيد الباقة خلص، برجاء التجديد لاستمرار الحصص 🙏' : lowPrepaid(f) ? 'رصيد الباقة قرب يخلص، برجاء التجديد قريب 🙏' : 'شكراً لثقتكم 🌷')
       : (bal < 0 ? 'برجاء التكرم بسداد المستحق، ولأي استفسار إحنا موجودين 🙏' : 'شكراً لالتزامكم 🌷');
     const text = `السلام عليكم ورحمة الله 🌷
-${cycle === 'prepaid' ? 'كشف رصيد الباقة' : 'فاتورة حصص ' + p.label} — ${f.name}
+${cycle === 'prepaid' ? 'كشف رصيد الباقة' : 'فاتورة حصص'} ${p.label} — ${f.name}
+
 ${lines || '— لا توجد حصص منفذة في الفترة —'}
 
-إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
-إجمالي الحصص: *${fmt(total, 2)} ${f.currency}*${paid ? `\nالمدفوع في الفترة: ${fmt(paid, 2)} ${f.currency}` : ''}
-${bal < 0 ? `المستحق حالياً: *${fmt(-bal, 2)} ${f.currency}*` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${f.currency}*`}
+عدد الحصص: ${ss.length} · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
+إجمالي الحصص: *${fmt(total, 2)} ${cur}*${Math.abs(prev) >= 0.01 ? `\n${prev < 0 ? 'متأخرات سابقة' : 'رصيد سابق لصالحكم'}: ${fmt(Math.abs(prev), 2)} ${cur}` : ''}${paid ? `\nالمدفوع في الفترة: ${fmt(paid, 2)} ${cur}` : ''}
+${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}
 
 ${closing}
 ${SIGN_F}`;
+    const F = jsq(familyId), W = jsq(which);
+    const chip = (w, label) => `<button class="chip ${which === w ? 'active' : ''}" onclick="openFamilyInvoice(${F}, ${jsq(w)}, ${detailed})">${label}</button>`;
+    const nowBal = famBalance(f).balance;
     openModal(`${cycle === 'prepaid' ? 'كشف رصيد' : 'فاتورة'} — ${f.name}`, `
-      <div class="chips"><span class="sub small" style="align-self:center">طريقة المحاسبة: <b>${CYCLES[cycle]}</b></span>
-        <button class="chip ${which === 0 ? 'active' : ''}" onclick="openFamilyInvoice(${jsq(familyId)}, 0)">${periodFor(cycle, 0).label}</button>
-        <button class="chip ${which === -1 ? 'active' : ''}" onclick="openFamilyInvoice(${jsq(familyId)}, -1)">${periodFor(cycle, -1).label}</button></div>
-      <div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}`);
+      <div class="chips"><span class="sub small" style="align-self:center">${CYCLES[cycle]}:</span>
+        ${chip(0, periodFor(cycle, 0).label)}${chip(-1, periodFor(cycle, -1).label)}
+        ${state.fin ? chip('fin', '📊 ' + finPeriod().label + ' (من المالية)') : ''}</div>
+      <div class="chips"><button class="chip ${!detailed ? 'active' : ''}" onclick="openFamilyInvoice(${F}, ${W}, false)">ملخص لكل طالب</button>
+        <button class="chip ${detailed ? 'active' : ''}" onclick="openFamilyInvoice(${F}, ${W}, true)">بالتفصيل حصة حصة</button></div>
+      <div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}
+      ${Math.abs(nowBal - bal) >= 0.01 ? `<p class="sub small mt">ℹ️ الفاتورة محسوبة لحد آخر ${p.label}. رصيد الأسرة النهارده: ${nowBal < 0 ? 'عليها' : 'لها'} ${fmt(Math.abs(nowBal), 2)} ${cur} (فيه حصص أو دفعات بعد الفترة).</p>` : ''}`);
   } catch (e) { showToast(dbError(e), true); }
 }
 
@@ -1650,9 +1677,19 @@ function renderFinance() {
         <td class="num">${fmt(x.p.charge, 2)} ${cur}<div class="sub small">${x.p.mins ? durLabel(x.p.mins) : ''}</div></td>
         <td class="num">${x.paid ? fmt(x.paid, 2) + ' ' + cur : '—'}</td>
         <td class="num ${x.b.balance < 0 ? 'neg' : 'pos'}">${x.b.balance < 0 ? 'عليها ' : 'لها '}${fmt(Math.abs(x.b.balance), 2)} ${cur}</td>
-        <td class="row-gap"><button class="btn btn-wa sm" onclick="openFamilyInvoice(${jsq(x.f.id)})">📄 فاتورة</button>
+        <td class="row-gap"><button class="btn btn-wa sm" onclick="openFamilyInvoice(${jsq(x.f.id)}, 'fin')">📄 فاتورة</button>
           <button class="btn btn-brand sm" onclick="openPaymentForm(${jsq(x.f.id)})">+ دفعة</button></td></tr>`; }).join('')
         || '<tr><td colspan="5" class="empty">لا توجد حصص أو مستحقات في الفترة</td></tr>'}
+    </tbody></table></div>
+
+    <div class="section-title"><h2>حصص كل طالب في الفترة</h2></div>
+    <input class="input search mb" placeholder="ابحث باسم الطالب أو الأسرة…" oninput="_stuFilter(this.value)">
+    <div class="card scrollx"><table id="stu-count-table"><thead><tr><th>الطالب</th><th>الحصص</th><th>المواد</th><th>الوقت</th><th>المبلغ</th></tr></thead><tbody>
+      ${perStudentSummary(done).sort((a, b) => b.n - a.n).map(x => { const fam = x.st ? byId(state.families, x.st.family_id) : null;
+        return `<tr class="clickable" data-q="${esc(normAr((x.st?.name || '') + ' ' + (fam?.name || '')))}" onclick="openStudentProfile(${jsq(x.st?.id)})"><td><b>${esc(x.st?.name || '')}</b><div class="sub small">${esc(fam?.name || '')}</div></td>
+        <td class="num"><b>${x.n}</b></td><td class="small">${Object.entries(x.subj).map(([k, n]) => `${esc(k)} ${n}`).join('، ')}</td>
+        <td class="num">${durLabel(x.mins)}</td><td class="num">${fmt(x.amt, 2)} ${fam?.currency || ''}</td></tr>`; }).join('')
+        || '<tr><td colspan="5" class="empty">لا توجد حصص في الفترة</td></tr>'}
     </tbody></table></div>
 
     <div class="section-title"><h2>الدفعات المستلمة في الفترة</h2></div>
@@ -1677,6 +1714,7 @@ function renderFinance() {
       <p class="sub small" style="margin:8px 0 0">سعر السوق بيتثبت على كل حصة لحظة تسجيلها "تمت" (لحساب الإيراد والهامش). الفلوس اللي وصلت فعلاً بتتسجل مع كل دفعة، والفرق بينهم بيظهر في "فرق العملة".</p>
     </div>`;
 }
+window._stuFilter = v => { const w = normAr(v); document.querySelectorAll('#stu-count-table tbody tr[data-q]').forEach(r => r.classList.toggle('hidden', !!w && !r.dataset.q.includes(w))); };
 function openFxForm() {
   const rows = (state.fxRows || []).filter(r => r.currency !== 'EGP');
   const body = rows.map(r => `<div class="card item mb" style="background:var(--bg)">
@@ -2316,6 +2354,12 @@ async function openStudentProfile(studentId) {
       <div class="card stat"><div class="v"><span class="badge ${k.cls}">${k.rate == null ? '—' : Math.round(k.rate * 100) + '%'}</span></div><div class="l">${k.label}</div></div>
       <div class="card stat"><div class="v num ${b.balance < 0 ? 'neg' : 'pos'}" style="font-size:16px">${fmt(b.balance, 0)} ${fam?.currency}</div><div class="l">رصيد الأسرة</div></div>
     </div>
+    ${(() => { const nw = new Date(); const months = [0, -1, -2].map(i => { const from = new Date(nw.getFullYear(), nw.getMonth() + i, 1), to = new Date(nw.getFullYear(), nw.getMonth() + i + 1, 1);
+        const list = rows.filter(r => r.status === 'done' && sStart(r) >= from.getTime() && sStart(r) < to.getTime()); const x = perStudentSummary(list)[0];
+        return { label: from.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' }), x }; });
+      return `<h3>الحصص اللي تمت</h3><div class="card scrollx mb"><table><thead><tr><th>الشهر</th><th>الحصص</th><th>المواد</th><th>الوقت</th></tr></thead><tbody>
+        ${months.map(m => `<tr><td>${m.label}</td><td class="num"><b>${m.x?.n || 0}</b></td><td class="small">${m.x ? Object.entries(m.x.subj).map(([k, n]) => `${esc(k)} ${n}`).join('، ') : '—'}</td><td class="num">${m.x ? durLabel(m.x.mins) : '—'}</td></tr>`).join('')}
+        </tbody></table></div>`; })()}
     ${plansOf(st.id).length ? `<h3>المواد</h3><div class="plan-lines mb">${plansOf(st.id).map(p => `<span class="plan ${p.tutor_id ? '' : 'no-tutor'}">${esc(planLabel(p))}</span>`).join('')}</div>` : ''}
     ${st.notes ? `<div class="warn-note small mb">⚠️ ${esc(st.notes)}</div>` : ''}
     <h3>الحصص الجاية</h3>${upcoming.map(line).join('') || '<div class="sub small mb">مفيش حصص جاية محجوزة</div>'}
