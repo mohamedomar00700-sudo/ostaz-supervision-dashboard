@@ -113,7 +113,8 @@
       <div id="day-panel">
         <div class="stats" id="day-stats"></div>
         <div class="toolbar" style="margin-bottom:6px"><div class="chips" id="filters" style="margin:0"></div>
-          <button class="btn btn-ghost sm" onclick="openTutorSchedules()">📋 جداول المعلمين</button></div>
+          <span class="row-gap"><button class="btn btn-ghost sm" id="btn-reports" onclick="openReports()">📝 التقارير</button>
+          <button class="btn btn-ghost sm" onclick="openTutorSchedules()">📋 جداول المعلمين</button></span></div>
         <div id="daily-list" class="list"></div>
       </div>
       <div id="week-panel" class="hidden"></div>
@@ -218,6 +219,6 @@
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
 <script src="tutor.js?v=rep2"></script>
-<script src="app.js?v=rep2"></script>
+<script src="app.js?v=rep3"></script>
 </body>
 </html>

@@ -2112,6 +2112,7 @@ function renderAttention() {
   const mr = (state.missingReports || []).length;
   if (mr) items.push(`<button class="att att-warn" onclick="openMissingReports()">⏳ <b>${mr}</b> ${mr === 1 ? 'حصة لسه مالهاش تقرير' : 'حصص لسه مالهاش تقرير'} من المعلمة</button>`);
   const nr = (state.reports || []).filter(r => !r.sent_at).length;
+  const rb = document.getElementById('btn-reports'); if (rb) { rb.textContent = nr ? `📝 التقارير (${nr} جديد)` : '📝 التقارير'; rb.classList.toggle('btn-brand', !!nr); rb.classList.toggle('btn-ghost', !nr); }
   if (nr) items.push(`<button class="att att-next" onclick="openReports()">📝 <b>${nr}</b> ${nr === 1 ? 'تقرير حصة جديد' : 'تقارير حصص جديدة'} — ابعتها للأسر</button>`);
   const un = state.unrecorded || [];
   if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${occurrences(un).length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
