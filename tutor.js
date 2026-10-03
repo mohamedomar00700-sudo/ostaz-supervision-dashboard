@@ -92,10 +92,11 @@ function tOcc(rows) {
 const tMins = s => Number(s.actual_minutes || s.duration_minutes || 60);
 const tCancelled = s => String(s.status).startsWith('cancelled');
 const tTime = iso => fmtTime(iso, CAIRO_TZ);
-const tEnd = s => new Date(new Date(s.scheduled_at).getTime() + (s.duration_minutes || 60) * 60e3).toISOString();
+const tDur = s => s.status === 'done' ? tMins(s) : Number(s.duration_minutes || 60); // اللي اتعمل فعلاً بعد التسجيل
+const tEnd = s => new Date(new Date(s.scheduled_at).getTime() + tDur(s) * 60e3).toISOString();
 
 function tutorSessionCard(s, compact) {
-  const start = new Date(s.scheduled_at).getTime(), end = start + (s.duration_minutes || 60) * 60e3, now = Date.now();
+  const start = new Date(s.scheduled_at).getTime(), end = start + tDur(s) * 60e3, now = Date.now();
   const live = !tCancelled(s) && s.status !== 'done' && now >= start - 10 * 60e3 && now <= end;
   const soon = !tCancelled(s) && s.status === 'scheduled' && start > now && start - now < 60 * 60e3;
   const badge = tCancelled(s) ? '<span class="badge b-cancel">اتلغت</span>' : s.status === 'done' ? '<span class="badge b-done">تمت</span>'
@@ -105,7 +106,7 @@ function tutorSessionCard(s, compact) {
   return `<div class="card item session ${live ? 's-now' : ''}" style="${tCancelled(s) ? 'opacity:.55' : ''}">
     <div class="left"><div class="time">${tTime(s.scheduled_at)}</div><div class="sub small">حتى ${tTime(tEnd(s))}</div></div>
     <div><div class="item-head"><div class="item-title">${who}${kind}</div>${badge}</div>
-      <div class="meta">${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b>${s.en ? ' <span class="badge b-en">EN</span>' : ''}</span>` : ''}<span>المدة: <b>${durLabel(s.duration_minutes || 60)}</b></span></div>
+      <div class="meta">${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b>${s.en ? ' <span class="badge b-en">EN</span>' : ''}</span>` : ''}<span>المدة: <b>${durLabel(tDur(s))}</b>${tDur(s) !== Number(s.duration_minutes || 60) ? ` <span class="${tDur(s) > (s.duration_minutes || 60) ? 'pos' : 'neg'}">(بدل ${durLabel(s.duration_minutes || 60)})</span>` : ''}</span>${s.status === 'done' ? `<span>بتتحسب: <b>${fmtU(tDur(s) / 60)} حصة</b></span>` : ''}</div>
       ${tPendingFor(s) ? `<div class="cancel-info mt" style="background:var(--warn-soft);color:var(--warn)">⏳ طلب ${esc(T_REQ[tPendingFor(s).kind].l)} مستني رد الإشراف</div>` : ''}
       ${!tCancelled(s) && s.status !== 'done' ? `<div class="actions">
         ${!tPendingFor(s) ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">✏️ طلب تغيير</button>` : ''}
@@ -126,8 +127,8 @@ function tutorRender() {
     const next = occ.find(s => !tCancelled(s) && s.status === 'scheduled' && new Date(s.scheduled_at).getTime() > Date.now());
     el.innerHTML = `
       <div class="stats">
-        <div class="card stat"><div class="v">${todayList.length}</div><div class="l">حصص النهارده</div></div>
-        <div class="card stat"><div class="v num">${fmtU(todayList.reduce((a, s) => a + (s.duration_minutes || 60), 0) / 60)}</div><div class="l">ساعة النهارده</div></div>
+        <div class="card stat"><div class="v num">${fmtU(todayList.reduce((a, s) => a + tDur(s), 0) / 60)}</div><div class="l">حصص النهارده${todayList.length ? ` <span class="small">(${todayList.length} ${todayList.length === 1 ? 'لقاء' : 'لقاءات'})</span>` : ''}</div></div>
+        <div class="card stat"><div class="v num">${fmtU(todayList.filter(s => s.status === 'done').reduce((a, s) => a + tDur(s), 0) / 60)}</div><div class="l">اتسجلت تمت</div></div>
         <div class="card stat"><div class="v" style="font-size:17px">${next ? tTime(next.scheduled_at) : '—'}</div><div class="l">${next ? 'الحصة الجاية: ' + esc(next.group_key ? next.group_name || 'مجموعة' : next.student_name) : 'مفيش حصص جاية'}</div></div>
       </div>
       ${tutorRequestsHtml()}
@@ -264,20 +265,23 @@ function tutorRequest(sessionId, studentId, subject, preset) {
       ${rq.kind === 'add_session' ? `<div class="field-row"><div class="field"><label>${rq.scope === 'permanent' ? 'أول حصة' : 'يوم الحصة'}</label><input id="rq-date" type="date" class="input" value="${esc(rq.date || dateStr(d0))}" onchange="_rq.date=this.value"></div>
         <div class="field"><label>الساعة (بتوقيت القاهرة)</label><input id="rq-time" type="time" class="input" value="${esc(rq.time || t0)}" onchange="_rq.time=this.value"></div></div>
         <div class="field"><label>المدة</label><div class="chips" style="margin:0">${[30, 45, 60, 90, 120, 150, 180, 240].map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>
+        ${hmHtml('rq_hm', rq.mins)}
         <div class="field"><label>الحصة دي</label><div class="seg-wrap"><button type="button" class="chip ${rq.scope === 'once' ? 'active' : ''}" onclick="_rq.scope='once'; _rqRender()">مرة واحدة (زيادة / تعويض)</button>
           <button type="button" class="chip ${rq.scope === 'permanent' ? 'active' : ''}" onclick="_rq.scope='permanent'; _rqRender()">🔁 ميعاد ثابت كل أسبوع</button></div></div>` : ''}
-      ${rq.kind === 'extend' ? `<div class="field"><label>المدة الفعلية للحصة</label><div class="chips" style="margin:0">${[15, 30, 45, 60, 90].map(x => (s.duration_minutes || 60) + x).map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>` : ''}
+      ${rq.kind === 'extend' ? `<div class="field"><label>المدة الفعلية للحصة</label><div class="chips" style="margin:0">${[15, 30, 45, 60, 90].map(x => (s.duration_minutes || 60) + x).map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>${hmHtml('rq_hm', rq.mins)}` : ''}
       <div class="field"><label>${K.need ? 'السبب' : rq.kind === 'add_session' ? 'السبب (تعويض؟ امتحان؟) — اختياري' : 'ملاحظة (اختياري)'}</label><textarea id="rq-reason" class="input" placeholder="${rq.kind === 'add_session' ? 'مثال: تعويض حصة الأحد اللي اتلغت / الطالب عنده امتحان' : rq.kind === 'remove_student' ? 'مثال: الطالب مش ملتزم / مش مناسب لمستوايا' : rq.kind === 'cancel' ? 'مثال: ظرف طارئ' : 'اكتبي التفاصيل'}" oninput="_rq.reason=this.value">${esc(rq.reason)}</textarea></div>
       <div id="form-error" class="err hidden"></div>
       <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_rqSend()">إرسال للإشراف</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>
       <p class="sub small">الطلب بيروح للإشراف يوافق عليه، وبعدها التغيير بيتنفذ ويتبلغ لولي الأمر. ⚠️ أي تغيير مهم لازم كمان تبلّغي بيه الإشراف على الجروب.</p>`;
   };
-  window._rqRender = render;
-  openModal(sessionId ? 'طلب تغيير في الحصة' : rq.kind === 'add_session' ? '➕ طلب حصة إضافية' : 'طلب بخصوص الطالب', ''); render();
+  window._rqRender = () => { render(); hmWire('rq_hm', v => { rq.mins = v; document.querySelectorAll('#modal-body .chips .chip').forEach(c => c.classList.remove('active')); }); };
+  openModal(sessionId ? 'طلب تغيير في الحصة' : rq.kind === 'add_session' ? '➕ طلب حصة إضافية' : 'طلب بخصوص الطالب', ''); window._rqRender();
   window._rqSend = () => runSubmit(async () => {
     const K = T_REQ[rq.kind];
     if (K.need && !rq.reason.trim()) return formError('اكتبي السبب عشان الإشراف يقدر يتصرف');
     let at = null;
+    if (rq.kind === 'add_session' && !(rq.mins >= 15 && rq.mins <= 240)) return formError('المدة لازم تكون بين ربع ساعة و4 ساعات');
+    if (rq.kind === 'extend' && !(rq.mins >= 5 && rq.mins <= 720)) return formError('اكتبي المدة الفعلية صح');
     if (rq.kind === 'add_session') {
       const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`);
       if (isNaN(d)) return formError('اختاري اليوم والساعة');

@@ -524,6 +524,33 @@ async function setStatus(id, status, extra = {}) {
 }
 
 /* ----- تسجيل "تمت" مع المدة الفعلية (لو الطالب طلب وقت زيادة) ----- */
+// مدة بإيدك: ساعات + دقايق (لأي مدة زي ساعة وتلت أو ساعة و50 دقيقة)
+function hmHtml(id, mins, label = 'أو اكتب المدة بإيدك') {
+  mins = Math.round(Number(mins) || 0);
+  return `<div class="field"><label>${label}</label><div class="hm-row">
+    <input id="${id}_h" class="input hm" type="number" min="0" max="12" inputmode="numeric" value="${Math.floor(mins / 60)}"><span>ساعة</span>
+    <input id="${id}_m" class="input hm" type="number" min="0" max="59" inputmode="numeric" value="${mins % 60}"><span>دقيقة</span>
+    <b id="${id}_l" class="hm-l">${mins ? '= ' + durLabel(mins) : ''}</b></div></div>`;
+}
+// يحوّل خانة "المدة بالدقائق" في الفورم لساعات + دقايق (القيمة الحقيقية بتفضل في الخانة المخفية)
+function attachHm(durIn, onChange) {
+  durIn.type = 'hidden';
+  const chips = document.getElementById('dur-chips');
+  (chips || durIn).insertAdjacentHTML('afterend', `<div class="hm-row mt">
+    <input id="f_dhm_h" class="input hm" type="number" min="0" max="12" inputmode="numeric"><span>ساعة</span>
+    <input id="f_dhm_m" class="input hm" type="number" min="0" max="59" inputmode="numeric"><span>دقيقة</span><b id="f_dhm_l" class="hm-l"></b></div>`);
+  const hm = hmWire('f_dhm', v => { durIn.value = v; onChange && onChange(); });
+  hm.set(durIn.value);
+  return { sync() { const a = document.activeElement; if (!a || !String(a.id).startsWith('f_dhm')) hm.set(durIn.value); } };
+}
+function hmWire(id, onChange) {
+  const H = document.getElementById(id + '_h'), M = document.getElementById(id + '_m'), L = document.getElementById(id + '_l');
+  if (!H) return { set() {}, get: () => 0 };
+  const get = () => Math.max(0, Math.round(Number(H.value) || 0)) * 60 + Math.max(0, Math.round(Number(M.value) || 0));
+  const upd = () => { const v = get(); L.textContent = v ? '= ' + durLabel(v) : ''; onChange && onChange(v); };
+  H.addEventListener('input', upd); M.addEventListener('input', upd);
+  return { get, set(v) { v = Math.round(Number(v) || 0); H.value = Math.floor(v / 60); M.value = v % 60; L.textContent = v ? '= ' + durLabel(v) : ''; } };
+}
 function openDone(id) {
   const s = findSession(id); if (!s) return;
   if (s.group_key) return openGroupDone(s.group_key);
@@ -533,7 +560,7 @@ function openDone(id) {
   openModal(s.status === 'done' ? 'تعديل مدة الحصة' : 'تسجيل الحصة: تمت ✓', `
     <p class="sub">المدة المخططة: <b>${durLabel(planned)}</b>. لو الحصة اتمدت أو اتقصرت اختار المدة الفعلية، والحساب هيتعدل للأسرة وللمعلم تلقائياً.</p>
     <div class="chips" id="dur-chips">${opts.map(m => `<button type="button" class="chip ${m === current ? 'active' : ''}" data-m="${m}" onclick="_pickDur(${m})">${durLabel(m)}${m === planned ? ' (المخطط)' : m > planned ? ` (+${m - planned}د)` : ''}</button>`).join('')}</div>
-    <div class="field"><label>أو اكتب المدة بالدقائق</label><input id="f_actual" class="input" type="number" min="5" max="720" step="5" inputmode="numeric" value="${current}"></div>
+    <input id="f_actual" type="hidden" value="${current}">${hmHtml('f_hm', current)}
     <div id="done-preview" class="card item" style="background:var(--bg)"></div>
     <div id="form-error" class="err hidden"></div>
     <div class="modal-foot"><button class="btn btn-ok" id="form-submit" onclick="_saveDone()">حفظ</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>`);
@@ -549,8 +576,9 @@ function openDone(id) {
       <span>الهامش: <b>${fmt(toEGP(fam, s.student_currency) - tut)} EGP</b></span></div>
       <div class="sub small mt">محسوبة على سعر ساعة ${fmt(s.student_price, 2)} ${s.student_currency} للأسرة و${fmt(s.tutor_cost_egp)} جنيه للمعلم.</div>`;
   };
-  window._pickDur = m => { inp.value = m; preview(); };
-  inp.addEventListener('input', preview); preview();
+  const hm = hmWire('f_hm', v => { inp.value = v; preview(); });
+  window._pickDur = m => { inp.value = m; hm.set(m); preview(); };
+  preview();
   window._saveDone = async () => {
     const m = Math.round(Number(inp.value));
     if (!(m >= 5 && m <= 720)) return formError('المدة لازم تكون بين 5 دقايق و12 ساعة');
@@ -780,7 +808,7 @@ async function openSessionForm(id, prefill = {}) {
     { name: 'subject', label: 'المادة', value: s?.subject ?? prefill.subject, placeholder: 'مثال: رياضيات', list: [...new Set([...SUBJECT_LIST, ...state.subjects.map(x => x.subject)])] },
     [{ name: 'date', label: 'التاريخ', type: 'date', required: true, value: dateStr(when) },
      { name: 'time', label: 'الوقت (بتوقيتك)', type: 'time', required: true, value: timeStr(when) }],
-    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s?.duration_minutes ?? prefill.duration ?? 60, step: 5, min: 5 },
+    { name: 'duration_minutes', label: 'المدة', type: 'number', required: true, value: s?.duration_minutes ?? prefill.duration ?? 60, step: 5, min: 5 },
     [{ name: 'student_price', label: 'سعر الساعة للأسرة', type: 'number', required: true, value: s?.student_price, hint: 'بعملة الأسرة' },
      { name: 'tutor_cost_egp', label: 'أجر الساعة للمعلم (EGP)', type: 'number', required: true, value: s?.tutor_cost_egp }],
     { name: 'meeting_link', label: 'رابط الحصة', value: s?.meeting_link, placeholder: 'meet.google.com/…' },
@@ -796,7 +824,9 @@ async function openSessionForm(id, prefill = {}) {
   document.getElementById('wrap_duration_minutes').insertAdjacentHTML('beforeend',
     `<div class="chips" id="dur-chips" style="margin:6px 0 0">${DUR_CHOICES.map(m => `<button type="button" class="chip" data-m="${m}" onclick="_setDur(${m})">${durLabel(m)}</button>`).join('')}</div>`);
   document.getElementById('wrap_tutor_cost_egp').parentElement.insertAdjacentHTML('afterend', '<div id="sess-total" class="card item" style="background:var(--bg);margin-bottom:12px"></div>');
+  let hmD = null;
   const totals = () => {
+    hmD && hmD.sync();
     const st = byId(state.students, stSel.value); const fam = st ? byId(state.families, st.family_id) : null;
     const m = Number(durIn.value) || 60, p = Number($('student_price').value) || 0, c = Number($('tutor_cost_egp').value) || 0;
     document.querySelectorAll('#dur-chips .chip').forEach(x => x.classList.toggle('active', Number(x.dataset.m) === m));
@@ -807,6 +837,7 @@ async function openSessionForm(id, prefill = {}) {
       ${cur ? `<span>الهامش <b>${fmt(toEGP(p * m / 60, cur) - c * m / 60)} EGP</b></span>` : ''}</div>`;
   };
   window._setDur = m => { durIn.value = m; totals(); };
+  hmD = attachHm(durIn, totals);
   let prevKind = $('kind').value;
   const kindChanged = () => {
     const k = $('kind').value;
@@ -2229,7 +2260,7 @@ function openPostponeOld(id) {
   openModal('تأجيل / تغيير موعد الحصة', formHtml([
     [{ name: 'date', label: 'التاريخ الجديد', type: 'date', required: true, value: dateStr(d) },
      { name: 'time', label: 'الوقت الجديد (بتوقيتك)', type: 'time', required: true, value: timeStr(d) }],
-    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s.duration_minutes || 60, step: 5, min: 5 },
+    { name: 'duration_minutes', label: 'المدة', type: 'number', required: true, value: s.duration_minutes || 60, step: 5, min: 5 },
     { name: 'reason', label: 'السبب (اختياري — بيتكتب في ملاحظات الحصة)', placeholder: 'مثال: طلب ولي الأمر' },
   ], 'تأجيل الحصة'));
   window._formSubmit = () => runSubmit(async () => {
@@ -2681,7 +2712,7 @@ async function openGroupDone(key) {
     </div><div class="hint">اللي مش متعلّم عليه بيتسجل "لم يحضر" ومش بيتحسب على أسرته، ونصيبه بيتخصم من أجر المعلمة في الحصة دي.</div></div>
     <div class="field"><label>المدة الفعلية</label>
       <div class="chips" id="dur-chips">${opts.map(m => `<button type="button" class="chip" data-m="${m}" onclick="_pickDur(${m})">${durLabel(m)}${m === planned ? ' (المخطط)' : ''}</button>`).join('')}</div>
-      <input id="f_actual" class="input" type="number" min="5" max="720" step="5" inputmode="numeric" value="${current}"></div>
+      <input id="f_actual" type="hidden" value="${current}">${hmHtml('f_hm', current)}</div>
     <div id="done-preview" class="card item" style="background:var(--bg)"></div>
     <div id="form-error" class="err hidden"></div>
     <div class="modal-foot"><button class="btn btn-ok" id="form-submit" onclick="_saveGroupDone()">حفظ</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>`);
@@ -2700,8 +2731,9 @@ async function openGroupDone(key) {
       <div class="sub small mt">كل طالب بيتحسب بسعر ساعته (${att.map(r => `${byId(state.students, r.student_id)?.name || ''} ${fmt(r.student_price, 2)} ${r.student_currency}`).join('، ') || '—'}).</div>`;
   };
   window._gdPrev = preview;
-  window._pickDur = m => { inp.value = m; preview(); };
-  inp.addEventListener('input', preview); preview();
+  const hm = hmWire('f_hm', v => { inp.value = v; preview(); });
+  window._pickDur = m => { inp.value = m; hm.set(m); preview(); };
+  preview();
   window._saveGroupDone = () => runSubmit(async () => {
     const m = Math.round(Number(inp.value));
     if (!(m >= 5 && m <= 720)) return formError('المدة لازم تكون بين 5 دقايق و12 ساعة');
@@ -2815,9 +2847,10 @@ async function openGroupPostpone(key) {
   openModal('تأجيل حصة المجموعة', formHtml([
     [{ name: 'date', label: 'التاريخ الجديد', type: 'date', required: true, value: dateStr(d) },
      { name: 'time', label: 'الوقت الجديد (بتوقيتك)', type: 'time', required: true, value: timeStr(d) }],
-    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s.duration_minutes || 60, step: 5, min: 5 },
+    { name: 'duration_minutes', label: 'المدة', type: 'number', required: true, value: s.duration_minutes || 60, step: 5, min: 5 },
     { name: 'reason', label: 'السبب (اختياري)', placeholder: 'مثال: طلب المعلمة' },
   ], 'تأجيل المجموعة'));
+  attachHm(document.getElementById('f_duration_minutes'));
   window._formSubmit = () => runSubmit(async () => {
     const start = new Date(`${fv('date')}T${fv('time')}`);
     if (isNaN(start)) return formError('التاريخ أو الوقت غير صحيح');
@@ -2886,7 +2919,7 @@ async function openGroupForm(key, prefill = {}) {
     { name: 'add_student', label: 'الطلاب', type: 'select', searchable: true, placeholder: '+ أضف طالب للمجموعة…', options: studentOptions() },
     [{ name: 'date', label: 'التاريخ', type: 'date', required: true, value: dateStr(when) },
      { name: 'time', label: 'الوقت (بتوقيتك)', type: 'time', required: true, value: timeStr(when) }],
-    { name: 'duration_minutes', label: 'المدة (دقيقة)', type: 'number', required: true, value: s?.duration_minutes ?? prefill.duration ?? 60, step: 5, min: 5 },
+    { name: 'duration_minutes', label: 'المدة', type: 'number', required: true, value: s?.duration_minutes ?? prefill.duration ?? 60, step: 5, min: 5 },
     { name: 'group_rate_egp', label: 'أجر الساعة للمعلم عن المجموعة كلها (EGP)', type: 'number', required: true, value: s?.group_rate_egp,
       hint: 'سعر المجموعة كلها. بيتقسم على عدد الطلاب، ولو طالب غاب بيتخصم نصيبه من الحصة دي (150 ج ÷ 3 = 50 لكل طالب → لو واحد غاب المعلمة تاخد 100).' },
     { name: 'meeting_link', label: 'رابط الحصة', value: s?.meeting_link, placeholder: 'meet.google.com/…' },
@@ -2907,7 +2940,9 @@ async function openGroupForm(key, prefill = {}) {
     `<div class="chips" id="dur-chips" style="margin:6px 0 0">${DUR_CHOICES.map(m => `<button type="button" class="chip" data-m="${m}" onclick="_setDur(${m})">${durLabel(m)}</button>`).join('')}</div>`);
   document.getElementById('wrap_group_rate_egp').insertAdjacentHTML('afterend', '<div id="sess-total" class="card item" style="background:var(--bg);margin-bottom:12px"></div>');
   const durIn = $('duration_minutes');
+  let hmD = null;
   const totals = () => {
+    hmD && hmD.sync();
     const m = Number(durIn.value) || 60, rate = Number($('group_rate_egp').value) || 0;
     document.querySelectorAll('#dur-chips .chip').forEach(x => x.classList.toggle('active', Number(x.dataset.m) === m));
     const rev = members.reduce((a, x) => { const f = byId(state.families, byId(state.students, x.sid)?.family_id); return a + toEGP(Number(x.price || 0) * m / 60, f?.currency); }, 0);
@@ -2930,6 +2965,7 @@ async function openGroupForm(key, prefill = {}) {
   window._gm = members; window._gmTot = totals;
   window._gmDel = i => { members.splice(i, 1); renderMembers(); };
   window._setDur = m => { durIn.value = m; totals(); };
+  hmD = attachHm(durIn, totals);
   $('add_student').addEventListener('change', () => {
     const sid = $('add_student').value; if (!sid) return;
     if (!members.some(x => x.sid === sid)) {
@@ -3145,6 +3181,7 @@ async function openReschedule(id, preset = {}) {
       ${R.what !== 'tutor' ? `<div class="field-row"><div class="field"><label>المعاد الجديد</label><input type="date" class="input" value="${R.date}" onchange="_rs.date=this.value; _rsRender()"></div>
         <div class="field"><label>الساعة (بتوقيتك)</label><input type="time" class="input" value="${R.time}" onchange="_rs.time=this.value; _rsRender()"></div></div>
         <div class="field"><label>المدة</label><div class="chips" style="margin:0">${[30, 45, 60, 90, 120, 150, 180, 240].map(m => `<button type="button" class="chip ${R.dur === m ? 'active' : ''}" onclick="_rs.dur=${m}; _rsRender()">${durLabel(m)}</button>`).join('')}</div></div>
+        ${hmHtml('rs_hm', R.dur)}
         ${tz !== CAIRO_TZ ? `<div class="sub small mb">= ${c.flag} ${fmtTime(new Date(`${R.date}T${R.time}`).toISOString(), tz)} بتوقيت ${c.tzName}</div>` : ''}` : ''}
       ${R.what !== 'time' ? `<div class="field"><label>المعلمة البديلة</label><select class="input" onchange="_rs.tutor=this.value; _rsRender()">${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === R.tutor ? 'selected' : ''}>${esc(t.name)}${t.id === s.tutor_id ? ' (الحالية)' : ''}</option>`).join('')}</select>
         ${tutorChanged ? `<div class="hint">أجرها: ${fmt(tutorRateFor(R.tutor, s.student_id) ?? 0)} ج/ساعة — الحصة بتتحسب للي ادّتها فعلاً.</div>` : ''}</div>` : ''}
@@ -3162,11 +3199,12 @@ async function openReschedule(id, preset = {}) {
       <div id="form-error" class="err hidden"></div>
       <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_rsSave()">تأكيد التغيير${nAff ? ` (${nAff + 1} حصص)` : ''}</button><button class="btn btn-ghost" onclick="closeModal()">رجوع</button></div>`;
   };
-  window._rsRender = render;
-  openModal(preset.title || 'تغيير معاد / معلمة الحصة', ''); render();
+  window._rsRender = () => { render(); hmWire('rs_hm', v => { R.dur = v; }); };
+  openModal(preset.title || 'تغيير معاد / معلمة الحصة', ''); window._rsRender();
   window._rsSave = () => runSubmit(async () => {
     const changeTime = R.what !== 'tutor', changeTutor = R.what !== 'time' && R.tutor !== s.tutor_id;
     if (!changeTime && !changeTutor) return formError('اختار المعلمة البديلة');
+    if (changeTime && !(R.dur >= 5 && R.dur <= 720)) return formError('المدة لازم تكون بين 5 دقايق و12 ساعة');
     const newStart = changeTime ? new Date(`${R.date}T${R.time}`) : new Date(s.scheduled_at);
     if (isNaN(newStart)) return formError('التاريخ أو الوقت غير صحيح');
     const affected = R.scope === 'once' ? [] : R.scope === 'temp' ? series.slice(0, R.n) : series;
