@@ -360,6 +360,10 @@ function sessionView(s) {
   const tu = byId(state.tutors, s.tutor_id);
   return { st, fam, tu };
 }
+// الطالب بيدرس بالإنجليزي (لغات / دولي)؟
+const isEN = studentId => { const st = byId(state.students, studentId); return !!st && st.curriculum && st.curriculum !== 'arabic'; };
+const enTag = studentId => isEN(studentId) ? ' <span class="badge b-en" title="منهج لغات / دولي — الحصة بالإنجليزي">EN</span>' : '';
+const enTxt = studentId => isEN(studentId) ? ' (EN)' : '';
 const sMins = s => Number(s.actual_minutes || s.duration_minutes || 60);
 const KINDS = { regular: 'حصة', revision: 'مراجعة', trial: 'تجريبية', group: 'مجموعة' };
 const kindWord = s => KINDS[s.kind] || 'حصة';
@@ -485,7 +489,7 @@ function sessionCard(s) {
       </div>
       <div class="meta">
         <span>المعلم: <b>${esc(tu?.name || '—')}</b></span>
-        ${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b></span>` : ''}
+        ${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b>${enTag(s.student_id)}</span>` : ''}
         <span>المدة: <b>${durLabel(c.mins)}</b>${extended ? ` <span class="${s.actual_minutes > s.duration_minutes ? 'pos' : 'neg'}">(${s.actual_minutes > s.duration_minutes ? 'اتمدت' : 'اتقصرت'} — المخطط ${durLabel(s.duration_minutes)})</span>` : ''}</span>
         ${s.meeting_link ? `<span><a href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">رابط الحصة ↗</a></span>` : (open ? '<span class="neg">لا يوجد رابط</span>' : '')}
       </div>
@@ -683,7 +687,7 @@ function buildReminder(s, who) {
   const tn = tu?.name || '';
   return `أهلاً ${/^(أ\.|أ\/|أستاذ|م\.|د\.)/.test(tn) ? tn : 'أ/ ' + tn} 👋
 تذكير بحصة ${relDayLabel(s.scheduled_at, CAIRO_TZ)} مع الطالب/ة ${st?.name || ''} (${st?.grade_level || ''})${kindLine}
-⏰ الساعة ${fmtTime(s.scheduled_at, CAIRO_TZ)} بتوقيت القاهرة${durLine}${s.subject ? `\n📚 المادة: ${s.subject}` : ''}
+⏰ الساعة ${fmtTime(s.scheduled_at, CAIRO_TZ)} بتوقيت القاهرة${durLine}${s.subject ? `\n📚 المادة: ${s.subject}${isEN(s.student_id) ? ' (بالإنجليزي)' : ''}` : ''}
 🔗 رابط الحصة: ${link}
 
 برجاء الالتزام بالموعد، ولو الطالب طلب وقت زيادة بلّغينا بعد الحصة بالمدة الفعلية. أي مواد أو ملاحظات للطالب ابعتيها لنا هنا وإحنا نوصّلها.
@@ -948,7 +952,7 @@ function renderWeek() {
         ${list.map(s => { const v = sessionView(s); const b = s.group_key ? groupStatus(s._members) : needsConfirm(s) ? { label: 'محتاجة تسجيل', cls: 'b-pending' } : STATUS[s.status];
           return `<button class="wk-row" onclick="${s.group_key ? `openGroupActions(${jsq(s.group_key)})` : `openSessionForm(${jsq(s.id)})`}">
             <span class="num"><b>${timeStr(new Date(s.scheduled_at))}</b> <span class="sub small">${durLabel(sMins(s))}</span></span>
-            <span>${s.group_key ? `👥 ${esc(s.group_name || 'مجموعة')} <span class="sub small">(${esc(groupNames(s._members))})</span>` : esc(v.st?.name || '') + ' ' + kindBadge(s)} <span class="sub small">${esc(s.subject || '')} · ${esc(v.tu?.name || '')}</span></span>
+            <span>${s.group_key ? `👥 ${esc(s.group_name || 'مجموعة')} <span class="sub small">(${esc(groupNames(s._members))})</span>` : esc(v.st?.name || '') + ' ' + kindBadge(s)} <span class="sub small">${esc(s.subject || '')}${s.group_key ? '' : enTxt(s.student_id)} · ${esc(v.tu?.name || '')}</span></span>
             <span class="badge ${b.cls}">${b.label}</span></button>`; }).join('')}
       </div>`;
     }).join('')}`;
@@ -2086,7 +2090,7 @@ const SIGN_F = 'فريق الإشراف – أكاديمية أستاذ أونل
 // جدول اليوم لكل معلمة
 function tutorDayMessage(tu, list, dayIso) {
   const lines = occurrences(list).map(s => { const v = sessionView(s);
-    return `• ${fmtTime(s.scheduled_at, CAIRO_TZ)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), CAIRO_TZ)}: ${s.group_key ? `👥 ${s.group_name || 'مجموعة'}: ${groupNames(s._members)}` : `${v.st?.name || ''} (${v.st?.grade_level || ''})`}${s.subject ? ' — ' + s.subject : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ` [${kindWord(s)}]`}${s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : ''}`; }).join('\n');
+    return `• ${fmtTime(s.scheduled_at, CAIRO_TZ)} – ${fmtTime(new Date(sStart(s) + (s.duration_minutes || 60) * 60e3).toISOString(), CAIRO_TZ)}: ${s.group_key ? `👥 ${s.group_name || 'مجموعة'}: ${groupNames(s._members)}` : `${v.st?.name || ''} (${v.st?.grade_level || ''})`}${s.subject ? ' — ' + s.subject + enTxt(s.student_id) : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ` [${kindWord(s)}]`}${s.meeting_link ? `\n   🔗 ${linkHref(s.meeting_link)}` : ''}`; }).join('\n');
   return `${greetTutor(tu?.name)}
 جدول حصصك ${relDayLabel(dayIso, CAIRO_TZ)} (${fmtDate(dayIso, CAIRO_TZ)}) بتوقيت القاهرة:
 ${lines}
@@ -2561,7 +2565,7 @@ function groupCard(rows) {
       </div>
       <div class="meta">
         <span>المعلم: <b>${esc(tu?.name || '—')}</b></span>
-        ${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b></span>` : ''}
+        ${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b>${enTag(s.student_id)}</span>` : ''}
         <span>المدة: <b>${durLabel(m.mins)}</b>${extended ? ` <span class="${s.actual_minutes > s.duration_minutes ? 'pos' : 'neg'}">(المخطط ${durLabel(s.duration_minutes)})</span>` : ''}</span>
         ${s.meeting_link ? `<span><a href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">رابط الحصة ↗</a></span>` : (open ? '<span class="neg">لا يوجد رابط</span>' : '')}
       </div>

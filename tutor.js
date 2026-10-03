@@ -44,7 +44,7 @@ async function tutorPreviewRows(from, to) { // نفس شكل tutor_sessions بس
   const rows = await q(sb.from('sessions').select('*').eq('tutor_id', T.preview).gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).order('scheduled_at'));
   return rows.map(s => { const st = byId(state.students, s.student_id) || {};
     const pl = state.plans.find(p => p.student_id === s.student_id && p.tutor_id === s.tutor_id && p.meeting_link);
-    return { ...s, student_name: st.name, grade: st.grade_level, meeting_link: s.meeting_link || pl?.meeting_link || null }; });
+    return { ...s, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', meeting_link: s.meeting_link || pl?.meeting_link || null }; });
 }
 async function tutorRefresh() {
   if (T.preview) {
@@ -55,7 +55,7 @@ async function tutorRefresh() {
       T.week = w; T.monthRows = m;
       T.payouts = po.map(p => ({ ...p, paid_at: p.paid_at || p.created_at }));
       T.students = state.plans.filter(p => p.tutor_id === T.preview).map(p => { const st = byId(state.students, p.student_id) || {};
-        return { student_id: p.student_id, student_name: st.name, grade: st.grade_level, subject: p.subject, meeting_link: p.meeting_link, rate: p.tutor_rate_egp ?? byId(state.tutors, T.preview)?.default_rate_egp, weekly: p.weekly_sessions }; })
+        return { student_id: p.student_id, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', subject: p.subject, meeting_link: p.meeting_link, rate: p.tutor_rate_egp ?? byId(state.tutors, T.preview)?.default_rate_egp, weekly: p.weekly_sessions }; })
         .sort((a, b) => (a.student_name || '').localeCompare(b.student_name || '', 'ar'));
       tutorRender();
     } catch (e) { showToast(dbError(e), true); }
@@ -70,7 +70,8 @@ async function tutorRefresh() {
       sb.rpc('tutor_sessions', { p_from: mr.from.toISOString(), p_to: mr.to.toISOString() }),
     ]);
     for (const r of [a, b, c, d]) if (r.error) throw r.error;
-    T.week = a.data; T.students = b.data; T.payouts = c.data; T.monthRows = d.data;
+    const enfix = r => { const en = / · EN$/.test(r.grade || ''); return { ...r, en, grade: (r.grade || '').replace(/ · EN$/, '') }; };
+    T.week = a.data.map(enfix); T.students = b.data.map(enfix); T.payouts = c.data; T.monthRows = d.data.map(enfix);
     tutorRender();
   } catch (e) { showToast(dbError(e), true); }
 }
@@ -101,7 +102,7 @@ function tutorSessionCard(s, compact) {
   return `<div class="card item session ${live ? 's-now' : ''}" style="${tCancelled(s) ? 'opacity:.55' : ''}">
     <div class="left"><div class="time">${tTime(s.scheduled_at)}</div><div class="sub small">حتى ${tTime(tEnd(s))}</div></div>
     <div><div class="item-head"><div class="item-title">${who}${kind}</div>${badge}</div>
-      <div class="meta">${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b></span>` : ''}<span>المدة: <b>${durLabel(s.duration_minutes || 60)}</b></span></div>
+      <div class="meta">${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b>${s.en ? ' <span class="badge b-en">EN</span>' : ''}</span>` : ''}<span>المدة: <b>${durLabel(s.duration_minutes || 60)}</b></span></div>
       ${!tCancelled(s) && s.status !== 'done' ? `<div class="actions">
         ${s.meeting_link ? `<a class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">🎥 دخول الحصة</a>`
           : `<button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(s.student_id)}, ${jsq(s.subject || null)}, '')">🔗 ضيفي لينك الحصة</button>`}
@@ -132,7 +133,7 @@ function tutorRender() {
     const rows = T.students;
     el.innerHTML = `<p class="sub small">حطي لينك الحصة الثابت (زوم / جوجل ميت) لكل طالب مرة واحدة، وهيظهر في كل حصصه الجاية وفي رسايل التذكير.</p>
       <div class="list">${rows.map(r => `<div class="card item"><div class="item-head"><div><div class="item-title">${esc(r.student_name)}</div>
-          <div class="sub small">${esc(r.grade || '')} · ${esc(r.subject || '')}${r.weekly ? ` · ${r.weekly} حصص/أسبوع` : ''}</div></div>
+          <div class="sub small">${esc(r.grade || '')} · ${esc(r.subject || '')}${r.en ? ' <span class="badge b-en">EN</span>' : ''}${r.weekly ? ` · ${r.weekly} حصص/أسبوع` : ''}</div></div>
           <span class="sub small">${r.rate != null ? fmt(r.rate) + ' ج/ساعة' : ''}</span></div>
         <div class="actions">${r.meeting_link ? `<a class="btn btn-ghost sm" href="${esc(linkHref(r.meeting_link))}" target="_blank" rel="noopener">🎥 اللينك</a>` : '<span class="neg small">مفيش لينك</span>'}
           <button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(r.student_id)}, ${jsq(r.subject)}, ${jsq(r.meeting_link || '')})">${r.meeting_link ? '✏️ تعديل اللينك' : '🔗 ضيفي لينك'}</button></div>
