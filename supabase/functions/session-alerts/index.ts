@@ -70,11 +70,12 @@ Deno.serve(async (req) => {
     const { data: { user } } = await admin.auth.getUser(token);
     if (!user) return json({ error: 'unauthorized' }, 401);
     const { data: sup } = await admin.from('supervisors').select('active').eq('id', user.id).maybeSingle();
-    if (!sup?.active) return json({ error: 'not an active supervisor' }, 403);
+    const { data: tut } = await admin.from('tutors').select('id').eq('user_id', user.id).maybeSingle();
+    if (!sup?.active && !tut) return json({ error: 'not an active supervisor or tutor' }, 403);
     const { data: subs } = await admin.from('push_subscriptions').select('*').eq('user_id', user.id);
     if (!subs?.length) return json({ sent: 0, results: [], note: 'no subscriptions for this user' });
     const results = await pushToSubs(subs as Sub[], {
-      title: '✅ الإشعارات شغالة', body: 'ده إشعار تجريبي من لوحة إشراف أستاذ أونلاين. هتوصلك تنبيهات الحصص حتى والتطبيق مقفول.',
+      title: '✅ الإشعارات شغالة', body: 'ده إشعار تجريبي من أستاذ أونلاين. هتوصلك تنبيهات الحصص حتى والتطبيق مقفول.',
       tag: 'test-' + Date.now(), url: './',
     }, vapid);
     return json({ sent: results.filter(r => r.status >= 200 && r.status < 300).length, results });
@@ -145,7 +146,7 @@ Deno.serve(async (req) => {
   const tutIds = [...new Set(claimed.map((c: any) => byId[c.session_id].tutor_id))];
   const [{ data: students }, { data: tutors }, { data: supervisors }] = await Promise.all([
     admin.from('students').select('id,name,family_id,families(name)').in('id', stuIds),
-    admin.from('tutors').select('id,name').in('id', tutIds),
+    admin.from('tutors').select('id,name,user_id').in('id', tutIds),
     admin.from('supervisors').select('id').eq('active', true),
   ]);
   const activeIds = (supervisors || []).map((s: any) => s.id);
@@ -182,7 +183,22 @@ Deno.serve(async (req) => {
       title: payload.title, message: payload.body, priority: c.kind.startsWith('end') ? 4 : 5,
       tags: [c.kind.startsWith('end') ? 'hourglass' : 'alarm_clock'], click: `${APP_URL}?day=${dayStr}`,
     }) : [];
-    report.push({ session: s.id, kind: c.kind, results, alarm });
+    // تذكير المعلمة نفسها (قبل الحصة بـ 15 دقيقة وعند بدايتها) — من غير أي بيانات للأسرة
+    let tutorPush: any[] = [];
+    if (tu?.user_id && !c.kind.startsWith('end')) {
+      const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
+      if (tsubs?.length) {
+        const names = s.group_key ? `👥 ${s.group_name || 'مجموعة'}: ${members[s.group_key].map((m: any) => students?.find((x: any) => x.id === m.student_id)?.name || '').filter(Boolean).join('، ')}` : (st?.name || 'الطالب');
+        let link = s.meeting_link;
+        if (!link) { const { data: pl } = await admin.from('student_subjects').select('meeting_link').eq('student_id', s.student_id).eq('tutor_id', s.tutor_id).not('meeting_link', 'is', null).limit(1); link = pl?.[0]?.meeting_link; }
+        tutorPush = await pushToSubs(tsubs as Sub[], {
+          title: c.kind.startsWith('before15') ? `⏰ حصتك بعد ${mins} دقيقة — ${cairoTime(s.scheduled_at)}` : `🔔 حصتك بدأت — ${cairoTime(s.scheduled_at)}`,
+          body: `${names}${s.subject ? ' — ' + s.subject : ''}${s.kind === 'trial' ? '\n🧪 حصة تجريبية لطالب جديد' : ''}\n${link ? 'دوسي هنا وادخلي الحصة 🎥' : 'افتحي البوابة'}`,
+          tag: `t:${s.id}:${c.kind}`, url: link ? (link.startsWith('http') ? link : 'https://' + link) : './', requireInteraction: true,
+        }, vapid);
+      }
+    }
+    report.push({ session: s.id, kind: c.kind, results, alarm, tutorPush });
   }
   return json({ checked: sessions!.length, sent: report.length, report, tests: testReport.length });
 });

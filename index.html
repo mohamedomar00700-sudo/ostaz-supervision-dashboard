@@ -182,6 +182,25 @@
   </main>
 </div>
 
+<!-- ===== بوابة المعلمات ===== -->
+<div id="view-tutor" class="hidden">
+  <header class="topbar">
+    <div class="brand"><img src="logo.png" class="logo-sm" alt="">
+      <div><div class="b-title">بوابة المعلمات</div><div class="sub small" id="tutor-name"></div></div></div>
+    <div class="top-actions">
+      <button class="btn btn-ghost icon" id="t-btn-alerts" onclick="tutorAlertsPanel()" title="التذكير">🔕</button>
+      <button class="btn btn-ghost icon" onclick="tutorRefresh()" title="تحديث">↻</button>
+      <button class="btn btn-ghost icon" onclick="if(confirm('تسجيل الخروج؟')) signOut().then(()=>document.getElementById('view-tutor').classList.add('hidden'))" title="خروج">خروج</button>
+    </div>
+  </header>
+  <nav class="tabs" id="tutor-tabs">
+    <button data-tab="today" class="tab active" onclick="tutorTab('today')"><span class="ti">📅</span><span class="tl">حصصي</span></button>
+    <button data-tab="students" class="tab" onclick="tutorTab('students')"><span class="ti">🎒</span><span class="tl">طلابي</span></button>
+    <button data-tab="money" class="tab" onclick="tutorTab('money')"><span class="ti">💰</span><span class="tl">حسابي</span></button>
+  </nav>
+  <main class="wrap"><div id="tutor-content"></div></main>
+</div>
+
 <!-- نافذة منبثقة عامة -->
 <div id="modal" class="modal hidden" onclick="if(event.target===this) closeModal()">
   <div class="modal-box card">
@@ -196,6 +215,7 @@
 <div class="toast" id="toast"></div>
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
-<script src="app.js?v=26"></script>
+<script src="tutor.js?v=1"></script>
+<script src="app.js?v=27"></script>
 </body>
 </html>

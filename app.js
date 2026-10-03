@@ -1487,6 +1487,7 @@ function renderTutors() {
       <div class="meta">
         ${t.default_rate_egp != null ? `<span>أجر الساعة: <b>${fmt(t.default_rate_egp)} EGP</b></span>` : `<span><a href="javascript:void(0)" onclick="openTutorForm(${tid})">حدد أجر الساعة</a></span>`}
         <span>حصص تمت: <b>${b.count}</b></span>
+        <span>البوابة: ${t.user_id ? `<b class="pos">✅ مفعّلة</b>${t.portal_last_seen ? ` <span class="sub small">(آخر دخول ${ago(t.portal_last_seen)})</span>` : ''}` : t.email ? '<b class="warn-txt">مستنية تدخل</b>' : '<span class="sub">مش مفعّلة</span>'}</span>
         ${t.vodafone_cash ? `<span>فودافون كاش: <b dir="ltr">${esc(t.vodafone_cash)}</b></span>` : ''}
         ${t.bank_account ? `<span>بنك: <b>${esc(t.bank_account)}</b></span>` : ''}
       </div>
@@ -1501,6 +1502,7 @@ function renderTutors() {
         ${b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${tid})">صرف مستحقات</button>
         <button class="btn btn-wa sm" onclick="openTutorStatementMessage(${tid})">📲 كشف للمعلمة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openSchedule('tutor', ${tid})">📋 الجدول</button>
+        ${!t.user_id ? `<button class="btn btn-ghost sm" onclick="openTutorInvite(${tid})">📲 دعوة للبوابة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openTutorStatement(${tid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openTutorForm(${tid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('المعلم ' + t.name)}, () => q(sb.from('tutors').delete().eq('id', ${tid})))">حذف</button>` : ''}
@@ -1516,6 +1518,28 @@ function subjRowHtml(s = {}) {
     <button type="button" class="btn btn-ghost icon" onclick="this.parentElement.remove()">✕</button>
   </div>`;
 }
+function openTutorInvite(id) {
+  const t = byId(state.tutors, id);
+  if (!t.email) { showToast('اكتب إيميل المعلمة الأول (جيميل أحسن)', true); return openTutorForm(id); }
+  const url = location.origin + location.pathname;
+  const text = `${greetTutor(t.name)}
+عملنالك حساب على *بوابة المعلمات — أستاذ أونلاين* 🎉
+فيها هتلاقي:
+📅 جدول حصصك النهارده والأسبوع ده
+🔔 تذكير على الموبايل قبل كل حصة بـ 15 دقيقة
+🔗 مكان تحطي فيه لينك الزوم لكل طالب مرة واحدة
+💰 حصصك ومستحقك لكل طالب أول بأول
+
+ادخلي من هنا: ${url}
+دوسي "الدخول بحساب جوجل" واختاري الإيميل ده: ${t.email}
+(أو "سجّل حساب جديد" بنفس الإيميل وأي باسورد)
+
+📱 على الآيفون: افتحي اللينك من Safari ← زرار المشاركة ⬆︎ ← "إضافة إلى الشاشة الرئيسية" عشان يوصلك التذكير.
+📱 على أندرويد: افتحيه من Chrome ← ⋮ ← "إضافة إلى الشاشة الرئيسية".
+${SIGN_T}`;
+  openModal(`دعوة ${t.name} للبوابة`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id })}
+    <p class="sub small mt">أول ما تدخل بالإيميل ده هتتربط بحسابها تلقائياً، وكارتها هيبقى "✅ مفعّلة". مش هتشوف أي بيانات أو أرقام للأسر ولا أسعارهم.</p>`);
+}
 function openTutorForm(id) {
   const t = id ? byId(state.tutors, id) : null;
   const subs = t ? state.subjects.filter(s => s.tutor_id === t.id) : [];
@@ -1526,6 +1550,8 @@ function openTutorForm(id) {
      { name: 'default_rate_egp', label: 'أجر الساعة (EGP)', type: 'number', value: t?.default_rate_egp, hint: 'بيتضرب في مدة الحصة الفعلية' }],
     [{ name: 'vodafone_cash', label: 'رقم فودافون كاش', type: 'tel', value: t?.vodafone_cash },
      { name: 'bank_account', label: 'الحساب البنكي / InstaPay', value: t?.bank_account }],
+    { name: 'email', label: 'إيميل المعلمة (للدخول على بوابة المعلمات)', type: 'email', value: t?.email, placeholder: 'name@gmail.com',
+      hint: t?.user_id ? '✅ المعلمة دخلت البوابة بالإيميل ده' : 'بعد الحفظ دوس "📲 دعوة للبوابة" من كارت المعلمة' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: t?.notes },
   ];
   const subjBlock = `<div class="field"><label>المواد اللي بيدرّسها</label>
@@ -1535,7 +1561,8 @@ function openTutorForm(id) {
   openModal(t ? 'تعديل معلم' : 'معلم جديد', formHtml(fields, 'حفظ', subjBlock));
   window._formSubmit = () => runSubmit(async () => {
     const row = { name: fv('name'), phone: fv('phone') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), default_rate_egp: fnum('default_rate_egp'),
-      vodafone_cash: fv('vodafone_cash') || null, bank_account: fv('bank_account') || null, notes: fv('notes') || null };
+      vodafone_cash: fv('vodafone_cash') || null, bank_account: fv('bank_account') || null, notes: fv('notes') || null, email: fv('email').toLowerCase() || null };
+    if (t && t.user_id && (t.email || '') !== (row.email || '') && !confirm('المعلمة مربوطة بالإيميل القديم — تغيير الإيميل مش هيفصلها. تكمل؟')) return;
     let tutorId = t?.id;
     if (t) await q(sb.from('tutors').update(row).eq('id', t.id));
     else { const [nt] = await q(sb.from('tutors').insert(row).select()); tutorId = nt.id; }
@@ -1852,6 +1879,7 @@ async function disablePush() {
     if (sub) { await sb.from('push_subscriptions').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); }
     showToast('تم إيقاف الإشعارات على الجهاز ده');
   } catch (e) { showToast(dbError(e), true); }
+  if (typeof T !== 'undefined' && T.me) return;
   await refreshAlertIcon(); openAlertsPanel();
 }
 async function sendTestPush(quiet) {
@@ -3204,18 +3232,22 @@ async function signInWithGoogle() {
 }
 async function signOut() {
   await sb.auth.signOut();
-  currentUser = null; currentSupervisor = null; _postAuthHandled = false;
+  currentUser = null; currentSupervisor = null; _postAuthHandled = false; if (typeof T !== 'undefined') T.me = null;
   if (realtimeChannel) { sb.removeChannel(realtimeChannel); realtimeChannel = null; }
   showView('auth');
 }
 function showView(name) {
-  ['auth', 'pending', 'app'].forEach(v => document.getElementById('view-' + v).classList.toggle('hidden', v !== name));
+  ['auth', 'pending', 'app', 'tutor'].forEach(v => document.getElementById('view-' + v)?.classList.toggle('hidden', v !== name));
 }
 async function handlePostAuth(attempt = 0) {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) { showView('auth'); return; }
   currentUser = user;
   const { data: supervisor, error } = await sb.from('supervisors').select('*').eq('id', user.id).maybeSingle();
+  if (!supervisor?.active) { // معلمة؟
+    const { data: tme } = await sb.rpc('tutor_claim');
+    if (tme) return enterTutor(tme);
+  }
   if (error || !supervisor) {
     if (attempt < 5) { await new Promise(r => setTimeout(r, 800)); return handlePostAuth(attempt + 1); }
     showAuthError('تعذر تحميل بيانات حسابك، حدّث الصفحة.'); showView('auth'); return;
@@ -3264,6 +3296,8 @@ async function loadSupervisorsList() {
   try {
     const [data, invites] = await Promise.all([q(sb.from('supervisors').select('*').order('active', { ascending: true })),
       q(sb.from('supervisor_invites').select('*').is('used_at', null).order('created_at')).catch(() => [])]);
+    const tutorUsers = new Set(state.tutors.map(t => t.user_id).filter(Boolean));
+    data.splice(0, data.length, ...data.filter(x => !tutorUsers.has(x.id)));
     document.getElementById('admin-list').innerHTML = `<div class="card item">
       <h3 style="margin:0 0 6px">➕ إضافة مشرف بالإيميل</h3>
       <p class="sub small" style="margin:0 0 8px">اكتب إيميله هنا، وأول ما يدخل بيه (بجوجل أو يعمل حساب بنفس الإيميل) هيتفعّل على طول من غير ما يستنى موافقة.</p>

@@ -23,6 +23,7 @@ self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   const url = new URL((e.notification.data && e.notification.data.url) || './', self.registration.scope).href;
   e.waitUntil((async () => {
+    if (!url.startsWith(self.registration.scope)) return self.clients.openWindow(url); // لينك الحصة (زوم / ميت)
     const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of list) {
       if (c.url.startsWith(self.registration.scope)) {
