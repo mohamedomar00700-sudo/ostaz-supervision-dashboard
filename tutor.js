@@ -50,12 +50,13 @@ async function tutorRefresh() {
   if (T.preview) {
     try {
       const now = new Date(); const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const mr = tMonthRange(T.month);
-      const [w, m, po] = await Promise.all([tutorPreviewRows(new Date(from.getTime() - 864e5), new Date(from.getTime() + 8 * 864e5)), tutorPreviewRows(mr.from, mr.to),
+      const [w, m, po] = await Promise.all([tutorPreviewRows(new Date(from.getTime() - 7 * 864e5), new Date(from.getTime() + 8 * 864e5)), tutorPreviewRows(mr.from, mr.to),
         q(sb.from('tutor_payouts').select('*').eq('tutor_id', T.preview).eq('paid', true).order('paid_at', { ascending: false }))]);
       T.week = w; T.monthRows = m;
       try { const rq = await q(sb.from('tutor_requests').select('*').eq('tutor_id', T.preview).order('created_at', { ascending: false }).limit(20));
         T.requests = rq.map(r => ({ ...r, student_name: byId(state.students, r.student_id)?.name || r.new_value, session_at: (w.concat(m).find(x => x.id === r.session_id) || {}).scheduled_at })); } catch (e) { T.requests = []; }
       T.payouts = po.map(p => ({ ...p, paid_at: p.paid_at || p.created_at }));
+      try { T.reports = await q(sb.from('session_reports').select('*').eq('tutor_id', T.preview).gte('created_at', new Date(Date.now() - 40 * 864e5).toISOString())); } catch (e) { T.reports = []; }
       T.students = state.plans.filter(p => p.tutor_id === T.preview).map(p => { const st = byId(state.students, p.student_id) || {};
         return { student_id: p.student_id, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', subject: p.subject, meeting_link: p.meeting_link, rate: p.tutor_rate_egp ?? byId(state.tutors, T.preview)?.default_rate_egp, weekly: p.weekly_sessions }; })
         .sort((a, b) => (a.student_name || '').localeCompare(b.student_name || '', 'ar'));
@@ -68,13 +69,14 @@ async function tutorRefresh() {
     const mr = tMonthRange(T.month);
     const rq = await sb.rpc('tutor_requests_mine'); T.requests = rq.data || [];
     const [a, b, c, d] = await Promise.all([
-      sb.rpc('tutor_sessions', { p_from: new Date(from.getTime() - 864e5).toISOString(), p_to: to.toISOString() }),
+      sb.rpc('tutor_sessions', { p_from: new Date(from.getTime() - 7 * 864e5).toISOString(), p_to: to.toISOString() }),
       sb.rpc('tutor_students'), sb.rpc('tutor_payout_list'),
       sb.rpc('tutor_sessions', { p_from: mr.from.toISOString(), p_to: mr.to.toISOString() }),
     ]);
     for (const r of [a, b, c, d]) if (r.error) throw r.error;
     const enfix = r => { const en = / · EN$/.test(r.grade || ''); return { ...r, en, grade: (r.grade || '').replace(/ · EN$/, '') }; };
     T.week = a.data.map(enfix); T.students = b.data.map(enfix); T.payouts = c.data; T.monthRows = d.data.map(enfix);
+    try { const rr = await sb.rpc('tutor_reports_mine', { p_from: new Date(from.getTime() - 40 * 864e5).toISOString(), p_to: to.toISOString() }); T.reports = rr.data || []; } catch (e) { T.reports = []; }
     tutorRender();
   } catch (e) { showToast(dbError(e), true); }
 }
@@ -108,11 +110,13 @@ function tutorSessionCard(s, compact) {
     <div><div class="item-head"><div class="item-title">${who}${kind}</div>${badge}</div>
       <div class="meta">${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b>${s.en ? ' <span class="badge b-en">EN</span>' : ''}</span>` : ''}<span>المدة: <b>${durLabel(tDur(s))}</b>${tDur(s) !== Number(s.duration_minutes || 60) ? ` <span class="${tDur(s) > (s.duration_minutes || 60) ? 'pos' : 'neg'}">(بدل ${durLabel(s.duration_minutes || 60)})</span>` : ''}</span>${s.status === 'done' ? `<span>بتتحسب: <b>${fmtU(tDur(s) / 60)} حصة</b></span>` : ''}</div>
       ${tPendingFor(s) ? `<div class="cancel-info mt" style="background:var(--warn-soft);color:var(--warn)">⏳ طلب ${esc(T_REQ[tPendingFor(s).kind].l)} مستني رد الإشراف</div>` : ''}
+      ${tRepLine(s)}
       ${!tCancelled(s) && s.status !== 'done' ? `<div class="actions">
+        ${tRepBtn(s)}
         ${!tPendingFor(s) ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">✏️ طلب تغيير</button>` : ''}
         ${s.meeting_link ? `<a class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">🎥 دخول الحصة</a>`
           : `<button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(s.student_id)}, ${jsq(s.subject || null)}, '')">🔗 ضيفي لينك الحصة</button>`}
-      </div>` : ''}
+      </div>` : !tCancelled(s) && tRepBtn(s) ? `<div class="actions">${tRepBtn(s)}</div>` : ''}
     </div></div>`;
 }
 
@@ -125,12 +129,16 @@ function tutorRender() {
     const days = Object.keys(byDay).sort();
     const todayList = (byDay[todayKey] || []).filter(s => !tCancelled(s));
     const next = occ.find(s => !tCancelled(s) && s.status === 'scheduled' && new Date(s.scheduled_at).getTime() > Date.now());
+    const needRep = tOcc(T.week).filter(s => !tCancelled(s) && tStarted(s) && !tRepFor(s) && new Date(s.scheduled_at).getTime() > Date.now() - 7 * 864e5);
     el.innerHTML = `
       <div class="stats">
         <div class="card stat"><div class="v num">${fmtU(todayList.reduce((a, s) => a + tDur(s), 0) / 60)}</div><div class="l">حصص النهارده${todayList.length ? ` <span class="small">(${todayList.length} ${todayList.length === 1 ? 'لقاء' : 'لقاءات'})</span>` : ''}</div></div>
         <div class="card stat"><div class="v num">${fmtU(todayList.filter(s => s.status === 'done').reduce((a, s) => a + tDur(s), 0) / 60)}</div><div class="l">اتسجلت تمت</div></div>
         <div class="card stat"><div class="v" style="font-size:17px">${next ? tTime(next.scheduled_at) : '—'}</div><div class="l">${next ? 'الحصة الجاية: ' + esc(next.group_key ? next.group_name || 'مجموعة' : next.student_name) : 'مفيش حصص جاية'}</div></div>
       </div>
+      ${needRep.length ? `<div class="card item rep-nudge"><b>📝 ${needRep.length === 1 ? 'فيه حصة محتاجة تقرير' : `فيه ${needRep.length} حصص محتاجة تقرير`}</b>
+        <div class="sub small">اكتبي تقرير قصير بعد كل حصة (المدة واللي اتشرح والواجب) — الإشراف بيبعته لولي الأمر، وكده حسابك بيتأكد أول بأول.</div>
+        ${needRep.filter(s => !occ.some(o => o.id === s.id)).map(s => `<div class="item-head mt" style="gap:8px"><span>${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)} <span class="sub small">${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</span></span>${tRepBtn(s)}</div>`).join('')}</div>` : ''}
       ${tutorRequestsHtml()}
       ${days.length ? days.map(k => `<div class="section-title"><h2>${k === todayKey ? 'النهارده' : esc(relDayLabel(byDay[k][0].scheduled_at, CAIRO_TZ))}</h2></div>
         <div class="list">${byDay[k].map(s => tutorSessionCard(s)).join('')}</div>`).join('')
@@ -347,5 +355,61 @@ function tutorPaymentRequest() {
       <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._rqText, ${jsq(T.me.group)}); closeModal()">💬 انسخي وافتحي جروب الإشراف</button>` : ''}
         <button class="btn btn-ghost" onclick="copyText(window._rqText,'اتنسخ ✓ الصقيه في جروب الإشراف')">📋 نسخ الرسالة</button></div>`);
     tutorRefresh();
+  });
+}
+
+/* ----- تقرير الحصة (المعلمة بتكتبه بعد الحصة ← الإشراف ← ولي الأمر) ----- */
+const T_LEVEL = { excellent: 'ممتاز 🌟', good: 'كويس 👍', needs: 'محتاج متابعة ⚠️' };
+const tStarted = s => Date.now() >= new Date(s.scheduled_at).getTime() - 5 * 60e3;
+const tRepFor = s => (T.reports || []).find(r => r.session_id === s.id || (s.group_key && r.group_key === s.group_key) || (s.rows || []).some(x => x.id === r.session_id));
+function tRepLine(s) {
+  const r = tRepFor(s); if (!r) return '';
+  return `<div class="rep-line mt">📝 التقرير: ${r.attended ? `<b>${durLabel(r.minutes)}</b>${r.topics ? ' · ' + esc(r.topics.slice(0, 60)) + (r.topics.length > 60 ? '…' : '') : ''}` : '<b class="neg">الطالب ماحضرش</b>'}
+    · ${r.sent_at ? '<span class="pos">وصل لولي الأمر ✓</span>' : '<span class="sub">عند الإشراف</span>'}</div>`;
+}
+function tRepBtn(s) {
+  if (tCancelled(s) || !tStarted(s)) return '';
+  const r = tRepFor(s);
+  if (r && r.sent_at) return '';
+  const ended = Date.now() >= new Date(s.scheduled_at).getTime() + (s.duration_minutes || 60) * 60e3 - 10 * 60e3;
+  return `<button class="btn ${r ? 'btn-ghost' : ended ? 'btn-brand' : 'btn-ghost'} sm" onclick="tutorReport(${jsq(s.id)})">📝 ${r ? 'تعديل التقرير' : 'اكتبي تقرير الحصة'}</button>`;
+}
+function tutorReport(sessionId) {
+  if (T.preview) return showToast('ده عرض معاينة — المعلمة هي اللي بتكتب التقرير من حسابها');
+  const s = tOcc(T.week).find(x => x.id === sessionId || (x.rows || []).some(r => r.id === sessionId)); if (!s) return;
+  const old = tRepFor(s);
+  const members = s.group_key ? (s.rows || [s]).map(r => ({ id: r.student_id, name: r.student_name })) : [];
+  const planned = s.duration_minutes || 60;
+  const R = window._tr = { attended: old ? old.attended : true, absent: new Set(old?.absent_ids || []), mins: old?.minutes || tMins(s) || planned,
+    topics: old?.topics || '', homework: old?.homework || '', level: old?.level || '', note: old?.tutor_note || '' };
+  const render = () => {
+    const opts = [...new Set([planned, planned + 15, planned + 30, planned + 60, Math.max(15, planned - 15)])].sort((a, b) => a - b);
+    document.getElementById('modal-body').innerHTML = `
+      <div class="sub small mb">${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)} · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</div>
+      ${s.group_key ? `<div class="field"><label>مين حضر؟</label><div class="gm-list">${members.map(m => `<label class="gm-row gm-check"><input type="checkbox" ${R.absent.has(m.id) ? '' : 'checked'} onchange="_tr.absent[this.checked ? 'delete' : 'add'](${jsq(m.id)})"> <b>${esc(m.name)}</b></label>`).join('')}</div></div>`
+        : `<div class="field"><label>الطالب حضر؟</label><div class="seg-wrap"><button type="button" class="chip ${R.attended ? 'active' : ''}" onclick="_tr.attended=true; _trRender()">✅ حضر</button><button type="button" class="chip ${!R.attended ? 'active' : ''}" onclick="_tr.attended=false; _trRender()">🚫 ماحضرش</button></div></div>`}
+      ${R.attended ? `<div class="field"><label>مدة الحصة الفعلية</label><div class="chips" style="margin:0">${opts.map(m => `<button type="button" class="chip ${R.mins === m ? 'active' : ''}" onclick="_tr.mins=${m}; _trRender()">${durLabel(m)}${m === planned ? ' (المعاد)' : ''}</button>`).join('')}</div></div>
+        ${hmHtml('tr_hm', R.mins)}
+        <div class="field"><label>اتشرح إيه في الحصة؟</label><textarea id="tr-topics" class="input" rows="3" placeholder="مثال: الدرس التاني في الوحدة الأولى — حل تمارين صفحة 20" oninput="_tr.topics=this.value">${esc(R.topics)}</textarea></div>
+        <div class="field"><label>الواجب (اختياري)</label><textarea id="tr-hw" class="input" rows="2" placeholder="مثال: تمارين 1 لـ 5 صفحة 22" oninput="_tr.homework=this.value">${esc(R.homework)}</textarea></div>
+        <div class="field"><label>مشاركة الطالب (اختياري)</label><div class="seg-wrap">${Object.entries(T_LEVEL).map(([k, l]) => `<button type="button" class="chip ${R.level === k ? 'active' : ''}" onclick="_tr.level=_tr.level==='${k}'?'':'${k}'; _trRender()">${l}</button>`).join('')}</div></div>` : ''}
+      <div class="field"><label>🔒 ملاحظة للإشراف بس (مش هتوصل لولي الأمر)</label><textarea id="tr-note" class="input" rows="2" oninput="_tr.note=this.value">${esc(R.note)}</textarea></div>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_trSend()">${old ? 'حفظ التعديل' : 'إرسال التقرير للإشراف'}</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>
+      <p class="sub small">الإشراف بيراجع التقرير ويبعته لولي الأمر. المدة اللي بتكتبيها هي اللي بتتسجل في حسابك بعد ما الإشراف يأكدها.</p>`;
+  };
+  window._trRender = () => { render(); hmWire('tr_hm', v => { R.mins = v; document.querySelectorAll('#modal-body .chips .chip').forEach(c => c.classList.remove('active')); }); };
+  openModal(old ? '✏️ تعديل تقرير الحصة' : '📝 تقرير الحصة', ''); window._trRender();
+  window._trSend = () => runSubmit(async () => {
+    const attended = s.group_key ? R.absent.size < members.length : R.attended;
+    if (attended && !(R.mins >= 5 && R.mins <= 720)) return formError('اكتبي مدة الحصة صح');
+    if (attended && !R.topics.trim()) return formError('اكتبي اتشرح إيه في الحصة — ده اللي بيوصل لولي الأمر');
+    const { error } = await sb.rpc('tutor_report_submit', { p_session: s.id, p_attended: attended, p_absent: [...R.absent], p_minutes: attended ? R.mins : null,
+      p_topics: attended ? R.topics : null, p_homework: attended ? R.homework : null, p_level: attended ? R.level || null : null, p_note: R.note || null });
+    if (error && /already sent/.test(error.message)) return formError('التقرير اتبعت لولي الأمر خلاص ومينفعش يتعدل — لو فيه تصحيح كلّمي الإشراف');
+    if (error && /not started/.test(error.message)) return formError('الحصة لسه مابدأتش');
+    if (error && /too old/.test(error.message)) return formError('الحصة دي قديمة — ابعتي التفاصيل للإشراف على الجروب');
+    if (error) throw error;
+    closeModal(); showToast(old ? 'اتعدل التقرير ✓' : 'التقرير وصل للإشراف ✓ شكراً'); tutorRefresh();
   });
 }

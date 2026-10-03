@@ -494,6 +494,7 @@ function sessionCard(s) {
         ${s.meeting_link ? `<span><a href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">رابط الحصة ↗</a></span>` : (open ? '<span class="neg">لا يوجد رابط</span>' : '')}
       </div>
       ${s.notes ? `<div class="sub small mt">📝 ${esc(s.notes)}</div>` : ''}
+      ${reportLine(s)}
       ${trialOutcomeLine(s)}
       ${cancelled ? `<div class="cancel-info mt">✖ ${cancelInfo(s)}</div>` : `<div class="money">
         <span class="pill" title="${fmt(s.student_price, 2)} ${s.student_currency} في الساعة">الأسرة: ${money(c.fam, s.student_currency)}</span>
@@ -507,6 +508,7 @@ function sessionCard(s) {
         ${open ? `<button class="btn btn-ok sm" onclick="openDone(${id})">✓ تمت…</button>` : ''}
         ${s.kind === 'trial' && s.status === 'done' ? `<button class="btn ${s.trial_outcome && s.trial_outcome !== 'thinking' ? 'btn-ghost' : 'btn-brand'} sm" onclick="openTrialOutcome(${id})">🧪 ${s.trial_outcome ? 'تعديل النتيجة' : 'نتيجة التجربة'}</button>` : ''}
         ${cancelled && !allLoadedSessions().some(x => x.makeup_of === s.id) && s.cancel_scope !== 'permanent' ? `<button class="btn btn-ghost sm" onclick="openSessionForm(null, {student_id:${jsq(s.student_id)}, tutor_id:${jsq(s.tutor_id)}, subject:${jsq(s.subject || '')}, makeup_of:${id}, duration:${s.duration_minutes || 60}})">📅 تعويضية</button>` : ''}
+        ${reportBtn(s)}
         <button class="btn btn-ghost sm" onclick="openSessionActions(${id})">⋯ المزيد</button>
       </div>
     </div>
@@ -2087,6 +2089,7 @@ async function loadAttention() {
     .gte('scheduled_at', now.toISOString()).lt('scheduled_at', todayEnd.toISOString()).order('scheduled_at').limit(1));
   state.nextSession = nxt[0] || null;
   try { state.tutorReqs = await q(sb.from('tutor_requests').select('*').eq('status', 'pending').order('created_at')); } catch (e) { state.tutorReqs = []; }
+  try { state.reports = await q(sb.from('session_reports').select('*').gte('created_at', new Date(now.getTime() - 40 * 864e5).toISOString()).order('created_at', { ascending: false })); } catch (e) { state.reports = []; }
   state.pendingTrials = await q(sb.from('sessions').select('*').eq('kind', 'trial').eq('status', 'done')
     .or('trial_outcome.is.null,trial_outcome.eq.thinking').gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at'));
 }
@@ -2100,6 +2103,8 @@ function renderAttention() {
   }
   const tr = (state.tutorReqs || []).length;
   if (tr) items.push(`<button class="att att-next" onclick="openTutorRequests()">📨 <b>${tr}</b> ${tr === 1 ? 'طلب' : 'طلبات'} من المعلمات مستنية ردك</button>`);
+  const nr = (state.reports || []).filter(r => !r.sent_at).length;
+  if (nr) items.push(`<button class="att att-next" onclick="openReports()">📝 <b>${nr}</b> ${nr === 1 ? 'تقرير حصة جديد' : 'تقارير حصص جديدة'} — ابعتها للأسر</button>`);
   const un = state.unrecorded || [];
   if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${occurrences(un).length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
   const pt = (state.pendingTrials || []).length;
@@ -2636,6 +2641,7 @@ function groupCard(rows) {
       </div>
       <div class="gm-list">${rows.map(member).join('')}</div>
       ${s.notes ? `<div class="sub small mt">📝 ${esc(s.notes)}</div>` : ''}
+      ${reportLine(s)}
       ${m.rev || m.tut ? `<div class="money">
         <span class="pill" title="مجموع اللي على الأسر بالجنيه">الأسر: ${fmt(m.rev)} EGP</span>
         <span class="pill" title="${fmt(s.group_rate_egp)} EGP في الساعة عن المجموعة كلها">المعلم: ${money(m.tut, 'EGP')}</span>
@@ -2646,6 +2652,7 @@ function groupCard(rows) {
           <button class="btn btn-wa sm" onclick="openGroupReminder(${K},'parent')">📲 الأسر</button>
           <button class="btn btn-wa sm" onclick="openGroupReminder(${K},'tutor')">📲 المعلم</button>` : ''}
         ${open ? `<button class="btn btn-ok sm" onclick="openGroupDone(${K})">✓ تمت… (الحضور)</button>` : ''}
+        ${reportBtn(s)}
         <button class="btn btn-ghost sm" onclick="openGroupActions(${K})">⋯ المزيد</button>
       </div>
     </div>
@@ -3264,6 +3271,121 @@ ${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }))
 }
 
 /* ============================================================
+   تقارير الحصص: المعلمة بتكتب بعد الحصة ← الإشراف بيبعته للأسرة
+   ============================================================ */
+const REP_LEVEL = { excellent: 'ممتاز 🌟', good: 'كويس 👍', needs: 'محتاج متابعة ⚠️' };
+const repFor = s => (state.reports || []).find(r => r.session_id === s.id || (s.group_key && r.group_key === s.group_key));
+function reportLine(s) {
+  const r = repFor(s); if (!r) return '';
+  const planned = s.duration_minutes || 60;
+  return `<div class="rep-line mt">📝 تقرير المعلمة: ${r.attended ? `<b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}${r.absent_ids?.length ? ` · غاب ${r.absent_ids.length}` : ''}` : '<b class="neg">الطالب ماحضرش</b>'}
+    · ${r.sent_at ? '<span class="pos">اتبعت للأسرة ✓</span>' : '<span class="warn-txt">لسه ماتبعتش للأسرة</span>'}</div>`;
+}
+function reportBtn(s) {
+  const r = repFor(s); if (!r) return '';
+  return `<button class="btn ${r.sent_at ? 'btn-ghost' : 'btn-brand'} sm" onclick="openReport(${jsq(r.id)})">📝 التقرير${r.sent_at ? ' ✓' : ''}</button>`;
+}
+async function repSessionRows(r) {
+  let rows = allLoadedSessions().filter(x => x.id === r.session_id || (r.group_key && x.group_key === r.group_key));
+  if (!rows.length || (r.group_key && rows.length < 2)) {
+    try { rows = await q(r.group_key ? sb.from('sessions').select('*').eq('group_key', r.group_key) : sb.from('sessions').select('*').eq('id', r.session_id)); } catch (e) {}
+  }
+  return rows;
+}
+function reportFamilyText(r, s, st, fam, absent) {
+  const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+  const subj = s.subject ? ` — ${s.subject}` : '';
+  if (absent) return `السلام عليكم ورحمة الله 🌷
+بنبلغكم إن ${st?.name || 'الطالب'} ماحضرش حصة${subj} يوم ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}.
+لو فيه ظرف أو حابين نرتب حصة تعويضية بلّغونا 🙏
+${SIGN_F}`;
+  return `السلام عليكم ورحمة الله 🌷
+📝 تقرير حصة ${st?.name || ''}${subj}
+📅 ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}
+⏱ مدة الحصة: ${durLabel(r.minutes)}${r.topics ? `\n📚 اللي اتشرح: ${r.topics}` : ''}${r.homework ? `\n✍️ الواجب: ${r.homework}` : ''}${r.level ? `\n⭐ المشاركة: ${REP_LEVEL[r.level]}` : ''}
+لو عندكم أي ملاحظة على الحصة بلّغونا 🙏
+${SIGN_F}`;
+}
+async function openReport(id) {
+  const r = (state.reports || []).find(x => x.id === id); if (!r) return showToast('التقرير مش موجود', true);
+  const rows = await repSessionRows(r);
+  const s0 = rows.find(x => x.id === r.session_id) || rows[0]; if (!s0) return showToast('الحصة مش موجودة', true);
+  const tu = byId(state.tutors, r.tutor_id), planned = s0.duration_minutes || 60;
+  const live = rows.filter(x => !isCancelled(x) || x.status === 'done');
+  const allDone = live.length && live.every(x => x.status === 'done');
+  const anyOpen = rows.some(x => x.status === 'scheduled' || x.status === 'in_progress');
+  const curMins = s0.actual_minutes || planned;
+  const who = s0.group_key ? `👥 ${s0.group_name || 'مجموعة'}` : (byId(state.students, s0.student_id)?.name || '');
+  // رسالة لكل أسرة (في المجموعة: الغايب بياخد رسالة غياب)
+  const blocks = (s0.group_key ? rows : [s0]).filter(x => !isCancelled(x) || x.status === 'done' || (r.absent_ids || []).includes(x.student_id)).map(x => {
+    const st = byId(state.students, x.student_id), fam = st ? byId(state.families, st.family_id) : null;
+    const absent = !r.attended || (r.absent_ids || []).includes(x.student_id);
+    return msgBlock(`رسالة ${fam?.name || 'الأسرة'}${s0.group_key ? ` (${st?.name || ''})` : ''}${absent ? ' — غياب' : ''}`, reportFamilyText(r, x, st, fam, absent), { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id });
+  });
+  const absentNames = (r.absent_ids || []).map(sid => byId(state.students, sid)?.name).filter(Boolean);
+  openModal(`📝 تقرير حصة ${who}`, `
+    <div class="sub small mb">${esc(tu?.name || '')} · ${esc(s0.subject || '')} · ${fmtDate(s0.scheduled_at)} ${timeStr(new Date(s0.scheduled_at))} · اتكتب ${ago(r.updated_at || r.created_at)}</div>
+    <div class="card item rep-card">
+      ${r.attended ? `<div class="meta" style="margin:0"><span>المدة حسب المعلمة: <b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}</span>
+        ${absentNames.length ? `<span class="neg">غاب: <b>${esc(absentNames.join('، '))}</b></span>` : ''}${r.level ? `<span>المشاركة: <b>${REP_LEVEL[r.level]}</b></span>` : ''}</div>
+        ${r.topics ? `<div class="mt">📚 <b>اللي اتشرح:</b> ${esc(r.topics)}</div>` : ''}${r.homework ? `<div class="mt">✍️ <b>الواجب:</b> ${esc(r.homework)}</div>` : ''}`
+        : `<div class="neg"><b>🚫 الطالب ماحضرش الحصة</b></div>`}
+      ${r.tutor_note ? `<div class="mt sub">🔒 ملاحظة للإشراف بس: ${esc(r.tutor_note)}</div>` : ''}
+    </div>
+    ${r.attended && anyOpen ? `<div class="card item mb" style="background:var(--warn-soft)">الحصة لسه متسجلتش. <button class="btn btn-ok sm" onclick="applyReport(${jsq(r.id)}, 'done')">✓ سجّلها تمت (${durLabel(r.minutes)})</button></div>` : ''}
+    ${r.attended && allDone && curMins !== r.minutes ? `<div class="card item mb" style="background:var(--warn-soft)">متسجلة ${durLabel(curMins)} والمعلمة كاتبة ${durLabel(r.minutes)}. <button class="btn btn-ghost sm" onclick="applyReport(${jsq(r.id)}, 'done')">عدّل المدة لـ ${durLabel(r.minutes)}</button></div>` : ''}
+    ${!r.attended && anyOpen ? `<div class="card item mb" style="background:var(--warn-soft)"><button class="btn btn-ghost sm" onclick="applyReport(${jsq(r.id)}, 'absent')">🚫 سجّل إن الطالب ماحضرش</button></div>` : ''}
+    <div class="section-title"><h2>ابعته للأسرة</h2></div>
+    <div class="list">${blocks.join('')}</div>
+    <div class="modal-foot">${r.sent_at ? `<span class="pos small">✓ اتبعت ${ago(r.sent_at)}</span><button class="btn btn-ghost" onclick="markReportSent(${jsq(r.id)}, false)">رجّعه "لسه ماتبعتش"</button>`
+      : `<button class="btn btn-ok" onclick="markReportSent(${jsq(r.id)}, true)">✓ اتبعت للأسرة</button>`}
+      <button class="btn btn-ghost" onclick="openReports()">كل التقارير</button></div>`);
+  if (blocks.length === 1) document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
+async function markReportSent(id, sent) {
+  try {
+    await q(sb.from('session_reports').update(sent ? { sent_at: new Date().toISOString(), sent_by: currentUser.id } : { sent_at: null, sent_by: null }).eq('id', id));
+    const r = (state.reports || []).find(x => x.id === id); if (r) r.sent_at = sent ? new Date().toISOString() : null;
+    showToast(sent ? 'اتعلّم إنه اتبعت ✓' : 'رجع لسه ماتبعتش');
+    renderAttention(); renderDaily(); openReports();
+  } catch (e) { showToast(dbError(e), true); }
+}
+async function applyReport(id, what) {
+  const r = (state.reports || []).find(x => x.id === id); if (!r) return;
+  const rows = await repSessionRows(r);
+  try {
+    if (what === 'absent') {
+      await q(sb.from('sessions').update({ status: 'cancelled_by_student', cancel_reason: 'لم يحضر', cancel_note: 'حسب تقرير المعلمة', cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, cancel_scope: 'once', actual_minutes: null }).in('id', rows.map(x => x.id)));
+    } else {
+      const absent = rows.filter(x => (r.absent_ids || []).includes(x.student_id)).map(x => x.id);
+      const present = rows.filter(x => !absent.includes(x.id) && (!isCancelled(x) || x.status === 'done')).map(x => x.id);
+      if (present.length) await q(sb.from('sessions').update({ status: 'done', actual_minutes: r.minutes, cancel_reason: null, cancel_note: null, cancelled_at: null, cancel_scope: null, cancelled_by_user: null }).in('id', present));
+      if (absent.length) await q(sb.from('sessions').update({ status: 'cancelled_by_student', cancel_reason: 'لم يحضر', cancel_note: 'حسب تقرير المعلمة', cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, cancel_scope: 'once', actual_minutes: null }).in('id', absent));
+    }
+    showToast(what === 'absent' ? 'اتسجل غياب ✓' : `اتسجلت ${durLabel(r.minutes)} ✓`);
+    await refreshAll(); openReport(id);
+  } catch (e) { showToast(dbError(e), true); }
+}
+async function openReports() {
+  const list = state.reports || [];
+  const ids = [...new Set(list.map(r => r.session_id))];
+  let sess = allLoadedSessions().filter(x => ids.includes(x.id));
+  const miss = ids.filter(i => !sess.some(x => x.id === i));
+  if (miss.length) try { sess = sess.concat(await q(sb.from('sessions').select('*').in('id', miss))); } catch (e) {}
+  const card = r => { const s = sess.find(x => x.id === r.session_id); if (!s) return '';
+    const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : (byId(state.students, s.student_id)?.name || ''), fam = s.group_key ? null : sessionView(s).fam;
+    return `<div class="card item ${r.sent_at ? '' : 's-confirm'}" style="cursor:pointer" onclick="openReport(${jsq(r.id)})"><div class="item-head">
+      <div><b>${esc(who)}</b> <span class="sub small">${esc(fam?.name || '')}</span><div class="sub small">${esc(byId(state.tutors, r.tutor_id)?.name || '')} · ${esc(s.subject || '')} · ${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</div>
+        <div class="small mt">${r.attended ? `⏱ ${durLabel(r.minutes)}${r.topics ? ' · 📚 ' + esc(r.topics.slice(0, 70)) + (r.topics.length > 70 ? '…' : '') : ''}` : '<span class="neg">🚫 ماحضرش</span>'}</div></div>
+      ${r.sent_at ? '<span class="badge b-done">اتبعت</span>' : '<span class="badge b-pending">جديد</span>'}</div></div>`; };
+  const pend = list.filter(r => !r.sent_at), done = list.filter(r => r.sent_at).slice(0, 15);
+  openModal(`📝 تقارير الحصص${pend.length ? ` (${pend.length} جديد)` : ''}`, `
+    <p class="sub small">المعلمة بتكتب التقرير من البوابة بعد الحصة. ابعته للأسرة وعلّم عليه "اتبعت" — كده أي اعتراض بيبان من يومها مش آخر الشهر.</p>
+    ${pend.length ? `<div class="list">${pend.map(card).join('')}</div>` : '<div class="empty">مفيش تقارير جديدة 👌</div>'}
+    ${done.length ? `<details class="mt"><summary class="sub">آخر التقارير اللي اتبعتت</summary><div class="list mt">${done.map(card).join('')}</div></details>` : ''}`);
+}
+
+/* ============================================================
    طلبات المعلمات (تأجيل / إلغاء / غياب / مدة / إيقاف طالب)
    ============================================================ */
 const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب', payment_info: '💳 تغيير رقم التحويل', add_session: '➕ حصة إضافية / تعويض' };
@@ -3593,6 +3715,7 @@ async function enterApp() {
   // فتح يوم معيّن لو جاي من إشعار (?day=YYYY-MM-DD)
   const openReq = new URLSearchParams(location.search).get('req');
   if (openReq) setTimeout(() => openTutorRequests(), 1500);
+  if (new URLSearchParams(location.search).get('reports')) setTimeout(() => openReports(), 1500);
   const qDay = new URLSearchParams(location.search).get('day');
   if (qDay && /^\d{4}-\d{2}-\d{2}$/.test(qDay)) state.day = qDay;
   // مسح بقايا رابط جوجل (?code=… / #…) من شريط العنوان

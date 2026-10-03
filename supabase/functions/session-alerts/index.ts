@@ -180,6 +180,26 @@ Deno.serve(async (req) => {
     return json({ sent: res.length });
   }
 
+  // ---------- تقرير حصة من المعلمة ----------
+  if (body.action === 'session_report') {
+    const { data: r } = await admin.from('session_reports').select('*, tutors(name), sessions(scheduled_at,subject,student_id,group_key,group_name,duration_minutes, students(name))').eq('id', body.id).maybeSingle();
+    if (!r) return json({ error: 'not found' }, 404);
+    const se: any = r.sessions || {};
+    const who = se.group_key ? `👥 ${se.group_name || 'مجموعة'}` : (se.students?.name || 'الطالب');
+    const planned = Number(se.duration_minutes || 60);
+    const { data: sups } = await admin.from('supervisors').select('id').eq('active', true);
+    const ids = (sups || []).map((x: any) => x.id);
+    const { data: subs } = ids.length ? await admin.from('push_subscriptions').select('*').in('user_id', ids) : { data: [] };
+    const res = await pushToSubs((subs || []) as Sub[], {
+      title: `📝 ${body.edit ? 'تعديل ' : ''}تقرير حصة ${who} — ${r.tutors?.name || 'المعلمة'}`,
+      body: r.attended
+        ? `${se.subject ? se.subject + ' · ' : ''}${se.scheduled_at ? dayTime(se.scheduled_at) : ''}\n⏱ ${durL(r.minutes)}${r.minutes !== planned ? ` (المخطط ${durL(planned)})` : ''}${r.absent_ids?.length ? ` · غاب ${r.absent_ids.length}` : ''}${r.topics ? '\n📚 ' + String(r.topics).slice(0, 140) : ''}\nافتحه وابعته للأسرة.`
+        : `🚫 الطالب ماحضرش — ${se.scheduled_at ? dayTime(se.scheduled_at) : ''}${r.tutor_note ? '\n📝 ' + r.tutor_note : ''}\nافتح التقرير.`,
+      tag: 'rep-' + r.id, url: './?reports=1', requireInteraction: false,
+    }, vapid);
+    return json({ sent: res.length });
+  }
+
   // delayed test pushes requested from the dashboard ("اقفل الموبايل واستنى")
   const testReport: any[] = [];
   const { data: tests } = await admin.from('push_test_requests').select('*').is('sent_at', null).lte('due_at', new Date().toISOString()).limit(20);
