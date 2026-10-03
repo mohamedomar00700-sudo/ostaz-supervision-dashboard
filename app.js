@@ -737,6 +737,30 @@ async function findConflicts(rows, excludeId) {
   }
   return out;
 }
+// رسايل جاهزة للأسرة والمعلمة بعد إضافة حصة / حصص جديدة
+function newSessionNotices(rows) {
+  const r0 = rows[0], { st, fam, tu } = sessionView(r0);
+  const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+  const subj = `${st?.name || ''}${r0.subject ? ` (${r0.subject})` : ''}`;
+  const weekly = rows.length > 1;
+  const list = tz => rows.slice(0, 8).map(x => `• ${fmtDate(x.scheduled_at, tz)} الساعة ${fmtTime(x.scheduled_at, tz)}`).join('\n') + (rows.length > 8 ? `\n… و${rows.length - 8} حصص كمان` : '');
+  const famText = `السلام عليكم ورحمة الله 🌷
+${weekly ? `تم إضافة موعد ثابت لحصة ${subj}: يوم ${new Date(r0.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', timeZone: c.tz })} من كل أسبوع الساعة ${fmtTime(r0.scheduled_at, c.tz)} بتوقيت ${c.tzName} (${durLabel(r0.duration_minutes)})
+بداية من ${fmtDate(r0.scheduled_at, c.tz)}.` : `تم إضافة حصة ${r0.makeup_of ? 'تعويضية' : 'إضافية'} لـ ${subj}:
+📅 ${fmtDate(r0.scheduled_at, c.tz)} الساعة ${fmtTime(r0.scheduled_at, c.tz)} بتوقيت ${c.tzName} (${durLabel(r0.duration_minutes)})`}
+لو المعاد مش مناسب بلّغونا ونرتب معاد تاني إن شاء الله 🙏
+${SIGN_F}`;
+  const tuText = `${greetTutor(tu?.name)}
+تم اعتماد ${weekly ? 'الموعد الثابت' : 'الحصة الإضافية'} مع ${subj} — بتوقيت القاهرة (${durLabel(r0.duration_minutes)}):
+${list(CAIRO_TZ)}
+${SIGN_T}`;
+  openModal(`تم ✓ ${weekly ? `${rows.length} حصص` : 'الحصة اتضافت'} — بلّغ الأطراف`, `<div class="list">${[
+    msgBlock(`رسالة ${fam?.name || 'الأسرة'}`, famText, { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id }),
+    msgBlock(`للمعلمة — ${tu?.name || ''}`, tuText, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id })].join('')}</div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="openTutorRequests()">باقي الطلبات</button></div>`);
+  document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
+
 async function openSessionForm(id, prefill = {}) {
   if (!state.students.length || !state.tutors.length) {
     showToast('لازم تضيف طالب ومعلم الأول', true);
@@ -746,7 +770,7 @@ async function openSessionForm(id, prefill = {}) {
   const s = id ? findSession(id) : null;
   if (s?.group_key) return openGroupForm(s.group_key);
   if (prefill.kind === 'group') return openGroupForm(null, { tutor_id: prefill.tutor_id, subject: prefill.subject, day: prefill.day, students: prefill.student_id ? [prefill.student_id] : [] });
-  const when = s ? new Date(s.scheduled_at) : (() => {
+  const when = s ? new Date(s.scheduled_at) : prefill.at ? new Date(prefill.at) : (() => {
     const d = parseDay(prefill.day || state.day); const n = new Date(); d.setHours(Math.min(n.getHours() + 1, 22), 0, 0, 0); return d; })();
   const kind = s?.kind || prefill.kind || 'regular';
   const fields = [
@@ -760,11 +784,11 @@ async function openSessionForm(id, prefill = {}) {
     [{ name: 'student_price', label: 'سعر الساعة للأسرة', type: 'number', required: true, value: s?.student_price, hint: 'بعملة الأسرة' },
      { name: 'tutor_cost_egp', label: 'أجر الساعة للمعلم (EGP)', type: 'number', required: true, value: s?.tutor_cost_egp }],
     { name: 'meeting_link', label: 'رابط الحصة', value: s?.meeting_link, placeholder: 'meet.google.com/…' },
-    { name: 'notes', label: 'ملاحظات', type: 'textarea', value: s?.notes },
+    { name: 'notes', label: 'ملاحظات', type: 'textarea', value: s?.notes ?? prefill.notes },
   ];
-  if (!s) fields.push({ name: 'repeat', label: 'تكرار أسبوعي', type: 'select', value: '1',
+  if (!s) fields.push({ name: 'repeat', label: 'تكرار أسبوعي', type: 'select', value: String(prefill.repeat || 1),
     options: [1, 2, 4, 8, 12, 16].map(n => ({ v: n, l: n === 1 ? 'بدون تكرار (حصة واحدة)' : `نفس الموعد لمدة ${n} أسابيع` })) });
-  openModal(s ? 'تعديل حصة' : prefill.makeup_of ? 'حصة تعويضية' : 'حصة جديدة', formHtml(fields, s ? 'حفظ التعديل' : 'إضافة الحصة'));
+  openModal(s ? 'تعديل حصة' : prefill.title || (prefill.makeup_of ? 'حصة تعويضية' : 'حصة جديدة'), formHtml(fields, s ? 'حفظ التعديل' : 'إضافة الحصة'));
 
   const $ = n => document.getElementById('f_' + n);
   const stSel = $('student_id'), tuSel = $('tutor_id'), durIn = $('duration_minutes');
@@ -816,6 +840,7 @@ async function openSessionForm(id, prefill = {}) {
       if (p.tutor_rate_egp != null) $('tutor_cost_egp').value = p.tutor_rate_egp;
       else if (t && t.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp;
     }
+    if (p.meeting_link && !$('meeting_link').value) $('meeting_link').value = p.meeting_link;
     document.querySelectorAll('#plan-picks .stu').forEach(b => b.classList.toggle('picked', b.dataset.pid === p.id));
     totals();
   };
@@ -847,6 +872,8 @@ async function openSessionForm(id, prefill = {}) {
   if (!s && prefill.tutor_id) { const t = byId(state.tutors, prefill.tutor_id); if (t?.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp; totals(); }
   renderPicks(false);
   if (prefill.plan_id) window._applyPlan(prefill.plan_id);
+  if (prefill.duration) durIn.value = prefill.duration;
+  if (prefill.intro) document.getElementById('modal-body').insertAdjacentHTML('afterbegin', prefill.intro);
   kindChanged();
 
   window._formSubmit = () => runSubmit(async () => {
@@ -884,7 +911,9 @@ async function openSessionForm(id, prefill = {}) {
       state.day = fv('date');
     }
     closeModal();
+    if (!s && prefill.onDone) await prefill.onDone(rows);
     await refreshAll();
+    if (!s && prefill.notify) newSessionNotices(rows);
   });
 }
 
@@ -3199,7 +3228,7 @@ ${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }))
 /* ============================================================
    طلبات المعلمات (تأجيل / إلغاء / غياب / مدة / إيقاف طالب)
    ============================================================ */
-const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب', payment_info: '💳 تغيير رقم التحويل' };
+const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب', payment_info: '💳 تغيير رقم التحويل', add_session: '➕ حصة إضافية / تعويض' };
 async function openTutorRequests() {
   let list = [];
   try { list = await q(sb.from('tutor_requests').select('*').order('created_at', { ascending: false }).limit(40)); } catch (e) { return showToast(dbError(e), true); }
@@ -3218,9 +3247,10 @@ async function openTutorRequests() {
         ${r.status === 'pending' ? `<div class="pill bad mt" style="display:inline-block;white-space:normal">⚠️ كلّم المعلمة على رقمها المعروف واتأكد إنها هي اللي طلبت قبل الموافقة</div>` : ''}` : `
       <div class="meta"><span>الطالب: <b>${esc(s?.group_key ? '👥 ' + (s.group_name || 'مجموعة') : st?.name || '')}</b> <span class="sub small">${esc(fam?.name || '')}</span></span>
         ${s ? `<span>الحصة: <b>${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</b>${s.subject ? ' · ' + esc(s.subject) : ''}${isCancelled(s) ? ' <span class="neg">(ملغاة)</span>' : ''}</span>` : ''}
-        ${r.proposed_at ? `<span>المقترح: <b>${fmtShortDate(r.proposed_at)} ${timeStr(new Date(r.proposed_at))}</b> <span class="sub small">(القاهرة ${fmtTime(r.proposed_at, CAIRO_TZ)})</span></span>` : ''}
+        ${r.proposed_at ? `<span>${r.kind === 'add_session' ? (r.scope === 'permanent' ? 'من' : 'المعاد') : 'المقترح'}: <b>${fmtShortDate(r.proposed_at)} ${timeStr(new Date(r.proposed_at))}</b> <span class="sub small">(القاهرة ${fmtTime(r.proposed_at, CAIRO_TZ)})</span></span>` : ''}
         ${r.proposed_minutes ? `<span>المدة: <b>${durLabel(r.proposed_minutes)}</b></span>` : ''}
-        ${r.kind === 'reschedule' ? `<span>النوع: <b>${r.scope === 'permanent' ? '♾ تغيير دايم' : 'الحصة دي بس'}</b></span>` : ''}</div>`}
+        ${r.kind === 'reschedule' ? `<span>النوع: <b>${r.scope === 'permanent' ? '♾ تغيير دايم' : 'الحصة دي بس'}</b></span>` : ''}
+        ${r.kind === 'add_session' ? `${r.new_value ? `<span>المادة: <b>${esc(r.new_value)}</b></span>` : ''}<span>النوع: <b>${r.scope === 'permanent' ? '🔁 ميعاد ثابت كل أسبوع' : 'مرة واحدة'}</b></span>` : ''}</div>`}
       ${r.reason && r.kind !== 'payment_info' ? `<div class="mt" style="white-space:pre-wrap">📝 ${esc(r.reason)}</div>` : ''}
       ${late ? `<div class="pill bad mt" style="display:inline-block">⚠️ إلغاء متأخر — أقل من ${LATE_HOURS} ساعات قبل الحصة</div>` : ''}
       ${r.decision_note ? `<div class="sub small mt">ردّك: ${esc(r.decision_note)}</div>` : ''}
@@ -3247,6 +3277,15 @@ async function approveTutorRequest(id) {
   const r = list.find(x => x.id === id), s = sess.find(x => x.id === r.session_id);
   const tu = byId(state.tutors, r.tutor_id), st = byId(state.students, r.student_id);
   try {
+    if (r.kind === 'add_session') {
+      const pl = state.plans.find(p => p.student_id === r.student_id && p.tutor_id === r.tutor_id && (!r.new_value || norm(p.subject) === norm(r.new_value)))
+        || state.plans.find(p => p.student_id === r.student_id && p.tutor_id === r.tutor_id);
+      return openSessionForm(null, { student_id: r.student_id, tutor_id: r.tutor_id, subject: r.new_value || pl?.subject, plan_id: pl?.id, at: r.proposed_at,
+        duration: r.proposed_minutes, repeat: r.scope === 'permanent' ? 8 : 1, notes: `بطلب ${tu?.name || 'المعلمة'}${r.reason ? ': ' + r.reason : ''}`,
+        title: `➕ موافقة على طلب ${tu?.name || 'المعلمة'}`, notify: true,
+        intro: `<div class="card item mb" style="background:var(--warn-soft)">راجع المعاد والسعر${r.scope === 'permanent' ? ' وعدد الأسابيع' : ''} قبل الإضافة — الحصة هتتعمل والمعلمة هيوصلها إشعار بالموافقة.${r.reason ? `<div class="small mt">📝 ${esc(r.reason)}</div>` : ''}</div>`,
+        onDone: () => decideRequest(r, 'approved') });
+    }
     if (r.kind === 'payment_info') {
       if (!confirm(`اعتماد رقم التحويل الجديد لـ ${tu?.name || 'المعلمة'}؟\n\nالقديم: ${r.old_value || '—'}\nالجديد: ${r.new_value}\n\nاتأكدت منها بنفسك؟`)) return;
       const isBank = /^(InstaPay|حساب بنكي):/.test(r.new_value || '');

@@ -143,7 +143,8 @@ function tutorRender() {
           <span class="sub small">${r.rate != null ? fmt(r.rate) + ' ج/ساعة' : ''}</span></div>
         <div class="actions">${r.meeting_link ? `<a class="btn btn-ghost sm" href="${esc(linkHref(r.meeting_link))}" target="_blank" rel="noopener">🎥 اللينك</a>` : '<span class="neg small">مفيش لينك</span>'}
           <button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(r.student_id)}, ${jsq(r.subject)}, ${jsq(r.meeting_link || '')})">${r.meeting_link ? '✏️ تعديل اللينك' : '🔗 ضيفي لينك'}</button>
-          <button class="btn btn-ghost sm" onclick="tutorRequest(null, ${jsq(r.student_id)})">📨 طلب بخصوص الطالب</button></div>
+          <button class="btn btn-ghost sm" onclick="tutorRequest(null, ${jsq(r.student_id)}, ${jsq(r.subject || '')}, 'add_session')">➕ حصة إضافية</button>
+          <button class="btn btn-ghost sm" onclick="tutorRequest(null, ${jsq(r.student_id)}, ${jsq(r.subject || '')})">📨 طلب بخصوص الطالب</button></div>
       </div>`).join('') || '<div class="card empty">لسه مفيش طلاب متسجلين معاكي.</div>'}</div>`;
   } else {
     const mr = tMonthRange(T.month);
@@ -227,6 +228,7 @@ const T_REQ = {
   remove_student: { l: 'إيقاف الطالب', icon: '⛔', need: 'reason' },
   other: { l: 'طلب تاني', icon: '💬', need: 'reason' },
   payment_info: { l: 'تغيير رقم التحويل', icon: '💳' },
+  add_session: { l: 'حصة إضافية / تعويض', icon: '➕' },
 };
 const T_REQ_ST = { pending: ['⏳ مستني الرد', 'b-pending'], approved: ['✅ اتوافق', 'b-done'], rejected: ['❌ اترفض', 'b-cancel'] };
 const tPendingFor = s => (T.requests || []).find(r => r.session_id === s.id && r.status === 'pending');
@@ -239,41 +241,55 @@ function tutorRequestsHtml() {
         ${r.decision_note ? `<div class="small mt">📝 الإشراف: ${esc(r.decision_note)}</div>` : ''}</div>
       <span class="badge ${T_REQ_ST[r.status][1]}">${T_REQ_ST[r.status][0]}</span></div></div>`).join('')}</div>`;
 }
-function tutorRequest(sessionId, studentId) {
+function tutorRequest(sessionId, studentId, subject, preset) {
   if (T.preview) return showToast('ده عرض معاينة — المعلمة هي اللي بتبعت الطلبات من حسابها');
   const s = sessionId ? T.week.find(x => x.id === sessionId) : null;
   const st = s ? { name: s.group_key ? s.group_name || 'المجموعة' : s.student_name } : (T.students.find(x => x.student_id === studentId) ? { name: T.students.find(x => x.student_id === studentId).student_name } : { name: '' });
   const started = s && Date.now() >= new Date(s.scheduled_at).getTime();
-  const kinds = s ? ['reschedule', 'cancel', ...(started ? ['absent', 'extend'] : [])] : ['remove_student', 'other'];
-  const rq = { kind: kinds[0], reason: '', scope: 'once', mins: s ? (s.duration_minutes || 60) + 30 : null };
-  const d0 = s ? new Date(new Date(s.scheduled_at).getTime() + 864e5) : null;
+  const kinds = s ? ['reschedule', 'cancel', ...(started ? ['absent', 'extend'] : [])] : ['add_session', 'remove_student', 'other'];
+  const lastOf = !s && (T.week || []).filter(x => x.student_id === studentId && (!subject || x.subject === subject)).sort((a, b) => b.scheduled_at < a.scheduled_at ? -1 : 1)[0];
+  const rq = { kind: preset && kinds.includes(preset) ? preset : kinds[0], reason: '', scope: 'once', mins: s ? (s.duration_minutes || 60) + 30 : (lastOf?.duration_minutes || 60) };
+  const d0 = s ? new Date(new Date(s.scheduled_at).getTime() + 864e5) : new Date(Date.now() + 864e5);
+  const t0 = s ? timeStr(new Date(s.scheduled_at)) : lastOf ? timeStr(new Date(lastOf.scheduled_at)) : '17:00';
   window._rq = rq;
   const render = () => {
     const K = T_REQ[rq.kind];
     document.getElementById('modal-body').innerHTML = `
-      <div class="sub small mb">${esc(st.name)}${s ? ` · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}` : ''}</div>
+      <div class="sub small mb">${esc(st.name)}${!s && subject ? ` · ${esc(subject)}` : ''}${s ? ` · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}` : ''}</div>
       <div class="field"><label>نوع الطلب</label><div class="seg-wrap">${kinds.map(k => `<button type="button" class="chip ${rq.kind === k ? 'active' : ''}" onclick="_rq.kind='${k}'; _rqRender()">${T_REQ[k].icon} ${T_REQ[k].l}</button>`).join('')}</div></div>
       ${rq.kind === 'reschedule' ? `<div class="field-row"><div class="field"><label>المعاد الجديد المقترح</label><input id="rq-date" type="date" class="input" value="${dateStr(d0)}"></div>
         <div class="field"><label>الساعة (بتوقيت القاهرة)</label><input id="rq-time" type="time" class="input" value="${timeStr(new Date(s.scheduled_at))}"></div></div>
         <div class="field"><label>التغيير ده</label><div class="seg-wrap"><button type="button" class="chip ${rq.scope === 'once' ? 'active' : ''}" onclick="_rq.scope='once'; _rqRender()">الحصة دي بس</button>
           <button type="button" class="chip ${rq.scope === 'permanent' ? 'active' : ''}" onclick="_rq.scope='permanent'; _rqRender()">♾ دايم (كل الأسابيع الجاية)</button></div></div>` : ''}
+      ${rq.kind === 'add_session' ? `<div class="field-row"><div class="field"><label>${rq.scope === 'permanent' ? 'أول حصة' : 'يوم الحصة'}</label><input id="rq-date" type="date" class="input" value="${esc(rq.date || dateStr(d0))}" onchange="_rq.date=this.value"></div>
+        <div class="field"><label>الساعة (بتوقيت القاهرة)</label><input id="rq-time" type="time" class="input" value="${esc(rq.time || t0)}" onchange="_rq.time=this.value"></div></div>
+        <div class="field"><label>المدة</label><div class="chips" style="margin:0">${[30, 45, 60, 90, 120].map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>
+        <div class="field"><label>الحصة دي</label><div class="seg-wrap"><button type="button" class="chip ${rq.scope === 'once' ? 'active' : ''}" onclick="_rq.scope='once'; _rqRender()">مرة واحدة (زيادة / تعويض)</button>
+          <button type="button" class="chip ${rq.scope === 'permanent' ? 'active' : ''}" onclick="_rq.scope='permanent'; _rqRender()">🔁 ميعاد ثابت كل أسبوع</button></div></div>` : ''}
       ${rq.kind === 'extend' ? `<div class="field"><label>المدة الفعلية للحصة</label><div class="chips" style="margin:0">${[15, 30, 45, 60, 90].map(x => (s.duration_minutes || 60) + x).map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>` : ''}
-      <div class="field"><label>${K.need ? 'السبب' : 'ملاحظة (اختياري)'}</label><textarea id="rq-reason" class="input" placeholder="${rq.kind === 'remove_student' ? 'مثال: الطالب مش ملتزم / مش مناسب لمستوايا' : rq.kind === 'cancel' ? 'مثال: ظرف طارئ' : 'اكتبي التفاصيل'}" oninput="_rq.reason=this.value">${esc(rq.reason)}</textarea></div>
+      <div class="field"><label>${K.need ? 'السبب' : rq.kind === 'add_session' ? 'السبب (تعويض؟ امتحان؟) — اختياري' : 'ملاحظة (اختياري)'}</label><textarea id="rq-reason" class="input" placeholder="${rq.kind === 'add_session' ? 'مثال: تعويض حصة الأحد اللي اتلغت / الطالب عنده امتحان' : rq.kind === 'remove_student' ? 'مثال: الطالب مش ملتزم / مش مناسب لمستوايا' : rq.kind === 'cancel' ? 'مثال: ظرف طارئ' : 'اكتبي التفاصيل'}" oninput="_rq.reason=this.value">${esc(rq.reason)}</textarea></div>
       <div id="form-error" class="err hidden"></div>
       <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_rqSend()">إرسال للإشراف</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>
       <p class="sub small">الطلب بيروح للإشراف يوافق عليه، وبعدها التغيير بيتنفذ ويتبلغ لولي الأمر. ⚠️ أي تغيير مهم لازم كمان تبلّغي بيه الإشراف على الجروب.</p>`;
   };
   window._rqRender = render;
-  openModal(sessionId ? 'طلب تغيير في الحصة' : 'طلب بخصوص الطالب', ''); render();
+  openModal(sessionId ? 'طلب تغيير في الحصة' : rq.kind === 'add_session' ? '➕ طلب حصة إضافية' : 'طلب بخصوص الطالب', ''); render();
   window._rqSend = () => runSubmit(async () => {
     const K = T_REQ[rq.kind];
     if (K.need && !rq.reason.trim()) return formError('اكتبي السبب عشان الإشراف يقدر يتصرف');
     let at = null;
-    if (rq.kind === 'reschedule') { const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`); if (isNaN(d)) return formError('اختاري المعاد الجديد'); at = d.toISOString(); }
-    const { error } = await sb.rpc('tutor_request_create', { p_kind: rq.kind, p_session: s?.id || null, p_student: s ? null : studentId, p_proposed_at: at, p_minutes: rq.kind === 'extend' ? rq.mins : null, p_reason: rq.reason, p_scope: rq.kind === 'reschedule' ? rq.scope : 'once' });
+    if (rq.kind === 'add_session') {
+      const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`);
+      if (isNaN(d)) return formError('اختاري اليوم والساعة');
+      if (d.getTime() < Date.now() - 864e5) return formError('المعاد ده فات');
+      const { error } = await sb.rpc('tutor_request_add_session', { p_student: studentId, p_subject: subject || null, p_at: d.toISOString(), p_minutes: rq.mins, p_weekly: rq.scope === 'permanent', p_reason: rq.reason });
+      if (error) throw error;
+      at = d.toISOString();
+    } else if (rq.kind === 'reschedule') { const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`); if (isNaN(d)) return formError('اختاري المعاد الجديد'); at = d.toISOString(); }
+    const { error } = rq.kind === 'add_session' ? { error: null } : await sb.rpc('tutor_request_create', { p_kind: rq.kind, p_session: s?.id || null, p_student: s ? null : studentId, p_proposed_at: at, p_minutes: rq.kind === 'extend' ? rq.mins : null, p_reason: rq.reason, p_scope: rq.kind === 'reschedule' ? rq.scope : 'once' });
     if (error) throw error;
     const text = `السلام عليكم 👋 — ${T.me.name}
-📨 طلب ${K.l}${rq.kind === 'reschedule' && rq.scope === 'permanent' ? ' (دايم)' : ''}: ${st.name}${s ? `\n📅 الحصة: ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}${s.subject ? ' — ' + s.subject : ''}` : ''}${at ? `\n➡️ المعاد المقترح: ${relDayLabel(at, CAIRO_TZ)} الساعة ${tTime(at)}` : ''}${rq.kind === 'extend' ? `\n⏱ المدة الفعلية: ${durLabel(rq.mins)}` : ''}${rq.reason ? `\n📝 ${rq.reason}` : ''}
+📨 طلب ${K.l}${rq.kind === 'reschedule' && rq.scope === 'permanent' ? ' (دايم)' : rq.kind === 'add_session' && rq.scope === 'permanent' ? ' (ميعاد ثابت كل أسبوع)' : ''}: ${st.name}${!s && subject ? ' — ' + subject : ''}${s ? `\n📅 الحصة: ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}${s.subject ? ' — ' + s.subject : ''}` : ''}${at ? `\n➡️ ${rq.kind === 'add_session' ? (rq.scope === 'permanent' ? 'من' : 'المعاد') : 'المعاد المقترح'}: ${relDayLabel(at, CAIRO_TZ)} الساعة ${tTime(at)}${rq.kind === 'add_session' ? ' — ' + durLabel(rq.mins) : ''}` : ''}${rq.kind === 'extend' ? `\n⏱ المدة الفعلية: ${durLabel(rq.mins)}` : ''}${rq.reason ? `\n📝 ${rq.reason}` : ''}
 (الطلب متسجل على بوابة المعلمات)`;
     window._rqText = text;
     openModal('✅ الطلب اتبعت للإشراف', `<p>الإشراف هيراجع الطلب، وهيوصلك إشعار بالرد.</p>
