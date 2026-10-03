@@ -244,6 +244,35 @@ Deno.serve(async (req) => {
     }
   }
 
+  // تذكير تاني للمعلمة لو لسه ماكتبتش التقرير بعد الحصة بساعتين
+  const nagReport: any[] = [];
+  {
+    const n0 = Date.now();
+    const { data: linkedT } = await admin.from('tutors').select('id,user_id').not('user_id', 'is', null);
+    const lIds = (linkedT || []).map((t: any) => t.id);
+    const { data: cand } = lIds.length ? await admin.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,subject,student_id,tutor_id,group_key,group_name,status')
+      .in('tutor_id', lIds).in('status', ['scheduled', 'in_progress', 'done']).gte('scheduled_at', new Date(n0 - 14 * 3600e3).toISOString()).lte('scheduled_at', new Date(n0 - 2 * 3600e3).toISOString()) : { data: [] as any[] };
+    const seen = new Set<string>();
+    for (const s of cand || []) {
+      const key = s.group_key || s.id; if (seen.has(key)) continue; seen.add(key);
+      const endT = new Date(s.scheduled_at).getTime() + Number(s.duration_minutes || 60) * 60e3;
+      if (!(n0 >= endT + 2 * 3600e3 && n0 < endT + 2 * 3600e3 + 10 * 60e3)) continue;
+      const { data: hasRep } = s.group_key ? await admin.from('session_reports').select('id').eq('group_key', s.group_key).limit(1) : await admin.from('session_reports').select('id').eq('session_id', s.id).limit(1);
+      if (hasRep?.length) continue;
+      const { data: cl } = await admin.from('session_alert_log').upsert([{ session_id: s.id, kind: `repnag@${new Date(s.scheduled_at).getTime()}` }], { onConflict: 'session_id,kind', ignoreDuplicates: true }).select();
+      if (!cl?.length) continue;
+      const tu: any = (linkedT || []).find((t: any) => t.id === s.tutor_id);
+      const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
+      if (!tsubs?.length) continue;
+      const { data: stu } = s.group_key ? { data: null } : await admin.from('students').select('name').eq('id', s.student_id).maybeSingle();
+      nagReport.push(await pushToSubs(tsubs as Sub[], {
+        title: `⏰ لسه تقرير حصة ${s.group_key ? '👥 ' + (s.group_name || 'المجموعة') : (stu as any)?.name || 'الطالب'} مااتكتبش`,
+        body: `${s.subject ? s.subject + ' · ' : ''}${dayTime(s.scheduled_at)}\nاكتبيه دلوقتي عشان يوصل لولي الأمر النهارده 🙏`,
+        tag: `t:${s.id}:repnag`, url: `./?rep=${s.id}`, requireInteraction: true,
+      }, vapid));
+    }
+  }
+
   const now = Date.now();
   const { data: sessions, error } = await admin.from('sessions')
     .select('id, scheduled_at, duration_minutes, status, kind, subject, student_id, tutor_id, meeting_link, group_key, group_name')
@@ -265,7 +294,7 @@ Deno.serve(async (req) => {
     if (s.status === 'scheduled' && now >= t - 30e3 && now < t + 10 * 60e3) due.push({ session_id: s.id, kind: `start@${t}` });
     if (now >= end - 30e3 && now < end + 10 * 60e3) due.push({ session_id: s.id, kind: `end@${t}@${s.duration_minutes}` });
   }
-  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0, tests: testReport.length, tutorUpdates: tnReport.length });
+  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0, tests: testReport.length, tutorUpdates: tnReport.length, reportNags: nagReport.length });
 
   // claim alerts atomically so a session is never announced twice
   const { data: claimed, error: claimErr } = await admin.from('session_alert_log')
@@ -317,6 +346,18 @@ Deno.serve(async (req) => {
     }) : [];
     // تذكير المعلمة نفسها (قبل الحصة بـ 15 دقيقة وعند بدايتها) — من غير أي بيانات للأسرة
     let tutorPush: any[] = [];
+    if (tu?.user_id && c.kind.startsWith('end')) {
+      const { data: hasRep } = s.group_key ? await admin.from('session_reports').select('id').eq('group_key', s.group_key).limit(1) : await admin.from('session_reports').select('id').eq('session_id', s.id).limit(1);
+      const { data: tsubs } = hasRep?.length ? { data: [] } : await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
+      if (tsubs?.length) {
+        const names = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : (st?.name || 'الطالب');
+        tutorPush = await pushToSubs(tsubs as Sub[], {
+          title: `📝 حصة ${names} خلصت — اكتبي التقرير`,
+          body: `${s.subject ? s.subject + ' · ' : ''}دقيقة واحدة: الطالب حضر؟ اتشرح إيه؟ والواجب.\nالإشراف بيبعته لولي الأمر.`,
+          tag: `t:${s.id}:rep`, url: `./?rep=${s.id}`, requireInteraction: true,
+        }, vapid);
+      }
+    }
     if (tu?.user_id && !c.kind.startsWith('end')) {
       const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
       if (tsubs?.length) {

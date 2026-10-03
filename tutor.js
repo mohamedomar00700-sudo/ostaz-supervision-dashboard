@@ -78,6 +78,7 @@ async function tutorRefresh() {
     T.week = a.data.map(enfix); T.students = b.data.map(enfix); T.payouts = c.data; T.monthRows = d.data.map(enfix);
     try { const rr = await sb.rpc('tutor_reports_mine', { p_from: new Date(from.getTime() - 40 * 864e5).toISOString(), p_to: to.toISOString() }); T.reports = rr.data || []; } catch (e) { T.reports = []; }
     tutorRender();
+    tutorReportPrompt();
   } catch (e) { showToast(dbError(e), true); }
 }
 function tutorTab(t) { T.tab = t; document.querySelectorAll('#tutor-tabs .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t)); tutorRender(); }
@@ -255,7 +256,7 @@ function tutorRequest(sessionId, studentId, subject, preset) {
   const s = sessionId ? T.week.find(x => x.id === sessionId) : null;
   const st = s ? { name: s.group_key ? s.group_name || 'المجموعة' : s.student_name } : (T.students.find(x => x.student_id === studentId) ? { name: T.students.find(x => x.student_id === studentId).student_name } : { name: '' });
   const started = s && Date.now() >= new Date(s.scheduled_at).getTime();
-  const kinds = s ? ['reschedule', 'cancel', ...(started ? ['absent', 'extend'] : [])] : ['add_session', 'remove_student', 'other'];
+  const kinds = s ? (started ? ['cancel', 'reschedule'] : ['reschedule', 'cancel']) : ['add_session', 'remove_student', 'other']; // الحضور والمدة بقوا في تقرير الحصة
   const lastOf = !s && (T.week || []).filter(x => x.student_id === studentId && (!subject || x.subject === subject)).sort((a, b) => b.scheduled_at < a.scheduled_at ? -1 : 1)[0];
   const rq = { kind: preset && kinds.includes(preset) ? preset : kinds[0], reason: '', scope: 'once', mins: s ? (s.duration_minutes || 60) + 30 : (lastOf?.duration_minutes || 60) };
   const d0 = s ? new Date(new Date(s.scheduled_at).getTime() + 864e5) : new Date(Date.now() + 864e5);
@@ -380,7 +381,7 @@ function tutorReport(sessionId) {
   const old = tRepFor(s);
   const members = s.group_key ? (s.rows || [s]).map(r => ({ id: r.student_id, name: r.student_name })) : [];
   const planned = s.duration_minutes || 60;
-  const R = window._tr = { attended: old ? old.attended : true, absent: new Set(old?.absent_ids || []), mins: old?.minutes || tMins(s) || planned,
+  const R = window._tr = { attended: old ? old.attended : true, absent: new Set(old?.absent_ids || []), mins: old?.minutes || tMins(s) || planned, durChanged: !!(old?.minutes && old.minutes !== planned),
     topics: old?.topics || '', homework: old?.homework || '', level: old?.level || '', note: old?.tutor_note || '' };
   const render = () => {
     const opts = [...new Set([planned, planned + 15, planned + 30, planned + 60, Math.max(15, planned - 15)])].sort((a, b) => a - b);
@@ -388,8 +389,11 @@ function tutorReport(sessionId) {
       <div class="sub small mb">${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)} · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</div>
       ${s.group_key ? `<div class="field"><label>مين حضر؟</label><div class="gm-list">${members.map(m => `<label class="gm-row gm-check"><input type="checkbox" ${R.absent.has(m.id) ? '' : 'checked'} onchange="_tr.absent[this.checked ? 'delete' : 'add'](${jsq(m.id)})"> <b>${esc(m.name)}</b></label>`).join('')}</div></div>`
         : `<div class="field"><label>الطالب حضر؟</label><div class="seg-wrap"><button type="button" class="chip ${R.attended ? 'active' : ''}" onclick="_tr.attended=true; _trRender()">✅ حضر</button><button type="button" class="chip ${!R.attended ? 'active' : ''}" onclick="_tr.attended=false; _trRender()">🚫 ماحضرش</button></div></div>`}
-      ${R.attended ? `<div class="field"><label>مدة الحصة الفعلية</label><div class="chips" style="margin:0">${opts.map(m => `<button type="button" class="chip ${R.mins === m ? 'active' : ''}" onclick="_tr.mins=${m}; _trRender()">${durLabel(m)}${m === planned ? ' (المعاد)' : ''}</button>`).join('')}</div></div>
-        ${hmHtml('tr_hm', R.mins)}
+      ${R.attended ? `<div class="field"><label>الحصة خدت وقتها؟</label><div class="seg-wrap">
+          <button type="button" class="chip ${!R.durChanged ? 'active' : ''}" onclick="_tr.durChanged=false; _tr.mins=${planned}; _trRender()">✅ آه (${durLabel(planned)})</button>
+          <button type="button" class="chip ${R.durChanged ? 'active' : ''}" onclick="_tr.durChanged=true; _trRender()">⏱ لأ، المدة اختلفت</button></div></div>
+        ${R.durChanged ? `<div class="field"><label>المدة الفعلية</label><div class="chips" style="margin:0">${opts.filter(m => m !== planned).map(m => `<button type="button" class="chip ${R.mins === m ? 'active' : ''}" onclick="_tr.mins=${m}; _trRender()">${durLabel(m)}</button>`).join('')}</div></div>
+        ${hmHtml('tr_hm', R.mins)}` : ''}
         <div class="field"><label>اتشرح إيه في الحصة؟</label><textarea id="tr-topics" class="input" rows="3" placeholder="مثال: الدرس التاني في الوحدة الأولى — حل تمارين صفحة 20" oninput="_tr.topics=this.value">${esc(R.topics)}</textarea></div>
         <div class="field"><label>الواجب (اختياري)</label><textarea id="tr-hw" class="input" rows="2" placeholder="مثال: تمارين 1 لـ 5 صفحة 22" oninput="_tr.homework=this.value">${esc(R.homework)}</textarea></div>
         <div class="field"><label>مشاركة الطالب (اختياري)</label><div class="seg-wrap">${Object.entries(T_LEVEL).map(([k, l]) => `<button type="button" class="chip ${R.level === k ? 'active' : ''}" onclick="_tr.level=_tr.level==='${k}'?'':'${k}'; _trRender()">${l}</button>`).join('')}</div></div>` : ''}
@@ -402,6 +406,7 @@ function tutorReport(sessionId) {
   openModal(old ? '✏️ تعديل تقرير الحصة' : '📝 تقرير الحصة', ''); window._trRender();
   window._trSend = () => runSubmit(async () => {
     const attended = s.group_key ? R.absent.size < members.length : R.attended;
+    if (!R.durChanged) R.mins = planned;
     if (attended && !(R.mins >= 5 && R.mins <= 720)) return formError('اكتبي مدة الحصة صح');
     if (attended && !R.topics.trim()) return formError('اكتبي اتشرح إيه في الحصة — ده اللي بيوصل لولي الأمر');
     const { error } = await sb.rpc('tutor_report_submit', { p_session: s.id, p_attended: attended, p_absent: [...R.absent], p_minutes: attended ? R.mins : null,
@@ -410,6 +415,41 @@ function tutorReport(sessionId) {
     if (error && /not started/.test(error.message)) return formError('الحصة لسه مابدأتش');
     if (error && /too old/.test(error.message)) return formError('الحصة دي قديمة — ابعتي التفاصيل للإشراف على الجروب');
     if (error) throw error;
-    closeModal(); showToast(old ? 'اتعدل التقرير ✓' : 'التقرير وصل للإشراف ✓ شكراً'); tutorRefresh();
+    const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : s.student_name;
+    const absentNames = members.filter(m => R.absent.has(m.id)).map(m => m.name);
+    window._trText = `📝 تقرير حصة ${who}${s.subject ? ' — ' + s.subject : ''} (${T.me.name})
+📅 ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}
+${attended ? `⏱ ${durLabel(R.mins)}${R.mins !== planned ? ` ⚠️ (المعاد ${durLabel(planned)})` : ''}${absentNames.length ? `\n🚫 غاب: ${absentNames.join('، ')}` : ''}\n📚 ${R.topics.trim()}${R.homework.trim() ? `\n✍️ الواجب: ${R.homework.trim()}` : ''}` : '🚫 الطالب ماحضرش'}`;
+    openModal(old ? '✅ اتعدل التقرير' : '✅ التقرير وصل للإشراف', `<p>شكراً 🌷 الإشراف هيراجعه ويبعته لولي الأمر.</p>
+      <div class="msg-preview mt">${esc(window._trText)}</div>
+      <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._trText, ${jsq(T.me.group)}); closeModal()">💬 انسخيه وابعتيه على جروب الإشراف</button>` : ''}
+        <button class="btn btn-ghost" onclick="copyText(window._trText,'اتنسخ ✓')">📋 نسخ</button><button class="btn btn-ghost" onclick="closeModal()">تمام</button></div>`);
+    tutorRefresh();
   });
+}
+
+// تذكير التقرير أول ما تفتح البوابة (مرة واحدة في كل فتحة) + فتح التقرير مباشرة من الإشعار (?rep=…)
+const T_URL_REP = new URLSearchParams(location.search).get('rep');
+function tNeedReports() {
+  return tOcc(T.week).filter(s => !tCancelled(s) && !tRepFor(s) && new Date(s.scheduled_at).getTime() > Date.now() - 7 * 864e5
+    && Date.now() >= new Date(s.scheduled_at).getTime() + (s.duration_minutes || 60) * 60e3 - 5 * 60e3);
+}
+function tutorReportPrompt() {
+  if (T.preview || T._repPrompted) return;
+  if (T_URL_REP && !T._urlRepDone) { T._urlRepDone = true; const s = tOcc(T.week).find(x => x.id === T_URL_REP || (x.rows || []).some(r => r.id === T_URL_REP)); if (s && !tRepFor(s)) { T._repPrompted = true; return tutorReport(s.id); } }
+  const need = tNeedReports(); if (!need.length) return;
+  T._repPrompted = true;
+  const modalOpen = () => !document.getElementById('modal').classList.contains('hidden');
+  if (modalOpen()) { // فيه نافذة تانية مفتوحة (زي تفعيل الإشعارات) → استنى لما تتقفل
+    let tries = 0; const t = setInterval(() => { if (++tries > 180) return clearInterval(t); if (!modalOpen()) { clearInterval(t); tShowReportPrompt(); } }, 1000);
+    return;
+  }
+  tShowReportPrompt();
+}
+function tShowReportPrompt() {
+  const need = tNeedReports(); if (!need.length) return;
+  openModal('📝 متنسيش تقرير الحصة', `<p>${need.length === 1 ? 'فيه حصة خلصت ولسه مالهاش تقرير' : `فيه ${need.length} حصص خلصت ولسه مالهاش تقرير`}. التقرير بياخد دقيقة، والإشراف بيبعته لولي الأمر — وكده حسابك بيتأكد أول بأول ومفيش لخبطة آخر الشهر.</p>
+    <div class="list">${need.map(s => `<div class="card item"><div class="item-head" style="gap:8px"><span><b>${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)}</b> <span class="sub small">${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</span></span>
+      <button class="btn btn-brand sm" onclick="tutorReport(${jsq(s.id)})">📝 اكتبي التقرير</button></div></div>`).join('')}</div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">بعدين</button></div>`);
 }

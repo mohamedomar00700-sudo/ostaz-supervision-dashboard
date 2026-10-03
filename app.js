@@ -2090,6 +2090,12 @@ async function loadAttention() {
   state.nextSession = nxt[0] || null;
   try { state.tutorReqs = await q(sb.from('tutor_requests').select('*').eq('status', 'pending').order('created_at')); } catch (e) { state.tutorReqs = []; }
   try { state.reports = await q(sb.from('session_reports').select('*').gte('created_at', new Date(now.getTime() - 40 * 864e5).toISOString()).order('created_at', { ascending: false })); } catch (e) { state.reports = []; }
+  try { // حصص خلصت من أكتر من ساعة ومعلمتها على البوابة ولسه مالهاش تقرير
+    const linked = (state.tutors.length ? state.tutors : await q(sb.from('tutors').select('id,user_id'))).filter(t => t.user_id).map(t => t.id);
+    const recent = linked.length ? await q(sb.from('sessions').select('*').in('tutor_id', linked).in('status', ['scheduled', 'in_progress', 'done'])
+      .gte('scheduled_at', new Date(now.getTime() - 3 * 864e5).toISOString()).lte('scheduled_at', now.toISOString()).order('scheduled_at')) : [];
+    state.missingReports = occurrences(recent.filter(x => sEnd(x) < now.getTime() - 60 * 60e3)).filter(x => !repFor(x));
+  } catch (e) { state.missingReports = []; }
   state.pendingTrials = await q(sb.from('sessions').select('*').eq('kind', 'trial').eq('status', 'done')
     .or('trial_outcome.is.null,trial_outcome.eq.thinking').gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at'));
 }
@@ -2103,6 +2109,8 @@ function renderAttention() {
   }
   const tr = (state.tutorReqs || []).length;
   if (tr) items.push(`<button class="att att-next" onclick="openTutorRequests()">📨 <b>${tr}</b> ${tr === 1 ? 'طلب' : 'طلبات'} من المعلمات مستنية ردك</button>`);
+  const mr = (state.missingReports || []).length;
+  if (mr) items.push(`<button class="att att-warn" onclick="openMissingReports()">⏳ <b>${mr}</b> ${mr === 1 ? 'حصة لسه مالهاش تقرير' : 'حصص لسه مالهاش تقرير'} من المعلمة</button>`);
   const nr = (state.reports || []).filter(r => !r.sent_at).length;
   if (nr) items.push(`<button class="att att-next" onclick="openReports()">📝 <b>${nr}</b> ${nr === 1 ? 'تقرير حصة جديد' : 'تقارير حصص جديدة'} — ابعتها للأسر</button>`);
   const un = state.unrecorded || [];
@@ -3276,7 +3284,12 @@ ${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }))
 const REP_LEVEL = { excellent: 'ممتاز 🌟', good: 'كويس 👍', needs: 'محتاج متابعة ⚠️' };
 const repFor = s => (state.reports || []).find(r => r.session_id === s.id || (s.group_key && r.group_key === s.group_key));
 function reportLine(s) {
-  const r = repFor(s); if (!r) return '';
+  const r = repFor(s);
+  if (!r) {
+    const tu = byId(state.tutors, s.tutor_id);
+    const ended = sEnd(s) < Date.now() - 15 * 60e3 && sEnd(s) > Date.now() - 7 * 864e5;
+    return tu?.user_id && ended && !(isCancelled(s) && s.status !== 'done') ? `<div class="rep-line mt warn-txt">⏳ لسه المعلمة ماكتبتش تقرير الحصة <a href="javascript:void(0)" onclick="nudgeReport(${jsq(s.id)})">📲 فكّرها</a></div>` : '';
+  }
   const planned = s.duration_minutes || 60;
   return `<div class="rep-line mt">📝 تقرير المعلمة: ${r.attended ? `<b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}${r.absent_ids?.length ? ` · غاب ${r.absent_ids.length}` : ''}` : '<b class="neg">الطالب ماحضرش</b>'}
     · ${r.sent_at ? '<span class="pos">اتبعت للأسرة ✓</span>' : '<span class="warn-txt">لسه ماتبعتش للأسرة</span>'}</div>`;
@@ -3325,6 +3338,7 @@ async function openReport(id) {
   const absentNames = (r.absent_ids || []).map(sid => byId(state.students, sid)?.name).filter(Boolean);
   openModal(`📝 تقرير حصة ${who}`, `
     <div class="sub small mb">${esc(tu?.name || '')} · ${esc(s0.subject || '')} · ${fmtDate(s0.scheduled_at)} ${timeStr(new Date(s0.scheduled_at))} · اتكتب ${ago(r.updated_at || r.created_at)}</div>
+    ${r.attended && r.minutes !== planned ? `<div class="pill bad mb" style="display:inline-block">⚠️ المدة اتغيرت: ${durLabel(planned)} ← ${durLabel(r.minutes)} — اتأكد قبل التسجيل</div>` : ''}
     <div class="card item rep-card">
       ${r.attended ? `<div class="meta" style="margin:0"><span>المدة حسب المعلمة: <b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}</span>
         ${absentNames.length ? `<span class="neg">غاب: <b>${esc(absentNames.join('، '))}</b></span>` : ''}${r.level ? `<span>المشاركة: <b>${REP_LEVEL[r.level]}</b></span>` : ''}</div>
@@ -3366,6 +3380,31 @@ async function applyReport(id, what) {
     await refreshAll(); openReport(id);
   } catch (e) { showToast(dbError(e), true); }
 }
+function nudgeText(list) {
+  const tu = byId(state.tutors, list[0].tutor_id);
+  return `${greetTutor(tu?.name)}
+فكرة بسيطة 🌷 لسه تقرير ${list.length === 1 ? 'الحصة دي' : 'الحصص دي'} مااتكتبش على البوابة:
+${list.map(x => `• ${x.group_key ? '👥 ' + (x.group_name || 'مجموعة') : byId(state.students, x.student_id)?.name || ''}${x.subject ? ' — ' + x.subject : ''} (${relDayLabel(x.scheduled_at, CAIRO_TZ)} ${fmtTime(x.scheduled_at, CAIRO_TZ)})`).join('\n')}
+ياريت تكتبيه من زرار "📝 اكتبي تقرير الحصة" عشان نبعته لولي الأمر 🙏
+${APP_URL_PUBLIC}
+${SIGN_T}`;
+}
+const APP_URL_PUBLIC = 'https://mohamedomar00700-sudo.github.io/ostaz-supervision-dashboard/';
+function nudgeReport(sessionId) {
+  const s = allLoadedSessions().find(x => x.id === sessionId) || (state.missingReports || []).find(x => x.id === sessionId); if (!s) return;
+  const tu = byId(state.tutors, s.tutor_id);
+  openModal('📲 تذكير المعلمة بالتقرير', `<div class="list">${msgBlock(`للمعلمة — ${tu?.name || ''}`, nudgeText([s]), { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id })}</div>`);
+  document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
+function openMissingReports() {
+  const list = state.missingReports || [];
+  const byT = {}; list.forEach(x => (byT[x.tutor_id] ||= []).push(x));
+  openModal(`⏳ حصص لسه مالهاش تقرير (${list.length})`, `
+    <p class="sub small">حصص خلصت من أكتر من ساعة (آخر 3 أيام) والمعلمة لسه ماكتبتش تقريرها. المعلمة بيوصلها تذكير لوحده بعد الحصة وبعدها بساعتين — ولو لسه، ابعتلها الرسالة دي.</p>
+    <div class="list">${Object.entries(byT).map(([tid, ss]) => { const tu = byId(state.tutors, tid);
+      return msgBlock(`${tu?.name || ''} — ${ss.length} ${ss.length === 1 ? 'حصة' : 'حصص'}`, nudgeText(ss), { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }); }).join('')}</div>`);
+  if (Object.keys(byT).length === 1) document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
 async function openReports() {
   const list = state.reports || [];
   const ids = [...new Set(list.map(r => r.session_id))];
@@ -3376,7 +3415,7 @@ async function openReports() {
     const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : (byId(state.students, s.student_id)?.name || ''), fam = s.group_key ? null : sessionView(s).fam;
     return `<div class="card item ${r.sent_at ? '' : 's-confirm'}" style="cursor:pointer" onclick="openReport(${jsq(r.id)})"><div class="item-head">
       <div><b>${esc(who)}</b> <span class="sub small">${esc(fam?.name || '')}</span><div class="sub small">${esc(byId(state.tutors, r.tutor_id)?.name || '')} · ${esc(s.subject || '')} · ${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</div>
-        <div class="small mt">${r.attended ? `⏱ ${durLabel(r.minutes)}${r.topics ? ' · 📚 ' + esc(r.topics.slice(0, 70)) + (r.topics.length > 70 ? '…' : '') : ''}` : '<span class="neg">🚫 ماحضرش</span>'}</div></div>
+        <div class="small mt">${r.attended ? `⏱ ${durLabel(r.minutes)}${s.duration_minutes && r.minutes !== s.duration_minutes ? ` <span class="neg">⚠️ (المعاد ${durLabel(s.duration_minutes)})</span>` : ''}${r.topics ? ' · 📚 ' + esc(r.topics.slice(0, 70)) + (r.topics.length > 70 ? '…' : '') : ''}` : '<span class="neg">🚫 ماحضرش</span>'}</div></div>
       ${r.sent_at ? '<span class="badge b-done">اتبعت</span>' : '<span class="badge b-pending">جديد</span>'}</div></div>`; };
   const pend = list.filter(r => !r.sent_at), done = list.filter(r => r.sent_at).slice(0, 15);
   openModal(`📝 تقارير الحصص${pend.length ? ` (${pend.length} جديد)` : ''}`, `
