@@ -445,7 +445,7 @@ function renderDaily() {
     <div class="card stat"><div class="v">${occurrences(all).length}</div><div class="l">حصص اليوم</div></div>
     <div class="card stat"><div class="v">${occurrences(all.filter(s => s.status === 'done')).length}</div><div class="l">تمت</div></div>
     <div class="card stat"><div class="v num">${fmt(hours, 1)}</div><div class="l">ساعة تدريس</div></div>
-    <div class="card stat"><div class="v num">${fmt(margin)}</div><div class="l">هامش متوقع (EGP)</div></div>`;
+    <div class="card stat owner-only"><div class="v num">${fmt(margin)}</div><div class="l">هامش متوقع (EGP)</div></div>`;
 
   const flt = DAY_FILTERS.find(f => f.k === state.dayFilter) || DAY_FILTERS[0];
   const list = all.filter(flt.f);
@@ -499,7 +499,7 @@ function sessionCard(s) {
       ${cancelled ? `<div class="cancel-info mt">✖ ${cancelInfo(s)}</div>` : `<div class="money">
         <span class="pill" title="${fmt(s.student_price, 2)} ${s.student_currency} في الساعة">الأسرة: ${money(c.fam, s.student_currency)}</span>
         <span class="pill" title="${fmt(s.tutor_cost_egp)} EGP في الساعة">المعلم: ${money(c.tut, 'EGP')}</span>
-        <span class="pill ${c.margin >= 0 ? 'ok' : 'bad'}">الهامش: ${fmt(c.margin)} EGP${s.status === 'done' ? '' : ' (تقديري)'}</span>
+        <span class="pill owner-only ${c.margin >= 0 ? 'ok' : 'bad'}">الهامش: ${fmt(c.margin)} EGP${s.status === 'done' ? '' : ' (تقديري)'}</span>
       </div>`}
       <div class="actions">
         ${open && !confirmNeeded ? `
@@ -575,7 +575,7 @@ function openDone(id) {
       <span>المدة: <b>${durLabel(m)}</b></span>
       <span>على الأسرة: <b>${money(fam, s.student_currency)}</b></span>
       <span>للمعلم: <b>${money(tut, 'EGP')}</b></span>
-      <span>الهامش: <b>${fmt(toEGP(fam, s.student_currency) - tut)} EGP</b></span></div>
+      <span class="owner-only">الهامش: <b>${fmt(toEGP(fam, s.student_currency) - tut)} EGP</b></span></div>
       <div class="sub small mt">محسوبة على سعر ساعة ${fmt(s.student_price, 2)} ${s.student_currency} للأسرة و${fmt(s.tutor_cost_egp)} جنيه للمعلم.</div>`;
   };
   const hm = hmWire('f_hm', v => { inp.value = v; preview(); });
@@ -836,7 +836,7 @@ async function openSessionForm(id, prefill = {}) {
     document.getElementById('sess-total').innerHTML = `<div class="meta" style="margin:0">
       <span>إجمالي الحصة (${durLabel(m)}):</span>
       <span>الأسرة <b>${money(p * m / 60, cur)}</b></span><span>المعلم <b>${money(c * m / 60, 'EGP')}</b></span>
-      ${cur ? `<span>الهامش <b>${fmt(toEGP(p * m / 60, cur) - c * m / 60)} EGP</b></span>` : ''}</div>`;
+      ${cur ? `<span class="owner-only">الهامش <b>${fmt(toEGP(p * m / 60, cur) - c * m / 60)} EGP</b></span>` : ''}</div>`;
   };
   window._setDur = m => { durIn.value = m; totals(); };
   hmD = attachHm(durIn, totals);
@@ -1334,7 +1334,7 @@ function openPaymentForm(familyId) {
     const cur = f?.currency || '';
     document.getElementById('hint_amount').textContent = cur ? `بالـ ${cur} — ده اللي بيتخصم من مستحقات الأسرة` : 'بعملة الأسرة';
     const egpFam = cur === 'EGP';
-    document.getElementById('wrap_received_egp').classList.toggle('hidden', egpFam);
+    document.getElementById('wrap_received_egp').classList.toggle('hidden', egpFam || !isAdmin);
     const amt = Number($('amount').value) || 0, got = Number($('received_egp').value) || 0, mr = fxRate(cur);
     let h = cur && !egpFam ? `بسعر السوق النهارده ≈ ${fmt(amt * mr, 2)} ج (1 ${cur} = ${fmt(mr, 4)} ج).` : '';
     if (got && amt && !egpFam) {
@@ -1764,12 +1764,12 @@ function renderFinance() {
   const fxRows = (state.fxRows || []).filter(r => r.currency !== 'EGP');
   document.getElementById('fin-content').innerHTML = `
     <div class="kpis">
-      <div class="card kpi"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP بسعر السوق يوم الحصة · ${nSess(unitsOf(occurrences(done)))} · ${fmt(hoursDone, 1)} ساعة</div></div>
+      <div class="card kpi owner-only"><div class="l">إيراد الحصص اللي تمت</div><div class="v num">${fmt(rev)}</div><div class="s">EGP بسعر السوق يوم الحصة · ${nSess(unitsOf(occurrences(done)))} · ${fmt(hoursDone, 1)} ساعة</div></div>
       <div class="card kpi"><div class="l">مستحقات المعلمين عن الفترة</div><div class="v num">${fmt(cost)}</div><div class="s">EGP</div></div>
-      <div class="card kpi"><div class="l">هامش الأكاديمية</div><div class="v num ${margin >= 0 ? 'pos' : 'neg'}">${fmt(margin)}</div><div class="s">EGP · ${rev ? Math.round(margin / rev * 100) : 0}% من الإيراد</div></div>
-      <div class="card kpi"><div class="l">المحصّل فعلياً بالجنيه</div><div class="v num">${fmt(cashIn)}</div><div class="s">${Object.entries(collected).map(([c, v]) => `${fmt(v)} ${c}`).join(' + ') || '—'}${estCount ? ` · ${estCount} دفعة لسه مقدّرة` : ''}</div></div>
-      <div class="card kpi"><div class="l">فرق العملة (مكسب/خسارة)</div><div class="v num ${fxDiff >= 0 ? 'pos' : 'neg'}">${fxKnown ? (fxDiff >= 0 ? '+' : '') + fmt(fxDiff) : '—'}</div><div class="s">${fxKnown ? `EGP · من ${fxKnown} تحويل: الواصل فعلاً مقابل سعر السوق` : 'سجّل "المبلغ اللي وصلك بالجنيه" في الدفعات'}</div></div>
-      <div class="card kpi"><div class="l">صافي الكاش في الفترة</div><div class="v num ${cashIn - paidOut >= 0 ? 'pos' : 'neg'}">${fmt(cashIn - paidOut)}</div><div class="s">المحصّل − المحوَّل للمعلمين (${fmt(paidOut)})</div></div>
+      <div class="card kpi owner-only"><div class="l">هامش الأكاديمية</div><div class="v num ${margin >= 0 ? 'pos' : 'neg'}">${fmt(margin)}</div><div class="s">EGP · ${rev ? Math.round(margin / rev * 100) : 0}% من الإيراد</div></div>
+      <div class="card kpi owner-only"><div class="l">المحصّل فعلياً بالجنيه</div><div class="v num">${fmt(cashIn)}</div><div class="s">${Object.entries(collected).map(([c, v]) => `${fmt(v)} ${c}`).join(' + ') || '—'}${estCount ? ` · ${estCount} دفعة لسه مقدّرة` : ''}</div></div>
+      <div class="card kpi owner-only"><div class="l">فرق العملة (مكسب/خسارة)</div><div class="v num ${fxDiff >= 0 ? 'pos' : 'neg'}">${fxKnown ? (fxDiff >= 0 ? '+' : '') + fmt(fxDiff) : '—'}</div><div class="s">${fxKnown ? `EGP · من ${fxKnown} تحويل: الواصل فعلاً مقابل سعر السوق` : 'سجّل "المبلغ اللي وصلك بالجنيه" في الدفعات'}</div></div>
+      <div class="card kpi owner-only"><div class="l">صافي الكاش في الفترة</div><div class="v num ${cashIn - paidOut >= 0 ? 'pos' : 'neg'}">${fmt(cashIn - paidOut)}</div><div class="s">المحصّل − المحوَّل للمعلمين (${fmt(paidOut)})</div></div>
     </div>
 
     <div class="section-title"><h2>تسوية المعلمين (بالجنيه)</h2></div>
@@ -1815,22 +1815,22 @@ function renderFinance() {
     </tbody></table></div>
 
     <div class="section-title"><h2>الدفعات المستلمة في الفترة</h2></div>
-    <div class="card scrollx"><table><thead><tr><th>التاريخ</th><th>الأسرة</th><th>المبلغ</th><th>وصل بالجنيه</th><th>فرق العملة</th><th>الطريقة</th></tr></thead><tbody>
+    <div class="card scrollx"><table><thead><tr><th>التاريخ</th><th>الأسرة</th><th>المبلغ</th><th class="owner-only">وصل بالجنيه</th><th class="owner-only">فرق العملة</th><th>الطريقة</th></tr></thead><tbody>
       ${tx.map(t => { const e = txEgp(t), d = txFxDiff(t); return `<tr><td class="num">${fmtShortDate(t.created_at)}</td><td>${esc(byId(state.families, t.family_id)?.name || '')}<div class="sub small">${esc(t.note || '')}</div></td>
         <td class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</td>
-        <td class="num">${e.est ? `<a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})" title="مقدّر بسعر السوق — دوس لتسجيل المبلغ الفعلي">≈ ${fmt(e.v)} ✎</a>` : `${fmt(e.v)}${t.currency !== 'EGP' ? ` <a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})">✎</a>` : ''}`}</td>
-        <td class="num ${d == null ? '' : d >= 0 ? 'pos' : 'neg'}">${d == null ? '—' : (d >= 0 ? '+' : '') + fmt(d)}</td>
+        <td class="num owner-only">${e.est ? `<a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})" title="مقدّر بسعر السوق — دوس لتسجيل المبلغ الفعلي">≈ ${fmt(e.v)} ✎</a>` : `${fmt(e.v)}${t.currency !== 'EGP' ? ` <a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})">✎</a>` : ''}`}</td>
+        <td class="num owner-only ${d == null ? '' : d >= 0 ? 'pos' : 'neg'}">${d == null ? '—' : (d >= 0 ? '+' : '') + fmt(d)}</td>
         <td class="sub small">${esc(t.method || '')}</td></tr>`; }).join('')
         || '<tr><td colspan="6" class="empty">لا توجد دفعات في الفترة</td></tr>'}
     </tbody></table></div>
 
-    ${Object.keys(byCur).length ? `<div class="section-title"><h2>الإيراد حسب العملة</h2></div>
-    <div class="card scrollx"><table><thead><tr><th>العملة</th><th>حصص</th><th>بالعملة الأصلية</th><th>بالجنيه (سعر يوم الحصة)</th></tr></thead><tbody>
+    ${Object.keys(byCur).length ? `<div class="section-title owner-only"><h2>الإيراد حسب العملة</h2></div>
+    <div class="card scrollx owner-only"><table><thead><tr><th>العملة</th><th>حصص</th><th>بالعملة الأصلية</th><th>بالجنيه (سعر يوم الحصة)</th></tr></thead><tbody>
       ${Object.entries(byCur).map(([c, v]) => `<tr><td>${c}</td><td class="num">${v.n}</td><td class="num">${fmt(v.amt, 2)} ${c}</td><td class="num">${fmt(v.egp)} EGP</td></tr>`).join('')}
     </tbody></table></div>` : ''}
 
-    <div class="section-title"><h2>أسعار الصرف</h2>${isAdmin ? `<button class="btn btn-ghost sm" onclick="openFxForm()">تعديل</button>` : ''}</div>
-    <div class="card item">
+    <div class="section-title owner-only"><h2>أسعار الصرف</h2>${isAdmin ? `<button class="btn btn-ghost sm" onclick="openFxForm()">تعديل</button>` : ''}</div>
+    <div class="card item owner-only">
       ${fxRows.map(r => `<div class="item-head" style="padding:4px 0"><span dir="ltr"><b>1 ${r.currency} = ${fmt(r.rate_to_egp, 4)} EGP</b></span>
         <span class="sub small">${r.auto ? `🔄 سعر السوق — بيتحدث تلقائي كل 6 ساعات · آخر تحديث ${ago(r.updated_at)}` : `✋ سعر يدوي من ${fmtShortDate(r.updated_at)}`}</span></div>`).join('')}
       <p class="sub small" style="margin:8px 0 0">سعر السوق بيتثبت على كل حصة لحظة تسجيلها "تمت" (لحساب الإيراد والهامش). الفلوس اللي وصلت فعلاً بتتسجل مع كل دفعة، والفرق بينهم بيظهر في "فرق العملة".</p>
@@ -2330,7 +2330,7 @@ function exportSessionsCSV() {
     return [dateStr(new Date(s.scheduled_at)), timeStr(new Date(s.scheduled_at)), v.st?.name, v.fam?.name, v.tu?.name, s.subject,
       s.kind === 'regular' ? 'عادية' : kindWord(s), (STATUS[s.status] || {}).label, s.duration_minutes, s.actual_minutes ?? '',
       s.student_price, s.student_currency, done ? c.fam.toFixed(2) : '', s.tutor_cost_egp, done ? c.tut.toFixed(2) : '',
-      done ? Number(s.fx_rate_to_egp).toFixed(4) : '', done ? Number(s.revenue_egp).toFixed(2) : '', done ? Number(s.margin_egp).toFixed(2) : '',
+      done && isAdmin ? Number(s.fx_rate_to_egp).toFixed(4) : '', done && isAdmin ? Number(s.revenue_egp).toFixed(2) : '', done && isAdmin ? Number(s.margin_egp).toFixed(2) : '',
       s.cancel_reason || '', s.cancel_note || '', cancelNoticeHours(s) == null ? '' : cancelNoticeHours(s).toFixed(1), s.makeup_of ? 'نعم' : '', s.group_name || '', s.group_rate_egp ?? '', s.notes];
   });
   downloadCSV(`حصص_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الوقت', 'الطالب', 'الأسرة', 'المعلم', 'المادة', 'النوع', 'الحالة', 'المدة المخططة (د)', 'المدة الفعلية (د)',
@@ -2340,7 +2340,7 @@ function exportPaymentsCSV() {
   if (!state.fin) return;
   const r = state.fin.range;
   const rows = state.fin.tx.map(t => { const d = txFxDiff(t); return [dateStr(new Date(t.created_at)), byId(state.families, t.family_id)?.name, t.type === 'refund' ? 'استرداد' : 'دفعة', t.amount, t.currency,
-    t.method, t.received_egp ?? '', t.market_rate ?? '', d == null ? '' : d.toFixed(2), t.note]; });
+    t.method, isAdmin ? t.received_egp ?? '' : '', isAdmin ? t.market_rate ?? '' : '', d == null || !isAdmin ? '' : d.toFixed(2), t.note]; });
   const po = state.fin.payouts.map(p => [dateStr(new Date(p.paid_at || p.created_at)), byId(state.tutors, p.tutor_id)?.name, 'صرف لمعلم', p.total_egp, 'EGP', p.method, p.total_egp, '', '', p.note]);
   downloadCSV(`مدفوعات_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الأسرة / المعلم', 'النوع', 'المبلغ', 'العملة', 'الطريقة', 'وصل/اتحوّل بالجنيه', 'سعر السوق يومها', 'فرق العملة (EGP)', 'ملاحظة'], [...rows, ...po]);
 }
@@ -2654,7 +2654,7 @@ function groupCard(rows) {
       ${m.rev || m.tut ? `<div class="money">
         <span class="pill" title="مجموع اللي على الأسر بالجنيه">الأسر: ${fmt(m.rev)} EGP</span>
         <span class="pill" title="${fmt(s.group_rate_egp)} EGP في الساعة عن المجموعة كلها">المعلم: ${money(m.tut, 'EGP')}</span>
-        <span class="pill ${m.margin >= 0 ? 'ok' : 'bad'}">الهامش: ${fmt(m.margin)} EGP${m.final ? '' : ' (تقديري)'}</span>
+        <span class="pill owner-only ${m.margin >= 0 ? 'ok' : 'bad'}">الهامش: ${fmt(m.margin)} EGP${m.final ? '' : ' (تقديري)'}</span>
       </div>` : ''}
       <div class="actions">
         ${open && !confirmNeeded ? `
@@ -2743,7 +2743,7 @@ async function openGroupDone(key) {
     document.getElementById('done-preview').innerHTML = `<div class="meta" style="margin:0">
       <span>حضر: <b>${att.length} من ${rows.length}</b></span><span>المدة: <b>${durLabel(m)}</b></span>
       <span>الأسر: <b>≈ ${fmt(rev)} EGP</b></span><span>للمعلم: <b>${money(tut, 'EGP')}</b>${att.length < rows.length ? ` <span class="sub small">(من ${fmt(Number(s.group_rate_egp || 0) * m / 60)} — اتخصم نصيب ${rows.length - att.length})</span>` : ''}</span>
-      <span>الهامش: <b>${fmt(rev - tut)} EGP</b></span></div>
+      <span class="owner-only">الهامش: <b>${fmt(rev - tut)} EGP</b></span></div>
       <div class="sub small mt">كل طالب بيتحسب بسعر ساعته (${att.map(r => `${byId(state.students, r.student_id)?.name || ''} ${fmt(r.student_price, 2)} ${r.student_currency}`).join('، ') || '—'}).</div>`;
   };
   window._gdPrev = preview;
@@ -2965,7 +2965,7 @@ async function openGroupForm(key, prefill = {}) {
     const tut = rate * m / 60;
     document.getElementById('sess-total').innerHTML = `<div class="meta" style="margin:0">
       <span>الحصة (${durLabel(m)}) لو الكل حضر:</span><span>الأسر <b>≈ ${fmt(rev)} EGP</b></span>
-      <span>المعلم <b>${money(tut, 'EGP')}</b></span><span>الهامش <b class="${rev - tut >= 0 ? 'pos' : 'neg'}">${fmt(rev - tut)} EGP</b></span></div>
+      <span>المعلم <b>${money(tut, 'EGP')}</b></span><span class="owner-only">الهامش <b class="${rev - tut >= 0 ? 'pos' : 'neg'}">${fmt(rev - tut)} EGP</b></span></div>
       ${members.length ? `<div class="sub small mt">نصيب كل طالب من أجر المعلم: ${fmt(tut / members.length, 2)} ج — لو غاب بيتخصم من الحصة دي بس.</div>` : ''}
       ${s && members.length < rows.length ? `<div class="warn-txt small mt">⚠️ شلت طالب من المجموعة — اتفق مع المعلمة: سعر المجموعة هيفضل ${fmt(rate)} ج ولا هيتغير؟ عدّله فوق لو اتغير.</div>` : ''}`;
   };
@@ -3573,12 +3573,14 @@ function openSessionActions(id) {
    ============================================================ */
 const TRIAL_OUT = {
   converted: { l: '✅ هيكمل مع المعلمة', short: 'اشترك', cls: 'b-done' },
-  another_tutor: { l: '🔄 يجرب معلمة تانية', short: 'معلمة تانية', cls: 'b-pending' },
+  another_tutor: { l: '🔄 هيجرب معلمة تانية', short: 'هيجرب تانية', cls: 'b-pending' },
+  switched: { l: '✅ كمّل مع معلمة تانية', short: 'كمّل مع معلمة تانية', cls: 'b-done' },
   thinking: { l: '🤔 لسه بيفكر', short: 'بيفكر', cls: 'b-scheduled' },
   lost: { l: '❌ مش هيحجز', short: 'مش هيحجز', cls: 'b-cancel' },
 };
 const TRIAL_REASONS = {
   another_tutor: ['أسلوب المعلمة', 'مستوى الشرح', 'الطالب مش مرتاح', 'المواعيد', 'أخرى'],
+  switched: ['أسلوب المعلمة', 'مستوى الشرح', 'الطالب مش مرتاح', 'المواعيد', 'أخرى'],
   lost: ['السعر', 'المواعيد مش مناسبة', 'أسلوب / مستوى المعلمة', 'الطالب مش مرتاح', 'مش محتاج دلوقتي', 'لم يرد', 'أخرى'],
 };
 const trialPending = s => s.kind === 'trial' && s.status === 'done' && (!s.trial_outcome || s.trial_outcome === 'thinking');
@@ -3586,12 +3588,13 @@ function trialOutcomeLine(s) {
   if (s.kind !== 'trial' || s.status !== 'done') return '';
   if (!s.trial_outcome) return `<div class="cancel-info mt" style="background:var(--warn-soft);color:var(--warn)">🧪 نتيجة التجربة لسه ماتسجلتش</div>`;
   const o = TRIAL_OUT[s.trial_outcome];
-  return `<div class="cancel-info mt"><span class="badge ${o.cls}">${o.short}</span>${s.trial_outcome_reason ? ' · ' + esc(s.trial_outcome_reason) : ''}${s.trial_outcome_note ? ' — ' + esc(s.trial_outcome_note) : ''}</div>`;
+  return `<div class="cancel-info mt"><span class="badge ${o.cls}">${o.short}${s.trial_outcome === 'switched' && s.trial_switched_to ? ': ' + esc(byId(state.tutors, s.trial_switched_to)?.name || '') : ''}</span>${s.trial_outcome_reason ? ' · ' + esc(s.trial_outcome_reason) : ''}${s.trial_outcome_note ? ' — ' + esc(s.trial_outcome_note) : ''}</div>`;
 }
 function openTrialOutcome(id) {
   const s = findSession(id); if (!s) return;
   const { st, fam, tu } = sessionView(s);
-  const to = { out: s.trial_outcome || '', reason: s.trial_outcome_reason || '', note: s.trial_outcome_note || '' };
+  const to = { out: s.trial_outcome || '', reason: s.trial_outcome_reason || '', note: s.trial_outcome_note || '', other: s.trial_switched_to || (plansOf(s.student_id).find(p => norm(p.subject) === norm(s.subject) && p.tutor_id && p.tutor_id !== s.tutor_id) || {}).tutor_id
+    || (allLoadedSessions().find(x => x.student_id === s.student_id && x.tutor_id !== s.tutor_id && x.kind !== 'trial' && norm(x.subject) === norm(s.subject) && sStart(x) > sStart(s)) || {}).tutor_id || '' };
   window._to = to;
   const feedback = `السلام عليكم ورحمة الله 🌷
 نتمنى تكون الحصة التجريبية${s.subject ? ` (${s.subject})` : ''} عجبت ${st?.name || ''} 😊
@@ -3606,7 +3609,8 @@ ${SIGN_F}`;
       <div class="field mt"><label>النتيجة</label><div class="seg-wrap">
         ${Object.entries(TRIAL_OUT).map(([k, o]) => `<button type="button" class="chip ${to.out === k ? 'active' : ''}" onclick="_to.out='${k}'; _to.reason=''; _toRender()">${o.l}</button>`).join('')}
       </div></div>
-      ${reasons.length ? `<div class="field"><label>${to.out === 'lost' ? 'السبب' : 'ليه عايز يغيّر؟'}</label><div class="chips" style="margin:0">
+      ${to.out === 'switched' ? `<div class="field"><label>كمّل مع مين؟</label><select class="input" onchange="_to.other=this.value"><option value="">اختار المعلمة…</option>${state.tutors.filter(t => t.id !== s.tutor_id).map(t => `<option value="${esc(t.id)}" ${to.other === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>` : ''}
+      ${reasons.length ? `<div class="field"><label>${to.out === 'lost' ? 'السبب' : to.out === 'switched' ? 'ليه مكمّلش مع المعلمة دي؟' : 'ليه عايز يغيّر؟'}</label><div class="chips" style="margin:0">
         ${reasons.map(r => `<button type="button" class="chip ${to.reason === r ? 'active' : ''}" onclick="_to.reason=${esc(JSON.stringify(r))}; _toRender()">${r}</button>`).join('')}</div></div>` : ''}
       <div class="field"><label>ملاحظة (اختياري)</label><input class="input" id="to-note" value="${esc(to.note)}" oninput="_to.note=this.value" placeholder="مثال: عايز مواعيد بعد 6 مساءً"></div>
       <div id="form-error" class="err hidden"></div>
@@ -3619,8 +3623,14 @@ ${SIGN_F}`;
   window._saveTrial = () => runSubmit(async () => {
     if (!to.out) return formError('اختار النتيجة');
     if ((to.out === 'lost') && !to.reason) return formError('اختار السبب — مهم عشان نعرف ليه بنخسر طلاب');
+    if (to.out === 'switched' && !to.other) return formError('اختار المعلمة اللي كمّل معاها');
     await q(sb.from('sessions').update({ trial_outcome: to.out, trial_outcome_reason: to.reason || null, trial_outcome_note: to.note || null,
-      trial_outcome_at: new Date().toISOString() }).eq('id', s.id));
+      trial_switched_to: to.out === 'switched' ? to.other : null, trial_outcome_at: new Date().toISOString() }).eq('id', s.id));
+    if (to.out === 'switched' && s.subject) { // خطة الطالب للمادة دي بقت مع المعلمة الجديدة
+      const pl = plansOf(s.student_id).filter(p => norm(p.subject) === norm(s.subject));
+      if (!pl.length) await q(sb.from('student_subjects').insert({ student_id: s.student_id, subject: s.subject, tutor_id: to.other }));
+      else if (pl[0].tutor_id !== to.other) await q(sb.from('student_subjects').update({ tutor_id: to.other, tutor_rate_egp: null }).eq('id', pl[0].id));
+    }
     if (to.out === 'converted' && s.subject) {
       const pl = plansOf(s.student_id).filter(p => norm(p.subject) === norm(s.subject));
       if (!pl.length) await q(sb.from('student_subjects').insert({ student_id: s.student_id, subject: s.subject, tutor_id: s.tutor_id }));
@@ -3648,20 +3658,20 @@ function trialReportHtml(rows) {
   const trials = rows.filter(s => s.kind === 'trial' && s.status === 'done');
   if (!trials.length) return '';
   const by = k => trials.filter(s => s.trial_outcome === k).length;
-  const conv = by('converted'), other = by('another_tutor'), lost = by('lost'), pend = trials.length - conv - other - lost;
-  const decided = conv + other + lost;
+  const conv = by('converted'), sw = by('switched'), other = by('another_tutor'), lost = by('lost'), pend = trials.length - conv - sw - other - lost;
+  const decided = conv + sw + other + lost, stayed = conv + sw; // اللي كمّل مع معلمة تانية فضل مع الأكاديمية
   const cost = trials.reduce((a, s) => a + charges(s).tut, 0);
   const perTutor = {};
-  trials.forEach(s => { const x = perTutor[s.tutor_id] ||= { n: 0, c: 0, o: 0, l: 0 }; x.n++; if (s.trial_outcome === 'converted') x.c++; if (s.trial_outcome === 'another_tutor') x.o++; if (s.trial_outcome === 'lost') x.l++; });
+  trials.forEach(s => { const x = perTutor[s.tutor_id] ||= { n: 0, c: 0, o: 0, l: 0 }; x.n++; if (s.trial_outcome === 'converted') x.c++; if (['another_tutor', 'switched'].includes(s.trial_outcome)) x.o++; if (s.trial_outcome === 'lost') x.l++; });
   const tRows = Object.entries(perTutor).map(([id, x]) => ({ t: byId(state.tutors, id), x, rate: (x.c + x.o + x.l) ? x.c / (x.c + x.o + x.l) : null }))
     .filter(r => r.t).sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1) || b.x.n - a.x.n);
-  const reasons = {}; trials.filter(s => ['lost', 'another_tutor'].includes(s.trial_outcome)).forEach(s => { const k = s.trial_outcome_reason || 'بدون سبب'; reasons[k] = (reasons[k] || 0) + 1; });
+  const reasons = {}; trials.filter(s => ['lost', 'another_tutor', 'switched'].includes(s.trial_outcome)).forEach(s => { const k = s.trial_outcome_reason || 'بدون سبب'; reasons[k] = (reasons[k] || 0) + 1; });
   const rs = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
   return `<div class="section-title"><h2>🧪 الحصص التجريبية</h2></div>
     <div class="kpis">
       <div class="card kpi"><div class="l">تجريبية تمت</div><div class="v num">${trials.length}</div><div class="s">تكلفة المعلمات: ${fmt(cost)} EGP</div></div>
-      <div class="card kpi"><div class="l">نسبة الاشتراك</div><div class="v num ${decided ? (conv / decided >= .5 ? 'pos' : 'warn-txt') : ''}">${decided ? Math.round(conv / decided * 100) + '%' : '—'}</div><div class="s">${conv} اشترك من ${decided} قرروا</div></div>
-      <div class="card kpi"><div class="l">جربوا معلمة تانية</div><div class="v num">${other}</div><div class="s">مش هيحجزوا: ${lost}</div></div>
+      <div class="card kpi"><div class="l">فضلوا معانا</div><div class="v num ${decided ? (stayed / decided >= .5 ? 'pos' : 'warn-txt') : ''}">${decided ? Math.round(stayed / decided * 100) + '%' : '—'}</div><div class="s">${conv} مع نفس المعلمة${sw ? ` + ${sw} مع معلمة تانية` : ''} من ${decided}</div></div>
+      <div class="card kpi"><div class="l">غيّروا المعلمة</div><div class="v num">${other + sw}</div><div class="s">لسه بيجربوا: ${other} · مش هيحجزوا: ${lost}</div></div>
       <div class="card kpi"><div class="l">مستنية نتيجة</div><div class="v num ${pend ? 'warn-txt' : ''}">${pend}</div><div class="s">${pend ? '<a href="javascript:void(0)" onclick="openPendingTrials()">تابعهم ←</a>' : 'كله متسجل ✓'}</div></div>
     </div>
     <div class="grid2 mt">
@@ -3748,6 +3758,7 @@ async function handlePostAuth(attempt = 0) {
 }
 async function enterApp() {
   isAdmin = currentSupervisor.role === 'admin';
+  document.body.classList.toggle('hide-profit', !isAdmin); // الإيرادات والهامش للأونر بس
   document.getElementById('current-user-name').textContent = currentSupervisor.name + (isAdmin ? ' · أدمن' : ' · مشرف');
   // إدارة المشرفين بقت من قائمة الإعدادات ⚙️
   // تنظيف أي داتا تجريبية قديمة من النسخة السابقة
