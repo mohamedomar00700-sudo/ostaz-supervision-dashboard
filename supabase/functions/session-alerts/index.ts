@@ -53,6 +53,63 @@ async function ntfySend(chans: Alarm[], msg: { title: string; message: string; p
   }));
 }
 
+// ---------- تحديثات جدول المعلمة اللي الإشراف عملها من عنده ----------
+const durL = (min: number) => {
+  min = Math.round(Number(min) || 0); const h = Math.floor(min / 60), m = min % 60;
+  const hl = h === 1 ? 'ساعة' : h === 2 ? 'ساعتين' : h >= 3 && h <= 10 ? `${h} ساعات` : h ? `${h} ساعة` : '';
+  if (!h) return m === 30 ? 'نص ساعة' : m === 15 ? 'ربع ساعة' : m === 20 ? 'تلت ساعة' : `${m} دقيقة`;
+  if (!m) return hl;
+  return `${hl} ${m === 30 ? 'ونص' : m === 15 ? 'وربع' : m === 20 ? 'وتلت' : `و${m} دقيقة`}`;
+};
+const units = (min: number) => String(Math.round(min / 60 * 100) / 100);
+const egp = (n: number) => String(Math.round(n * 100) / 100);
+const dayTime = (iso: string) => `${new Date(iso).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' })} ${cairoTime(iso)}`;
+type Line = { title: string; body: string; short: string };
+function tutorChangeLines(evs: any[], ss: any[], sts: any[]): Line[] {
+  const S = (id: string) => ss.find((x: any) => x.id === id);
+  const who = (s: any) => s.group_key ? `👥 ${s.group_name || 'المجموعة'}` : (sts.find((x: any) => x.id === s.student_id)?.name || 'الطالب');
+  const mins = (s: any) => Number(s.actual_minutes || s.duration_minutes || 60);
+  const buckets = new Map<string, { ev: any; rows: any[] }>();
+  for (const e of evs) {
+    const s = S(e.session_id); if (!s) continue;
+    if (e.kind === 'added' && s.status !== 'scheduled') continue;
+    if ((e.kind === 'done' || e.kind === 'duration') && s.status !== 'done') continue;
+    const k = e.kind === 'added' ? `added|${s.group_key || s.student_id}|${s.subject || ''}` : `${e.kind}|${s.group_key || s.id}|${e.kind === 'removed' ? e.old_at : s.scheduled_at}`;
+    const b = buckets.get(k) || { ev: e, rows: [] };
+    if (!b.rows.some((r: any) => r.id === s.id)) b.rows.push(s);
+    if (e.kind === 'added' && s.group_key) { // صف واحد لكل طالب في المجموعة → عدّ المواعيد مش الصفوف
+      b.rows = b.rows.filter((r: any, i: number, a: any[]) => a.findIndex((x: any) => x.scheduled_at === r.scheduled_at) === i);
+    }
+    buckets.set(k, b);
+  }
+  const out: Line[] = [];
+  for (const { ev, rows } of buckets.values()) {
+    rows.sort((a: any, b: any) => a.scheduled_at < b.scheduled_at ? -1 : 1);
+    const s = rows[0], w = who(s), subj = s.subject ? `${s.subject} — ` : '';
+    if (ev.kind === 'done' || ev.kind === 'duration') {
+      const m = mins(s), amt = rows.reduce((a: number, r: any) => a + Number(r.tutor_charge_egp || 0), 0);
+      const tail = `${durL(m)} = ${units(m)} حصة · ${egp(amt)} ج`;
+      out.push(ev.kind === 'done'
+        ? { title: `✅ اتسجلت حصة ${w}`, body: `${subj}${dayTime(s.scheduled_at)}\n⏱ ${tail}`, short: `✅ اتسجلت ${w}: ${tail}` }
+        : { title: `✏️ اتعدلت مدة حصة ${w}`, body: `${subj}${dayTime(s.scheduled_at)}\n${durL(ev.old_minutes)} ← ${tail}`, short: `✏️ ${w}: بقت ${tail}` });
+    } else if (ev.kind === 'cancelled') {
+      out.push({ title: `✖ اتلغت حصة ${w}`, body: `${subj}${dayTime(s.scheduled_at)}`, short: `✖ اتلغت ${w} — ${dayTime(s.scheduled_at)}` });
+    } else if (ev.kind === 'moved') {
+      const d = ev.old_minutes && ev.old_minutes !== s.duration_minutes ? ` (${durL(s.duration_minutes)})` : '';
+      const from = ev.old_at && ev.old_at !== s.scheduled_at ? `${dayTime(ev.old_at)} ← ` : 'المدة: ';
+      out.push({ title: `🔁 اتغير معاد حصة ${w}`, body: `${subj}${from}${ev.old_at !== s.scheduled_at ? dayTime(s.scheduled_at) : ''}${d}`, short: `🔁 ${w}: ${from}${ev.old_at !== s.scheduled_at ? dayTime(s.scheduled_at) : ''}${d}` });
+    } else if (ev.kind === 'removed') {
+      out.push({ title: `↪️ حصة ${w} اتنقلت لمعلمة تانية`, body: `${subj}${dayTime(ev.old_at)}`, short: `↪️ ${w} (${dayTime(ev.old_at)}) اتنقلت` });
+    } else if (ev.kind === 'added') {
+      const n = rows.length;
+      out.push(n === 1
+        ? { title: `➕ حصة جديدة مع ${w}`, body: `${subj}${dayTime(s.scheduled_at)} (${durL(s.duration_minutes)})`, short: `➕ ${w}: ${dayTime(s.scheduled_at)}` }
+        : { title: `➕ ${n} حصص جديدة مع ${w}`, body: `${subj}أولها ${dayTime(s.scheduled_at)} (${durL(s.duration_minutes)})`, short: `➕ ${n} حصص مع ${w} من ${dayTime(s.scheduled_at)}` });
+    }
+  }
+  return out;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
@@ -138,6 +195,35 @@ Deno.serve(async (req) => {
     testReport.push({ test: t.id, r });
   }
 
+
+  // تحديثات الجدول للمعلمات (متجمعة: إشعار واحد لكل معلمة كل دقيقة)
+  const tnReport: any[] = [];
+  {
+    const { data: pend } = await admin.from('tutor_notify_queue').select('id').is('sent_at', null).lte('created_at', new Date(Date.now() - 20e3).toISOString()).order('id').limit(300);
+    const { data: cl } = pend?.length ? await admin.from('tutor_notify_queue').update({ sent_at: new Date().toISOString() }).in('id', pend.map((x: any) => x.id)).is('sent_at', null).select('*') : { data: [] as any[] };
+    if (cl?.length) {
+      const sIds = [...new Set(cl.map((c: any) => c.session_id).filter(Boolean))];
+      const { data: ss } = sIds.length ? await admin.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,status,subject,student_id,group_key,group_name,tutor_charge_egp').in('id', sIds) : { data: [] as any[] };
+      const stIds = [...new Set((ss || []).map((s: any) => s.student_id))];
+      const { data: sts } = stIds.length ? await admin.from('students').select('id,name').in('id', stIds) : { data: [] as any[] };
+      const tIds = [...new Set(cl.map((c: any) => c.tutor_id))];
+      const { data: tus } = await admin.from('tutors').select('id,user_id').in('id', tIds);
+      for (const tid of tIds) {
+        const tu: any = tus?.find((x: any) => x.id === tid); if (!tu?.user_id) continue;
+        const lines = tutorChangeLines(cl.filter((c: any) => c.tutor_id === tid), ss || [], sts || []);
+        if (!lines.length) continue;
+        const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
+        if (!tsubs?.length) continue;
+        const one = lines.length === 1;
+        tnReport.push(await pushToSubs(tsubs as Sub[], {
+          title: one ? lines[0].title : `📅 ${lines.length} تحديثات في جدولك`,
+          body: one ? lines[0].body : lines.slice(0, 6).map((l) => l.short).join('\n') + (lines.length > 6 ? `\n… و${lines.length - 6} كمان` : ''),
+          tag: 'tn-' + tid + '-' + Date.now(), url: './', requireInteraction: false,
+        }, vapid));
+      }
+    }
+  }
+
   const now = Date.now();
   const { data: sessions, error } = await admin.from('sessions')
     .select('id, scheduled_at, duration_minutes, status, kind, subject, student_id, tutor_id, meeting_link, group_key, group_name')
@@ -159,7 +245,7 @@ Deno.serve(async (req) => {
     if (s.status === 'scheduled' && now >= t - 30e3 && now < t + 10 * 60e3) due.push({ session_id: s.id, kind: `start@${t}` });
     if (now >= end - 30e3 && now < end + 10 * 60e3) due.push({ session_id: s.id, kind: `end@${t}@${s.duration_minutes}` });
   }
-  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0, tests: testReport.length });
+  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0, tests: testReport.length, tutorUpdates: tnReport.length });
 
   // claim alerts atomically so a session is never announced twice
   const { data: claimed, error: claimErr } = await admin.from('session_alert_log')
