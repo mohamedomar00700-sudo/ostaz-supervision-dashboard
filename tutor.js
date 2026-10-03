@@ -19,7 +19,48 @@ async function enterTutor(me) {
   if (!asked && !(await currentPushSub().catch(() => null))) { try { localStorage.setItem('ostaz_tpush_asked', '1'); } catch (e) {} tutorAlertsPanel(); }
 }
 const tMonthRange = k => { const n = new Date(); return { from: new Date(n.getFullYear(), n.getMonth() + k, 1), to: new Date(n.getFullYear(), n.getMonth() + k + 1, 1) }; };
+/* ----- معاينة البوابة من حساب الإشراف (نفس اللي المعلمة بتشوفه) ----- */
+function tutorPreview(tid) {
+  const t = byId(state.tutors, tid); if (!t) return;
+  closeModal();
+  T.preview = tid; T.tab = 'today'; T.month = 0;
+  T.me = { id: t.id, name: t.name, rate: t.default_rate_egp, pay: t.bank_account || t.vodafone_cash };
+  document.getElementById('view-app').classList.add('hidden');
+  document.getElementById('view-tutor').classList.remove('hidden');
+  document.getElementById('tutor-name').textContent = t.name;
+  document.getElementById('tutor-preview-bar').classList.remove('hidden');
+  document.querySelectorAll('#tutor-tabs .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === 'today'));
+  window.scrollTo(0, 0);
+  tutorRefresh();
+}
+function tutorPreviewExit() {
+  T.preview = null; T.me = null;
+  document.getElementById('tutor-preview-bar').classList.add('hidden');
+  document.getElementById('view-tutor').classList.add('hidden');
+  document.getElementById('view-app').classList.remove('hidden');
+  switchTab('tutors');
+}
+async function tutorPreviewRows(from, to) { // نفس شكل tutor_sessions بس من صلاحيات المشرف
+  const rows = await q(sb.from('sessions').select('*').eq('tutor_id', T.preview).gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).order('scheduled_at'));
+  return rows.map(s => { const st = byId(state.students, s.student_id) || {};
+    const pl = state.plans.find(p => p.student_id === s.student_id && p.tutor_id === s.tutor_id && p.meeting_link);
+    return { ...s, student_name: st.name, grade: st.grade_level, meeting_link: s.meeting_link || pl?.meeting_link || null }; });
+}
 async function tutorRefresh() {
+  if (T.preview) {
+    try {
+      const now = new Date(); const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const mr = tMonthRange(T.month);
+      const [w, m, po] = await Promise.all([tutorPreviewRows(new Date(from.getTime() - 864e5), new Date(from.getTime() + 8 * 864e5)), tutorPreviewRows(mr.from, mr.to),
+        q(sb.from('tutor_payouts').select('*').eq('tutor_id', T.preview).eq('paid', true).order('paid_at', { ascending: false }))]);
+      T.week = w; T.monthRows = m;
+      T.payouts = po.map(p => ({ ...p, paid_at: p.paid_at || p.created_at }));
+      T.students = state.plans.filter(p => p.tutor_id === T.preview).map(p => { const st = byId(state.students, p.student_id) || {};
+        return { student_id: p.student_id, student_name: st.name, grade: st.grade_level, subject: p.subject, meeting_link: p.meeting_link, rate: p.tutor_rate_egp ?? byId(state.tutors, T.preview)?.default_rate_egp, weekly: p.weekly_sessions }; })
+        .sort((a, b) => (a.student_name || '').localeCompare(b.student_name || '', 'ar'));
+      tutorRender();
+    } catch (e) { showToast(dbError(e), true); }
+    return;
+  }
   try {
     const now = new Date(); const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const to = new Date(from.getTime() + 8 * 864e5);
     const mr = tMonthRange(T.month);
@@ -128,6 +169,7 @@ function tutorRender() {
 }
 
 function tutorEditLink(studentId, subject, current) {
+  if (T.preview) return showToast('ده عرض معاينة — المعلمة هي اللي بتحط اللينك من حسابها، أو عدّله إنت من خطة الطالب');
   const st = T.students.find(r => r.student_id === studentId) || T.week.find(r => r.student_id === studentId);
   openModal(`لينك حصص ${st?.student_name || ''}`, `
     <div class="field"><label>لينك الحصة الثابت</label><input id="t-link" class="input" dir="ltr" value="${esc(current)}" placeholder="https://zoom.us/j/…  أو  meet.google.com/…"></div>
@@ -146,6 +188,7 @@ function tutorEditLink(studentId, subject, current) {
 /* ----- إشعارات المعلمة ----- */
 async function tutorAlertIcon() { const on = !!(await currentPushSub().catch(() => null)) && Notification.permission === 'granted'; document.getElementById('t-btn-alerts').textContent = on ? '🔔' : '🔕'; return on; }
 async function tutorAlertsPanel() {
+  if (T.preview) return showToast('في حساب المعلمة الزرار ده بيفعّل تذكير الحصص على موبايلها');
   const on = await tutorAlertIcon().catch(() => false);
   let body;
   if (isIOS && !isStandalone()) body = `<p><b>على الآيفون الإشعارات بتشتغل بس لو البوابة متثبتة على الشاشة الرئيسية:</b></p>

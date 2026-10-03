@@ -284,3 +284,5 @@ td{padding:10px 8px;border-bottom:1px solid var(--border);vertical-align:middle;
   .plan-row .pl-subject{grid-area:s}.plan-row .pl-weekly{grid-area:w}.plan-row .pl-tutor{grid-area:t}.plan-row .pl-rate{grid-area:r}.plan-row > button{grid-area:x}
   .plan-row .pl-weekly::placeholder{font-size:11px}
 }
+
+.preview-bar{background:var(--warn-soft);color:var(--warn);padding:8px 16px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-weight:600;font-size:14px;position:sticky;top:0;z-index:30;}

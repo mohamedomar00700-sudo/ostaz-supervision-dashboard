@@ -1503,6 +1503,7 @@ function renderTutors() {
         <button class="btn btn-wa sm" onclick="openTutorStatementMessage(${tid})">📲 كشف للمعلمة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openSchedule('tutor', ${tid})">📋 الجدول</button>
         ${!t.user_id ? `<button class="btn btn-ghost sm" onclick="openTutorInvite(${tid})">📲 دعوة للبوابة</button>` : ''}
+        <button class="btn btn-ghost sm" onclick="tutorPreview(${tid})">👁 شوف بوابتها</button>
         <button class="btn btn-ghost sm" onclick="openTutorStatement(${tid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openTutorForm(${tid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('المعلم ' + t.name)}, () => q(sb.from('tutors').delete().eq('id', ${tid})))">حذف</button>` : ''}
