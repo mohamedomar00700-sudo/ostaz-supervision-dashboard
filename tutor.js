@@ -241,7 +241,7 @@ function tutorRequest(sessionId, studentId) {
   const st = s ? { name: s.group_key ? s.group_name || 'المجموعة' : s.student_name } : (T.students.find(x => x.student_id === studentId) ? { name: T.students.find(x => x.student_id === studentId).student_name } : { name: '' });
   const started = s && Date.now() >= new Date(s.scheduled_at).getTime();
   const kinds = s ? ['reschedule', 'cancel', ...(started ? ['absent', 'extend'] : [])] : ['remove_student', 'other'];
-  const rq = { kind: kinds[0], reason: '', mins: s ? (s.duration_minutes || 60) + 30 : null };
+  const rq = { kind: kinds[0], reason: '', scope: 'once', mins: s ? (s.duration_minutes || 60) + 30 : null };
   const d0 = s ? new Date(new Date(s.scheduled_at).getTime() + 864e5) : null;
   window._rq = rq;
   const render = () => {
@@ -250,7 +250,9 @@ function tutorRequest(sessionId, studentId) {
       <div class="sub small mb">${esc(st.name)}${s ? ` · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}` : ''}</div>
       <div class="field"><label>نوع الطلب</label><div class="seg-wrap">${kinds.map(k => `<button type="button" class="chip ${rq.kind === k ? 'active' : ''}" onclick="_rq.kind='${k}'; _rqRender()">${T_REQ[k].icon} ${T_REQ[k].l}</button>`).join('')}</div></div>
       ${rq.kind === 'reschedule' ? `<div class="field-row"><div class="field"><label>المعاد الجديد المقترح</label><input id="rq-date" type="date" class="input" value="${dateStr(d0)}"></div>
-        <div class="field"><label>الساعة (بتوقيت القاهرة)</label><input id="rq-time" type="time" class="input" value="${timeStr(new Date(s.scheduled_at))}"></div></div>` : ''}
+        <div class="field"><label>الساعة (بتوقيت القاهرة)</label><input id="rq-time" type="time" class="input" value="${timeStr(new Date(s.scheduled_at))}"></div></div>
+        <div class="field"><label>التغيير ده</label><div class="seg-wrap"><button type="button" class="chip ${rq.scope === 'once' ? 'active' : ''}" onclick="_rq.scope='once'; _rqRender()">الحصة دي بس</button>
+          <button type="button" class="chip ${rq.scope === 'permanent' ? 'active' : ''}" onclick="_rq.scope='permanent'; _rqRender()">♾ دايم (كل الأسابيع الجاية)</button></div></div>` : ''}
       ${rq.kind === 'extend' ? `<div class="field"><label>المدة الفعلية للحصة</label><div class="chips" style="margin:0">${[15, 30, 45, 60, 90].map(x => (s.duration_minutes || 60) + x).map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>` : ''}
       <div class="field"><label>${K.need ? 'السبب' : 'ملاحظة (اختياري)'}</label><textarea id="rq-reason" class="input" placeholder="${rq.kind === 'remove_student' ? 'مثال: الطالب مش ملتزم / مش مناسب لمستوايا' : rq.kind === 'cancel' ? 'مثال: ظرف طارئ' : 'اكتبي التفاصيل'}" oninput="_rq.reason=this.value">${esc(rq.reason)}</textarea></div>
       <div id="form-error" class="err hidden"></div>
@@ -264,10 +266,10 @@ function tutorRequest(sessionId, studentId) {
     if (K.need && !rq.reason.trim()) return formError('اكتبي السبب عشان الإشراف يقدر يتصرف');
     let at = null;
     if (rq.kind === 'reschedule') { const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`); if (isNaN(d)) return formError('اختاري المعاد الجديد'); at = d.toISOString(); }
-    const { error } = await sb.rpc('tutor_request_create', { p_kind: rq.kind, p_session: s?.id || null, p_student: s ? null : studentId, p_proposed_at: at, p_minutes: rq.kind === 'extend' ? rq.mins : null, p_reason: rq.reason });
+    const { error } = await sb.rpc('tutor_request_create', { p_kind: rq.kind, p_session: s?.id || null, p_student: s ? null : studentId, p_proposed_at: at, p_minutes: rq.kind === 'extend' ? rq.mins : null, p_reason: rq.reason, p_scope: rq.kind === 'reschedule' ? rq.scope : 'once' });
     if (error) throw error;
     const text = `السلام عليكم 👋 — ${T.me.name}
-📨 طلب ${K.l}: ${st.name}${s ? `\n📅 الحصة: ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}${s.subject ? ' — ' + s.subject : ''}` : ''}${at ? `\n➡️ المعاد المقترح: ${relDayLabel(at, CAIRO_TZ)} الساعة ${tTime(at)}` : ''}${rq.kind === 'extend' ? `\n⏱ المدة الفعلية: ${durLabel(rq.mins)}` : ''}${rq.reason ? `\n📝 ${rq.reason}` : ''}
+📨 طلب ${K.l}${rq.kind === 'reschedule' && rq.scope === 'permanent' ? ' (دايم)' : ''}: ${st.name}${s ? `\n📅 الحصة: ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}${s.subject ? ' — ' + s.subject : ''}` : ''}${at ? `\n➡️ المعاد المقترح: ${relDayLabel(at, CAIRO_TZ)} الساعة ${tTime(at)}` : ''}${rq.kind === 'extend' ? `\n⏱ المدة الفعلية: ${durLabel(rq.mins)}` : ''}${rq.reason ? `\n📝 ${rq.reason}` : ''}
 (الطلب متسجل على بوابة المعلمات)`;
     window._rqText = text;
     openModal('✅ الطلب اتبعت للإشراف', `<p>الإشراف هيراجع الطلب، وهيوصلك إشعار بالرد.</p>

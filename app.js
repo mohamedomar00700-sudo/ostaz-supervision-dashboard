@@ -2192,7 +2192,8 @@ ${SIGN_T}`;
 /* ============================================================
    تأجيل سريع + رسائل للطرفين
    ============================================================ */
-function openPostpone(id) {
+function openPostpone(id) { return openReschedule(id); }
+function openPostponeOld(id) {
   const s = findSession(id); if (!s) return;
   if (s.group_key) return openGroupPostpone(s.group_key);
   const d = new Date(s.scheduled_at); d.setDate(d.getDate() + 1);
@@ -2352,6 +2353,7 @@ function renderReports() {
       <div class="card kpi"><div class="l">إلغاءات</div><div class="v num">${cancels.length}</div><div class="s">أسر ${cS.length} · معلمين ${cT.length} · أكاديمية ${cA.length}</div></div>
       <div class="card kpi"><div class="l">إلغاءات متأخرة</div><div class="v num ${cancels.filter(isLate).length ? 'neg' : ''}">${cancels.filter(isLate).length}</div><div class="s">أقل من ${LATE_HOURS} ساعات قبل الحصة</div></div>
       <div class="card kpi"><div class="l">لم يحضر</div><div class="v num">${cancels.filter(s => s.cancel_reason === 'لم يحضر').length}</div><div class="s">طلاب ${cS.filter(s => s.cancel_reason === 'لم يحضر').length} · معلمين ${cT.filter(s => s.cancel_reason === 'لم يحضر').length}</div></div>
+      <div class="card kpi"><div class="l">تغييرات المواعيد / المعلمات</div><div class="v num">${rows.filter(x => x.reschedule_kind).length}</div><div class="s">مرة ${rows.filter(x => x.reschedule_kind === 'once').length} · مؤقت ${rows.filter(x => x.reschedule_kind === 'temp').length} · دايم ${rows.filter(x => x.reschedule_kind === 'permanent').length} · بديلة ${rows.filter(x => x.reschedule_kind === 'substitute').length}</div></div>
       <div class="card kpi"><div class="l">حصص تعويضية</div><div class="v num">${makeups}</div><div class="s">${unrec ? `<span class="neg">${unrec} حصة لسه ماتسجلتش</span>` : 'كل الحصص متسجلة ✓'}</div></div>
     </div>
 
@@ -3062,6 +3064,139 @@ async function openSchedule(kind, id, range = 'week') {
 }
 
 /* ============================================================
+   تغيير معاد / معلمة: الحصة دي بس، مؤقت لعدد حصص، أو دايم
+   ============================================================ */
+// مكوّنات التاريخ والوقت بتوقيت بلد معيّن
+function tzParts(iso, tz) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short' })
+    .formatToParts(new Date(iso)).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour === '24' ? '00' : p.hour}:${p.minute}`, wd: p.weekday };
+}
+// تاريخ + ساعة بتوقيت بلد ← ISO
+function zoned(dateS, timeS, tz) {
+  const [y, m, d] = dateS.split('-').map(Number), [hh, mm] = timeS.split(':').map(Number);
+  let t = Date.UTC(y, m - 1, d, hh, mm);
+  for (let i = 0; i < 2; i++) { const p = tzParts(new Date(t).toISOString(), tz); const [py, pm, pd] = p.date.split('-').map(Number); const [ph, pmi] = p.time.split(':').map(Number);
+    t -= Date.UTC(py, pm - 1, pd, ph, pmi) - Date.UTC(y, m - 1, d, hh, mm); }
+  return new Date(t).toISOString();
+}
+const addDays = (dateS, n) => { const d = new Date(dateS + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const dayDiff = (a, b) => Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 864e5);
+const famTz = s => (COUNTRIES[sessionView(s).fam?.country] || COUNTRIES['مصر']).tz;
+// الحصص الجاية في نفس الموعد الثابت (نفس الطالب والمعلمة والمادة واليوم والساعة بتوقيت الأسرة)
+async function slotSeries(s) {
+  const tz = famTz(s), p0 = tzParts(s.scheduled_at, tz);
+  const rows = await q(sb.from('sessions').select('*').eq('student_id', s.student_id).eq('tutor_id', s.original_tutor_id || s.tutor_id).eq('status', 'scheduled')
+    .gt('scheduled_at', s.scheduled_at).order('scheduled_at').limit(60));
+  return rows.filter(r => !r.group_key && norm(r.subject) === norm(s.subject) && (() => { const p = tzParts(r.scheduled_at, tz); return p.wd === p0.wd && p.time === p0.time; })());
+}
+function tutorRateFor(tutorId, studentId) {
+  const pl = state.plans.find(p => p.student_id === studentId && p.tutor_id === tutorId && p.tutor_rate_egp != null);
+  return pl ? pl.tutor_rate_egp : byId(state.tutors, tutorId)?.default_rate_egp ?? null;
+}
+const SCOPE_L = { once: 'الحصة دي بس', temp: 'مؤقت', permanent: 'دايم (كل الجاي)' };
+
+async function openReschedule(id, preset = {}) {
+  const s = findSession(id) || preset.session; if (!s) return;
+  if (s.group_key) return openGroupPostpone(s.group_key);
+  const { st, fam, tu } = sessionView(s);
+  let series = [];
+  try { series = await slotSeries(s); } catch (e) {}
+  const tz = famTz(s), c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+  const prop = preset.proposed_at ? new Date(preset.proposed_at) : (() => { const d = new Date(s.scheduled_at); d.setDate(d.getDate() + 1); return d; })();
+  const R = { scope: preset.scope || 'once', n: 1, what: preset.what || 'time', date: dateStr(prop), time: timeStr(prop), dur: s.duration_minutes || 60, tutor: s.tutor_id, reason: preset.reason || '' };
+  window._rs = R;
+  const render = () => {
+    const nAff = R.scope === 'once' ? 0 : R.scope === 'temp' ? Math.min(R.n, series.length) : series.length;
+    const tutorChanged = R.tutor !== s.tutor_id;
+    document.getElementById('modal-body').innerHTML = `
+      <div class="sub small mb">${esc(st?.name || '')} · ${esc(s.subject || '')} · ${esc(tu?.name || '')} · ${fmtDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}${tz !== CAIRO_TZ ? ` <span class="sub">(${c.flag} ${fmtTime(s.scheduled_at, tz)})</span>` : ''}</div>
+      <div class="field"><label>إيه اللي هيتغير؟</label><div class="seg-wrap">
+        ${[['time', '🕒 المعاد'], ['tutor', '🧑‍🏫 المعلمة (بديلة)'], ['both', 'الاتنين']].map(([k, l]) => `<button type="button" class="chip ${R.what === k ? 'active' : ''}" onclick="_rs.what='${k}'; ${k === 'time' ? `_rs.tutor=${jsq(s.tutor_id)};` : ''} _rsRender()">${l}</button>`).join('')}</div></div>
+      ${R.what !== 'tutor' ? `<div class="field-row"><div class="field"><label>المعاد الجديد</label><input type="date" class="input" value="${R.date}" onchange="_rs.date=this.value; _rsRender()"></div>
+        <div class="field"><label>الساعة (بتوقيتك)</label><input type="time" class="input" value="${R.time}" onchange="_rs.time=this.value; _rsRender()"></div></div>
+        <div class="field"><label>المدة</label><div class="chips" style="margin:0">${[30, 45, 60, 90, 120].map(m => `<button type="button" class="chip ${R.dur === m ? 'active' : ''}" onclick="_rs.dur=${m}; _rsRender()">${durLabel(m)}</button>`).join('')}</div></div>
+        ${tz !== CAIRO_TZ ? `<div class="sub small mb">= ${c.flag} ${fmtTime(new Date(`${R.date}T${R.time}`).toISOString(), tz)} بتوقيت ${c.tzName}</div>` : ''}` : ''}
+      ${R.what !== 'time' ? `<div class="field"><label>المعلمة البديلة</label><select class="input" onchange="_rs.tutor=this.value; _rsRender()">${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === R.tutor ? 'selected' : ''}>${esc(t.name)}${t.id === s.tutor_id ? ' (الحالية)' : ''}</option>`).join('')}</select>
+        ${tutorChanged ? `<div class="hint">أجرها: ${fmt(tutorRateFor(R.tutor, s.student_id) ?? 0)} ج/ساعة — الحصة بتتحسب للي ادّتها فعلاً.</div>` : ''}</div>` : ''}
+      <div class="field"><label>التغيير ده لحد إمتى؟</label>
+        <label class="radio"><input type="radio" name="rs-sc" ${R.scope === 'once' ? 'checked' : ''} onchange="_rs.scope='once'; _rsRender()"> الحصة دي بس</label>
+        ${series.length ? `<label class="radio"><input type="radio" name="rs-sc" ${R.scope === 'temp' ? 'checked' : ''} onchange="_rs.scope='temp'; _rsRender()"> مؤقت: الحصة دي و
+          <select class="input inline" onchange="_rs.n=Number(this.value); _rs.scope='temp'; _rsRender()">${Array.from({ length: Math.min(series.length, 8) }, (_, i) => i + 1).map(n => `<option ${R.n === n ? 'selected' : ''} value="${n}">${n}</option>`).join('')}</select>
+          ${R.n === 1 ? 'حصة' : 'حصص'} بعدها — وبعدين ترجع لمعادها الأصلي</label>
+        <label class="radio"><input type="radio" name="rs-sc" ${R.scope === 'permanent' ? 'checked' : ''} onchange="_rs.scope='permanent'; _rsRender()"> دايم: كل الحصص الجاية في الموعد ده (${series.length})</label>`
+        : '<div class="sub small">مفيش حصص جاية في نفس الموعد الثابت — هيتغير الحصة دي بس.</div>'}
+        ${nAff ? `<div class="sub small mt">هيتغير كمان: ${series.slice(0, nAff).slice(0, 6).map(r => fmtShortDate(r.scheduled_at)).join('، ')}${nAff > 6 ? ` و${nAff - 6} كمان` : ''}</div>` : ''}
+        ${R.scope === 'permanent' && tutorChanged ? `<div class="sub small mt">✓ والمعلمة الجديدة هتتسجل في خطة ${esc(st?.name || '')} لمادة ${esc(s.subject || '')}.</div>` : ''}
+      </div>
+      <div class="field"><label>السبب (اختياري)</label><input class="input" value="${esc(R.reason)}" oninput="_rs.reason=this.value" placeholder="مثال: امتحانات / ظرف عند المعلمة"></div>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_rsSave()">تأكيد التغيير${nAff ? ` (${nAff + 1} حصص)` : ''}</button><button class="btn btn-ghost" onclick="closeModal()">رجوع</button></div>`;
+  };
+  window._rsRender = render;
+  openModal(preset.title || 'تغيير معاد / معلمة الحصة', ''); render();
+  window._rsSave = () => runSubmit(async () => {
+    const changeTime = R.what !== 'tutor', changeTutor = R.what !== 'time' && R.tutor !== s.tutor_id;
+    if (!changeTime && !changeTutor) return formError('اختار المعلمة البديلة');
+    const newStart = changeTime ? new Date(`${R.date}T${R.time}`) : new Date(s.scheduled_at);
+    if (isNaN(newStart)) return formError('التاريخ أو الوقت غير صحيح');
+    const affected = R.scope === 'once' ? [] : R.scope === 'temp' ? series.slice(0, R.n) : series;
+    // المعاد الجديد لكل حصة بتوقيت الأسرة: نفس الفرق في الأيام ونفس الساعة الجديدة
+    const p0 = tzParts(s.scheduled_at, tz), pn = tzParts(newStart.toISOString(), tz), shift = dayDiff(p0.date, pn.date);
+    const kind = changeTutor && !changeTime && R.scope !== 'permanent' ? 'substitute' : R.scope === 'once' ? 'once' : R.scope;
+    const rate = changeTutor ? tutorRateFor(R.tutor, s.student_id) : null;
+    const plan = [s, ...affected].map(r => ({ r, at: changeTime ? (r.id === s.id ? newStart.toISOString() : zoned(addDays(tzParts(r.scheduled_at, tz).date, shift), pn.time, tz)) : r.scheduled_at }));
+    const conflicts = changeTime || changeTutor ? await findConflicts(plan.map(x => ({ ...x.r, scheduled_at: x.at, duration_minutes: changeTime ? R.dur : x.r.duration_minutes, tutor_id: changeTutor ? R.tutor : x.r.tutor_id })), null) : [];
+    const real = conflicts.filter(({ o }) => !plan.some(x => x.r.id === o.id));
+    if (real.length && !confirm(`⚠️ فيه تعارض:\n${real.slice(0, 4).map(({ o }) => { const v = sessionView(o); return `• ${fmtShortDate(o.scheduled_at)} ${timeStr(new Date(o.scheduled_at))}: ${v.st?.name || ''} مع ${v.tu?.name || ''}`; }).join('\n')}\n\nتكمل برضه؟`)) return;
+    const note = `${kind === 'substitute' ? 'معلمة بديلة' : kind === 'temp' ? `تغيير مؤقت (${plan.length} حصص)` : kind === 'permanent' ? 'تغيير دايم' : 'تغيير معاد'} من ${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}${R.reason ? ': ' + R.reason : ''}`;
+    for (const { r, at } of plan) {
+      const patch = { reschedule_kind: kind, notes: [r.notes, note].filter(Boolean).join(' | ') };
+      if (changeTime) Object.assign(patch, { scheduled_at: at, duration_minutes: R.dur, status: 'scheduled', actual_minutes: null });
+      if (changeTutor) Object.assign(patch, { tutor_id: R.tutor, original_tutor_id: r.original_tutor_id || r.tutor_id, ...(rate != null ? { tutor_cost_egp: rate } : {}),
+        meeting_link: state.plans.find(p => p.student_id === s.student_id && p.tutor_id === R.tutor)?.meeting_link || r.meeting_link });
+      await q(sb.from('sessions').update(patch).eq('id', r.id));
+    }
+    if (R.scope === 'permanent' && changeTutor) {
+      const pl = plansOf(s.student_id).find(p => norm(p.subject) === norm(s.subject));
+      if (pl) await q(sb.from('student_subjects').update({ tutor_id: R.tutor, tutor_rate_egp: rate }).eq('id', pl.id));
+    }
+    if (preset.onDone) await preset.onDone();
+    await refreshAll();
+    rescheduleNotices(s, plan, { kind, changeTime, changeTutor, newTutor: R.tutor, dur: R.dur, series, scope: R.scope });
+  });
+}
+function rescheduleNotices(s, plan, o) {
+  const { st, fam, tu } = sessionView(s);
+  const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+  const nt = byId(state.tutors, o.newTutor);
+  const dl = (iso, tz) => `${fmtDate(iso, tz)} الساعة ${fmtTime(iso, tz)}`;
+  const lines = tz => plan.slice(0, 8).map(x => `• ${o.changeTime ? `${dl(x.r.scheduled_at, tz)} ← ${dl(x.at, tz)}` : dl(x.at, tz)}`).join('\n') + (plan.length > 8 ? `\n… و${plan.length - 8} حصص كمان` : '');
+  const back = o.kind === 'temp' && o.series.length > plan.length - 1 ? o.series[plan.length - 1] : null;
+  const subj = `${st?.name || ''}${s.subject ? ` (${s.subject})` : ''}`;
+  const famText = `السلام عليكم ورحمة الله 🌷
+${!o.changeTime ? `بخصوص حصص ${subj}${o.kind === 'permanent' ? ' — من الحصة الجاية:' : ' في المواعيد دي:'}` : o.kind === 'permanent' ? `تم تغيير الموعد الثابت لحصة ${subj} — من الحصة الجاية:` : o.kind === 'temp' ? `تغيير مؤقت في مواعيد حصة ${subj}:` : `تم تغيير موعد حصة ${subj}:`}
+${o.kind === 'permanent' && o.changeTime ? `✅ الموعد الجديد: كل ${new Date(plan[0].at).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', timeZone: c.tz })} الساعة ${fmtTime(plan[0].at, c.tz)} بتوقيت ${c.tzName}` : o.kind === 'permanent' ? 'المواعيد زي ما هي بدون تغيير.' : lines(c.tz)}${back ? `\nوبعدها الحصص بترجع لموعدها المعتاد بداية من ${dl(back.scheduled_at, c.tz)}.` : ''}${o.changeTutor ? `\n\n${o.kind === 'permanent' ? 'وهتكون الحصص مع معلمة جديدة إن شاء الله.' : 'الحصص دي هتكون مع معلمة بديلة لظرف عند المعلمة، وبعدها ترجع المعلمة المعتادة إن شاء الله.'}` : ''}
+هنبعت الرابط والتذكير قبل كل حصة إن شاء الله 🙏
+${SIGN_F}`;
+  const blocks = [msgBlock(`رسالة ${fam?.name || 'الأسرة'}`, famText, { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id })];
+  const tutorMsg = (t, intro) => `${greetTutor(t?.name)}
+${intro}
+${lines(CAIRO_TZ)}${back && t?.id === s.tutor_id && !o.changeTutor ? `\nوبعدها بترجع لمعادها المعتاد من ${dl(back.scheduled_at, CAIRO_TZ)}.` : ''}
+${SIGN_T}`;
+  if (o.changeTutor) {
+    blocks.push(msgBlock(`للمعلمة البديلة — ${nt?.name || ''}`, tutorMsg(nt, `${o.kind === 'permanent' ? 'انضم ليكي طالب جديد' : 'معاكي حصص بديلة'}: ${st?.name || ''} (${st?.grade_level || ''})${s.subject ? ' — ' + s.subject : ''}${isEN(s.student_id) ? ' (بالإنجليزي)' : ''}:`), { group: nt?.whatsapp_group, phone: nt?.phone, editTutor: nt?.id }));
+    blocks.push(msgBlock(`للمعلمة الأصلية — ${tu?.name || ''}`, `${greetTutor(tu?.name)}
+${o.kind === 'permanent' ? `بنبلغك إن حصص ${subj} اتنقلت لمعلمة تانية من الحصة الجاية. شكراً على مجهودك 🙏` : `الحصص دي مع ${subj} هتكون مع معلمة بديلة:\n${lines(CAIRO_TZ)}\nوبعدها ترجعلك إن شاء الله.`}
+${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }));
+  } else {
+    blocks.push(msgBlock(`للمعلمة — ${tu?.name || ''}`, tutorMsg(tu, `${o.kind === 'permanent' ? 'تم تغيير الموعد الثابت' : o.kind === 'temp' ? 'تغيير مؤقت في مواعيد' : 'تم تغيير موعد'} حصة ${subj}${o.changeTime ? ` (${durLabel(o.dur)})` : ''} — بتوقيت القاهرة:`), { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }));
+  }
+  openModal(`تم ✓ ${SCOPE_L[o.scope]}${plan.length > 1 ? ` — ${plan.length} حصص` : ''} — بلّغ الأطراف`, `<div class="list">${blocks.join('')}</div>`);
+  document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
+
+/* ============================================================
    طلبات المعلمات (تأجيل / إلغاء / غياب / مدة / إيقاف طالب)
    ============================================================ */
 const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب' };
@@ -3082,7 +3217,8 @@ async function openTutorRequests() {
       <div class="meta"><span>الطالب: <b>${esc(s?.group_key ? '👥 ' + (s.group_name || 'مجموعة') : st?.name || '')}</b> <span class="sub small">${esc(fam?.name || '')}</span></span>
         ${s ? `<span>الحصة: <b>${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</b>${s.subject ? ' · ' + esc(s.subject) : ''}${isCancelled(s) ? ' <span class="neg">(ملغاة)</span>' : ''}</span>` : ''}
         ${r.proposed_at ? `<span>المقترح: <b>${fmtShortDate(r.proposed_at)} ${timeStr(new Date(r.proposed_at))}</b> <span class="sub small">(القاهرة ${fmtTime(r.proposed_at, CAIRO_TZ)})</span></span>` : ''}
-        ${r.proposed_minutes ? `<span>المدة: <b>${durLabel(r.proposed_minutes)}</b></span>` : ''}</div>
+        ${r.proposed_minutes ? `<span>المدة: <b>${durLabel(r.proposed_minutes)}</b></span>` : ''}
+        ${r.kind === 'reschedule' ? `<span>النوع: <b>${r.scope === 'permanent' ? '♾ تغيير دايم' : 'الحصة دي بس'}</b></span>` : ''}</div>
       ${r.reason ? `<div class="mt" style="white-space:pre-wrap">📝 ${esc(r.reason)}</div>` : ''}
       ${late ? `<div class="pill bad mt" style="display:inline-block">⚠️ إلغاء متأخر — أقل من ${LATE_HOURS} ساعات قبل الحصة</div>` : ''}
       ${r.decision_note ? `<div class="sub small mt">ردّك: ${esc(r.decision_note)}</div>` : ''}
@@ -3109,7 +3245,11 @@ async function approveTutorRequest(id) {
   const r = list.find(x => x.id === id), s = sess.find(x => x.id === r.session_id);
   const tu = byId(state.tutors, r.tutor_id), st = byId(state.students, r.student_id);
   try {
-    if (r.kind === 'reschedule' && s) {
+    if (r.kind === 'reschedule' && s && !s.group_key) {
+      return openReschedule(s.id, { session: s, proposed_at: r.proposed_at, scope: r.scope === 'permanent' ? 'permanent' : 'once', reason: r.reason || '', title: `موافقة على طلب ${tu?.name || 'المعلمة'}`,
+        onDone: () => decideRequest(r, 'approved') });
+    }
+    if (r.kind === 'reschedule' && s) { // مجموعة: الحصة دي بس
       const conflicts = await findConflicts([{ ...s, scheduled_at: r.proposed_at }], s.id);
       if (conflicts.length && !confirm(`⚠️ المعاد الجديد فيه تعارض:\n${conflicts.slice(0, 4).map(({ o }) => { const v = sessionView(o); return `• ${timeStr(new Date(o.scheduled_at))}: ${v.st?.name || ''} مع ${v.tu?.name || ''}`; }).join('\n')}\n\nتوافق برضه؟`)) return;
       const oldIso = s.scheduled_at;
@@ -3166,7 +3306,7 @@ function openSessionActions(id) {
   const a = (icon, label, fn, cls = '') => `<button class="wk-row ${cls}" onclick="closeModal(); ${fn}"><span>${icon}</span><span><b>${label}</b></span><span></span></button>`;
   openModal(`${v.st?.name || ''} · ${timeStr(new Date(s.scheduled_at))}`, `<div class="list">
     ${s.status === 'scheduled' ? a('▶', 'الحصة بدأت', `setStatus(${I},'in_progress')`) : ''}
-    ${open ? a('🔁', 'تأجيل / تغيير الموعد', `openPostpone(${I})`) : ''}
+    ${open ? a('🔁', 'تأجيل / تغيير المعاد أو المعلمة (مرة / مؤقت / دايم)', `openReschedule(${I})`) : ''}
     ${open ? a('✖', 'إلغاء…', `openCancel(${I})`) : ''}
     ${s.status === 'done' ? a('⏱', 'تعديل المدة الفعلية', `openDone(${I})`) : ''}
     ${cancelled ? a('📅', 'حجز حصة تعويضية', `openSessionForm(null, {student_id:${jsq(s.student_id)}, tutor_id:${jsq(s.tutor_id)}, subject:${jsq(s.subject || '')}, makeup_of:${I}, duration:${s.duration_minutes || 60}})`) : ''}
