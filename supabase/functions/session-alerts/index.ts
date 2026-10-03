@@ -101,14 +101,14 @@ Deno.serve(async (req) => {
   if (body.action === 'tutor_request' || body.action === 'tutor_request_decided') {
     const { data: r } = await admin.from('tutor_requests').select('*, tutors(name,user_id), students(name), sessions(scheduled_at,subject,duration_minutes)').eq('id', body.id).maybeSingle();
     if (!r) return json({ error: 'not found' }, 404);
-    const KIND: Record<string, string> = { reschedule: 'تأجيل / تغيير معاد', cancel: 'إلغاء حصة', absent: 'الطالب ماحضرش', extend: 'الحصة اتمدت', remove_student: 'إيقاف طالب', other: 'طلب' };
+    const KIND: Record<string, string> = { reschedule: 'تأجيل / تغيير معاد', cancel: 'إلغاء حصة', absent: 'الطالب ماحضرش', extend: 'الحصة اتمدت', remove_student: 'إيقاف طالب', other: 'طلب', payment_info: '💳 تغيير رقم التحويل' };
     const when = r.sessions?.scheduled_at ? ` (${new Date(r.sessions.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' })} ${cairoTime(r.sessions.scheduled_at)})` : '';
     const to = r.proposed_at ? `\n➡️ المعاد المقترح: ${new Date(r.proposed_at).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' })} ${cairoTime(r.proposed_at)}` : r.proposed_minutes ? `\n⏱ المدة: ${r.proposed_minutes} دقيقة` : '';
     if (body.action === 'tutor_request') {
       const { data: sups } = await admin.from('supervisors').select('id').eq('active', true);
       const ids = (sups || []).map((x: any) => x.id);
       const { data: subs } = ids.length ? await admin.from('push_subscriptions').select('*').in('user_id', ids) : { data: [] };
-      const payload = { title: `📨 ${r.tutors?.name || 'معلمة'}: ${KIND[r.kind]}`, body: `${r.students?.name || ''}${r.sessions?.subject ? ' — ' + r.sessions.subject : ''}${when}${to}${r.reason ? '\n📝 ' + r.reason : ''}\nافتح الطلب ووافق أو ارفض.`, tag: 'req-' + r.id, url: './?req=1', requireInteraction: true };
+      const payload = { title: `📨 ${r.tutors?.name || 'معلمة'}: ${KIND[r.kind]}`, body: r.kind === 'payment_info' ? `الجديد: ${r.new_value}\nالقديم: ${r.old_value || '—'}\n⚠️ اتأكد منها قبل الموافقة.` : `${r.students?.name || ''}${r.sessions?.subject ? ' — ' + r.sessions.subject : ''}${when}${to}${r.reason ? '\n📝 ' + r.reason : ''}\nافتح الطلب ووافق أو ارفض.`, tag: 'req-' + r.id, url: './?req=1', requireInteraction: true };
       const res = await pushToSubs((subs || []) as Sub[], payload, vapid);
       const { data: alarms } = ids.length ? await admin.from('alarm_channels').select('user_id,ntfy_topic').eq('enabled', true).in('user_id', ids) : { data: [] };
       const al = alarms?.length ? await ntfySend(alarms as Alarm[], { title: payload.title, message: payload.body, priority: 4, tags: ['incoming_envelope'], click: APP_URL + '?req=1' }) : [];
@@ -118,7 +118,7 @@ Deno.serve(async (req) => {
     const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', r.tutors.user_id);
     const res = await pushToSubs((tsubs || []) as Sub[], {
       title: r.status === 'approved' ? `✅ الإشراف وافق على طلبك` : `❌ الإشراف مش هيقدر ينفذ طلبك`,
-      body: `${KIND[r.kind]} — ${r.students?.name || ''}${when}${r.decision_note ? '\n📝 ' + r.decision_note : ''}`, tag: 'req-d-' + r.id, url: './', requireInteraction: false,
+      body: `${KIND[r.kind]} — ${r.kind === 'payment_info' ? r.new_value : r.students?.name || ''}${when}${r.decision_note ? '\n📝 ' + r.decision_note : ''}`, tag: 'req-d-' + r.id, url: './', requireInteraction: false,
     }, vapid);
     return json({ sent: res.length });
   }

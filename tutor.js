@@ -54,7 +54,7 @@ async function tutorRefresh() {
         q(sb.from('tutor_payouts').select('*').eq('tutor_id', T.preview).eq('paid', true).order('paid_at', { ascending: false }))]);
       T.week = w; T.monthRows = m;
       try { const rq = await q(sb.from('tutor_requests').select('*').eq('tutor_id', T.preview).order('created_at', { ascending: false }).limit(20));
-        T.requests = rq.map(r => ({ ...r, student_name: byId(state.students, r.student_id)?.name, session_at: (w.concat(m).find(x => x.id === r.session_id) || {}).scheduled_at })); } catch (e) { T.requests = []; }
+        T.requests = rq.map(r => ({ ...r, student_name: byId(state.students, r.student_id)?.name || r.new_value, session_at: (w.concat(m).find(x => x.id === r.session_id) || {}).scheduled_at })); } catch (e) { T.requests = []; }
       T.payouts = po.map(p => ({ ...p, paid_at: p.paid_at || p.created_at }));
       T.students = state.plans.filter(p => p.tutor_id === T.preview).map(p => { const st = byId(state.students, p.student_id) || {};
         return { student_id: p.student_id, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', subject: p.subject, meeting_link: p.meeting_link, rate: p.tutor_rate_egp ?? byId(state.tutors, T.preview)?.default_rate_egp, weekly: p.weekly_sessions }; })
@@ -172,7 +172,10 @@ function tutorRender() {
       <p class="sub small">الحصة بتتسجل هنا بعد ما الإشراف يأكدها. لو فيه حصة ناقصة أو مدة مختلفة بلّغي الإشراف قبل التحويل.</p>
       <div class="section-title"><h2>التحويلات</h2></div>
       <div class="card item">${T.payouts.slice(0, 8).map(p => `<div class="item-head" style="padding:4px 0"><span>${fmtShortDate(p.paid_at)} · ${esc(p.method || '')}<div class="sub small">${esc(p.note || '')}</div></span><b class="num">${fmt(p.total_egp, 2)} ج</b></div>`).join('') || '<div class="sub small">لا توجد تحويلات بعد</div>'}
-        ${T.me.pay ? `<p class="sub small" style="margin:8px 0 0">بيتحوّل على: <span dir="ltr">${esc(T.me.pay)}</span></p>` : ''}</div>`;
+        <p class="sub small" style="margin:8px 0 0">بيتحوّل على: ${T.me.pay ? `<b>${esc(T.me.pay)}</b>` : '<b>لسه مش متسجل</b>'}</p>
+        ${(T.requests || []).some(r => r.kind === 'payment_info' && r.status === 'pending') ? '<div class="cancel-info mt" style="background:var(--warn-soft);color:var(--warn)">⏳ طلب تغيير رقم التحويل مستني الإشراف يتأكد منك</div>'
+          : `<button class="btn btn-ghost btn-sm mt" onclick="tutorPaymentRequest()">✏️ طلب تغيير رقم التحويل</button>`}</div>
+      ${tutorRequestsHtml()}`;
   }
 }
 
@@ -223,6 +226,7 @@ const T_REQ = {
   extend: { l: 'الحصة اتمدت', icon: '⏱' },
   remove_student: { l: 'إيقاف الطالب', icon: '⛔', need: 'reason' },
   other: { l: 'طلب تاني', icon: '💬', need: 'reason' },
+  payment_info: { l: 'تغيير رقم التحويل', icon: '💳' },
 };
 const T_REQ_ST = { pending: ['⏳ مستني الرد', 'b-pending'], approved: ['✅ اتوافق', 'b-done'], rejected: ['❌ اترفض', 'b-cancel'] };
 const tPendingFor = s => (T.requests || []).find(r => r.session_id === s.id && r.status === 'pending');
@@ -274,6 +278,51 @@ function tutorRequest(sessionId, studentId) {
     window._rqText = text;
     openModal('✅ الطلب اتبعت للإشراف', `<p>الإشراف هيراجع الطلب، وهيوصلك إشعار بالرد.</p>
       <div class="card item" style="background:var(--warn-soft);border-color:var(--warn)"><b>⚠️ مهم:</b> بلّغي الإشراف كمان على الجروب عشان يتصرفوا بسرعة.</div>
+      <div class="msg-preview mt">${esc(text)}</div>
+      <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._rqText, ${jsq(T.me.group)}); closeModal()">💬 انسخي وافتحي جروب الإشراف</button>` : ''}
+        <button class="btn btn-ghost" onclick="copyText(window._rqText,'اتنسخ ✓ الصقيه في جروب الإشراف')">📋 نسخ الرسالة</button></div>`);
+    tutorRefresh();
+  });
+}
+
+/* ----- طلب تغيير رقم التحويل (الإشراف بيتأكد منها قبل ما يعتمده) ----- */
+const T_PAY_METHODS = ['InstaPay', 'محفظة', 'فودافون كاش', 'حساب بنكي'];
+function tutorPaymentRequest() {
+  if (T.preview) return showToast('ده عرض معاينة — المعلمة هي اللي بتبعت الطلب من حسابها');
+  const pr = window._pr = { method: /insta/i.test(T.me.pay || '') ? 'InstaPay' : 'محفظة', number: '', number2: '', name: '' };
+  const render = () => {
+    document.getElementById('modal-body').innerHTML = `
+      <div class="sub small mb">الرقم الحالي: <b>${esc(T.me.pay || "—")}</b></div>
+      <div class="field"><label>طريقة التحويل</label><div class="seg-wrap">${T_PAY_METHODS.map(m => `<button type="button" class="chip ${pr.method === m ? 'active' : ''}" onclick="_pr.method=${jsq(m)}; _prRender()">${m}</button>`).join('')}</div></div>
+      <div class="field"><label>${pr.method === 'حساب بنكي' ? 'رقم الحساب / IBAN' : pr.method === 'InstaPay' ? 'رقم الموبايل أو عنوان InstaPay' : 'رقم المحفظة'}</label>
+        <input id="pr-n1" class="input" dir="ltr" inputmode="${pr.method === 'InstaPay' || pr.method === 'حساب بنكي' ? 'text' : 'tel'}" value="${esc(pr.number)}" oninput="_pr.number=this.value" placeholder="${pr.method === 'InstaPay' ? '01xxxxxxxxx أو name@instapay' : '01xxxxxxxxx'}"></div>
+      <div class="field"><label>اكتبيه تاني للتأكيد</label><input id="pr-n2" class="input" dir="ltr" value="${esc(pr.number2)}" oninput="_pr.number2=this.value" autocomplete="off"></div>
+      <div class="field"><label>اسم صاحب الحساب (لو مش باسمك)</label><input id="pr-name" class="input" value="${esc(pr.name)}" oninput="_pr.name=this.value" placeholder="مثال: أحمد سيد"></div>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_prSend()">إرسال للإشراف</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>
+      <p class="sub small">🔒 الرقم مش هيتغير غير بعد ما الإشراف يتواصل معاكي ويتأكد إنك انتي اللي طلبتي التغيير. لحد كده التحويل بيفضل على الرقم القديم.</p>`;
+  };
+  window._prRender = render;
+  openModal('💳 طلب تغيير رقم التحويل', ''); render();
+  window._prSend = () => runSubmit(async () => {
+    const norm = v => v.replace(/[\s-]/g, '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/^\+?20(?=1\d{9}$)/, '0');
+    const n1 = norm(pr.number), n2 = norm(pr.number2);
+    if (!n1) return formError('اكتبي الرقم الجديد');
+    if (n1 !== n2) return formError('الرقمين مش زي بعض — راجعيهم');
+    if ((pr.method === 'محفظة' || pr.method === 'فودافون كاش') && !/^01\d{9}$/.test(n1)) return formError('رقم المحفظة لازم يكون 11 رقم ويبدأ بـ 01');
+    if (pr.method === 'InstaPay' && !/^01\d{9}$/.test(n1) && !/^[\w.-]+@[\w.-]+$/.test(n1)) return formError('اكتبي رقم موبايل (11 رقم) أو عنوان InstaPay زي name@instapay');
+    const { data, error } = await sb.rpc('tutor_request_payment', { p_method: pr.method, p_number: n1, p_name: pr.name.trim() || null });
+    if (error) throw error;
+    const val = `${pr.method}: ${n1}${pr.name.trim() ? ' · اسم الحساب: ' + pr.name.trim() : ''}`;
+    const text = `السلام عليكم 👋 — ${T.me.name}
+💳 طلب تغيير رقم التحويل
+القديم: ${T.me.pay || '—'}
+الجديد: ${val}
+برجاء التأكيد معايا قبل الاعتماد.
+(الطلب متسجل على بوابة المعلمات)`;
+    window._rqText = text;
+    openModal('✅ الطلب اتبعت للإشراف', `<p>الإشراف هيتواصل معاكي يتأكد، وبعدها الرقم الجديد يتعتمد ويوصلك إشعار.</p>
+      <div class="card item" style="background:var(--warn-soft);border-color:var(--warn)"><b>⚠️ مهم:</b> بلّغي الإشراف كمان على الجروب.</div>
       <div class="msg-preview mt">${esc(text)}</div>
       <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._rqText, ${jsq(T.me.group)}); closeModal()">💬 انسخي وافتحي جروب الإشراف</button>` : ''}
         <button class="btn btn-ghost" onclick="copyText(window._rqText,'اتنسخ ✓ الصقيه في جروب الإشراف')">📋 نسخ الرسالة</button></div>`);

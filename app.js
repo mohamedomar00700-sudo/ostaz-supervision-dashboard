@@ -1492,8 +1492,8 @@ function renderTutors() {
         ${t.default_rate_egp != null ? `<span>أجر الساعة: <b>${fmt(t.default_rate_egp)} EGP</b></span>` : `<span><a href="javascript:void(0)" onclick="openTutorForm(${tid})">حدد أجر الساعة</a></span>`}
         <span>حصص تمت: <b>${b.count}</b></span>
         <span>البوابة: ${t.user_id ? `<b class="pos">✅ مفعّلة</b>${t.portal_last_seen ? ` <span class="sub small">(آخر دخول ${ago(t.portal_last_seen)})</span>` : ''}` : t.email ? '<b class="warn-txt">مستنية تدخل</b>' : '<span class="sub">مش مفعّلة</span>'}</span>
-        ${t.vodafone_cash ? `<span>فودافون كاش: <b dir="ltr">${esc(t.vodafone_cash)}</b></span>` : ''}
-        ${t.bank_account ? `<span>بنك: <b>${esc(t.bank_account)}</b></span>` : ''}
+        ${t.vodafone_cash ? `<span>${/^[^:]+:/.test(t.vodafone_cash) ? 'تحويل' : 'فودافون كاش'}: <b dir="ltr">${esc(t.vodafone_cash)}</b></span>` : ''}
+        ${t.bank_account ? `<span>${/^[^:]+:/.test(t.bank_account) ? 'تحويل' : 'بنك'}: <b>${esc(t.bank_account)}</b></span>` : ''}
       </div>
       ${subs.length ? `<div class="meta"><span>المواد: <b>${subs.map(s => esc(s.subject) + (s.grade_level ? ` (${esc(s.grade_level)})` : '')).join('، ')}</b></span></div>` : ''}
       ${(() => { const ps = state.plans.filter(p => p.tutor_id === t.id); if (!ps.length) return '';
@@ -3199,7 +3199,7 @@ ${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }))
 /* ============================================================
    طلبات المعلمات (تأجيل / إلغاء / غياب / مدة / إيقاف طالب)
    ============================================================ */
-const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب' };
+const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب', payment_info: '💳 تغيير رقم التحويل' };
 async function openTutorRequests() {
   let list = [];
   try { list = await q(sb.from('tutor_requests').select('*').order('created_at', { ascending: false }).limit(40)); } catch (e) { return showToast(dbError(e), true); }
@@ -3214,15 +3214,17 @@ async function openTutorRequests() {
       <div class="item-head"><div><div class="item-title">${REQ_KIND[r.kind]}</div>
         <div class="sub small">${esc(tu?.name || '')} · ${ago(r.created_at)}</div></div>
         ${r.status === 'pending' ? '<span class="badge b-pending">مستني</span>' : r.status === 'approved' ? '<span class="badge b-done">اتوافق</span>' : '<span class="badge b-cancel">اترفض</span>'}</div>
+      ${r.kind === 'payment_info' ? `<div class="meta"><span>القديم: <b>${esc(r.old_value || '—')}</b></span><span>الجديد: <b class="pos">${esc(r.new_value || '')}</b></span></div>
+        ${r.status === 'pending' ? `<div class="pill bad mt" style="display:inline-block;white-space:normal">⚠️ كلّم المعلمة على رقمها المعروف واتأكد إنها هي اللي طلبت قبل الموافقة</div>` : ''}` : `
       <div class="meta"><span>الطالب: <b>${esc(s?.group_key ? '👥 ' + (s.group_name || 'مجموعة') : st?.name || '')}</b> <span class="sub small">${esc(fam?.name || '')}</span></span>
         ${s ? `<span>الحصة: <b>${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</b>${s.subject ? ' · ' + esc(s.subject) : ''}${isCancelled(s) ? ' <span class="neg">(ملغاة)</span>' : ''}</span>` : ''}
         ${r.proposed_at ? `<span>المقترح: <b>${fmtShortDate(r.proposed_at)} ${timeStr(new Date(r.proposed_at))}</b> <span class="sub small">(القاهرة ${fmtTime(r.proposed_at, CAIRO_TZ)})</span></span>` : ''}
         ${r.proposed_minutes ? `<span>المدة: <b>${durLabel(r.proposed_minutes)}</b></span>` : ''}
-        ${r.kind === 'reschedule' ? `<span>النوع: <b>${r.scope === 'permanent' ? '♾ تغيير دايم' : 'الحصة دي بس'}</b></span>` : ''}</div>
-      ${r.reason ? `<div class="mt" style="white-space:pre-wrap">📝 ${esc(r.reason)}</div>` : ''}
+        ${r.kind === 'reschedule' ? `<span>النوع: <b>${r.scope === 'permanent' ? '♾ تغيير دايم' : 'الحصة دي بس'}</b></span>` : ''}</div>`}
+      ${r.reason && r.kind !== 'payment_info' ? `<div class="mt" style="white-space:pre-wrap">📝 ${esc(r.reason)}</div>` : ''}
       ${late ? `<div class="pill bad mt" style="display:inline-block">⚠️ إلغاء متأخر — أقل من ${LATE_HOURS} ساعات قبل الحصة</div>` : ''}
       ${r.decision_note ? `<div class="sub small mt">ردّك: ${esc(r.decision_note)}</div>` : ''}
-      ${r.status === 'pending' ? `<div class="actions"><button class="btn btn-ok sm" onclick="approveTutorRequest(${jsq(r.id)})">✓ موافقة وتنفيذ</button>
+      ${r.status === 'pending' ? `<div class="actions"><button class="btn btn-ok sm" onclick="approveTutorRequest(${jsq(r.id)})">${r.kind === 'payment_info' ? '✓ اتأكدت — اعتمد الرقم' : '✓ موافقة وتنفيذ'}</button>
         <button class="btn btn-ghost sm" onclick="rejectTutorRequest(${jsq(r.id)})">✕ رفض</button>
         ${st ? `<button class="btn btn-ghost sm" onclick="openStudentProfile(${jsq(st.id)})">🎒 ملف الطالب</button>` : ''}</div>` : ''}
     </div>`;
@@ -3245,6 +3247,13 @@ async function approveTutorRequest(id) {
   const r = list.find(x => x.id === id), s = sess.find(x => x.id === r.session_id);
   const tu = byId(state.tutors, r.tutor_id), st = byId(state.students, r.student_id);
   try {
+    if (r.kind === 'payment_info') {
+      if (!confirm(`اعتماد رقم التحويل الجديد لـ ${tu?.name || 'المعلمة'}؟\n\nالقديم: ${r.old_value || '—'}\nالجديد: ${r.new_value}\n\nاتأكدت منها بنفسك؟`)) return;
+      const isBank = /^(InstaPay|حساب بنكي):/.test(r.new_value || '');
+      await q(sb.from('tutors').update(isBank ? { bank_account: r.new_value, vodafone_cash: null } : { vodafone_cash: r.new_value, bank_account: null }).eq('id', r.tutor_id));
+      await decideRequest(r, 'approved', 'اتأكدنا معاكي واتعتمد الرقم الجديد');
+      await refreshAll(); showToast('اتعتمد الرقم الجديد ✓ واتبلغت المعلمة'); return openTutorRequests();
+    }
     if (r.kind === 'reschedule' && s && !s.group_key) {
       return openReschedule(s.id, { session: s, proposed_at: r.proposed_at, scope: r.scope === 'permanent' ? 'permanent' : 'once', reason: r.reason || '', title: `موافقة على طلب ${tu?.name || 'المعلمة'}`,
         onDone: () => decideRequest(r, 'approved') });
