@@ -2026,6 +2026,7 @@ async function loadAttention() {
   const nxt = await q(sb.from('sessions').select('*').eq('status', 'scheduled')
     .gte('scheduled_at', now.toISOString()).lt('scheduled_at', todayEnd.toISOString()).order('scheduled_at').limit(1));
   state.nextSession = nxt[0] || null;
+  try { state.tutorReqs = await q(sb.from('tutor_requests').select('*').eq('status', 'pending').order('created_at')); } catch (e) { state.tutorReqs = []; }
   state.pendingTrials = await q(sb.from('sessions').select('*').eq('kind', 'trial').eq('status', 'done')
     .or('trial_outcome.is.null,trial_outcome.eq.thinking').gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at'));
 }
@@ -2037,6 +2038,8 @@ function renderAttention() {
     const v = sessionView(ns); if (ns.group_key) v.st = { name: '👥 ' + (ns.group_name || 'مجموعة') }; const mins = Math.round((sStart(ns) - Date.now()) / 60e3);
     items.push(`<button class="att att-next" onclick="setDayMode('day'); setDay(todayStr())">⏰ الجاية: <b>${esc(v.st?.name || '')}</b> ${esc(ns.subject || '')} — ${timeStr(new Date(ns.scheduled_at))} <span class="sub">(${mins < 60 ? `بعد ${mins} د` : `بعد ${durLabel(Math.round(mins / 5) * 5)}`})</span></button>`);
   }
+  const tr = (state.tutorReqs || []).length;
+  if (tr) items.push(`<button class="att att-next" onclick="openTutorRequests()">📨 <b>${tr}</b> ${tr === 1 ? 'طلب' : 'طلبات'} من المعلمات مستنية ردك</button>`);
   const un = state.unrecorded || [];
   if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${occurrences(un).length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
   const pt = (state.pendingTrials || []).length;
@@ -3059,6 +3062,100 @@ async function openSchedule(kind, id, range = 'week') {
 }
 
 /* ============================================================
+   طلبات المعلمات (تأجيل / إلغاء / غياب / مدة / إيقاف طالب)
+   ============================================================ */
+const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب' };
+async function openTutorRequests() {
+  let list = [];
+  try { list = await q(sb.from('tutor_requests').select('*').order('created_at', { ascending: false }).limit(40)); } catch (e) { return showToast(dbError(e), true); }
+  const sessIds = list.map(r => r.session_id).filter(Boolean);
+  const sess = sessIds.length ? await q(sb.from('sessions').select('*').in('id', sessIds)) : [];
+  window._reqData = { list, sess };
+  const pending = list.filter(r => r.status === 'pending'), done = list.filter(r => r.status !== 'pending').slice(0, 10);
+  const card = r => {
+    const s = sess.find(x => x.id === r.session_id), tu = byId(state.tutors, r.tutor_id), st = byId(state.students, r.student_id), fam = st ? byId(state.families, st.family_id) : null;
+    const late = s && r.kind === 'cancel' && (sStart(s) - new Date(r.created_at).getTime()) < LATE_HOURS * 3600e3;
+    return `<div class="card item ${r.status === 'pending' ? 's-confirm' : ''}">
+      <div class="item-head"><div><div class="item-title">${REQ_KIND[r.kind]}</div>
+        <div class="sub small">${esc(tu?.name || '')} · ${ago(r.created_at)}</div></div>
+        ${r.status === 'pending' ? '<span class="badge b-pending">مستني</span>' : r.status === 'approved' ? '<span class="badge b-done">اتوافق</span>' : '<span class="badge b-cancel">اترفض</span>'}</div>
+      <div class="meta"><span>الطالب: <b>${esc(s?.group_key ? '👥 ' + (s.group_name || 'مجموعة') : st?.name || '')}</b> <span class="sub small">${esc(fam?.name || '')}</span></span>
+        ${s ? `<span>الحصة: <b>${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</b>${s.subject ? ' · ' + esc(s.subject) : ''}${isCancelled(s) ? ' <span class="neg">(ملغاة)</span>' : ''}</span>` : ''}
+        ${r.proposed_at ? `<span>المقترح: <b>${fmtShortDate(r.proposed_at)} ${timeStr(new Date(r.proposed_at))}</b> <span class="sub small">(القاهرة ${fmtTime(r.proposed_at, CAIRO_TZ)})</span></span>` : ''}
+        ${r.proposed_minutes ? `<span>المدة: <b>${durLabel(r.proposed_minutes)}</b></span>` : ''}</div>
+      ${r.reason ? `<div class="mt" style="white-space:pre-wrap">📝 ${esc(r.reason)}</div>` : ''}
+      ${late ? `<div class="pill bad mt" style="display:inline-block">⚠️ إلغاء متأخر — أقل من ${LATE_HOURS} ساعات قبل الحصة</div>` : ''}
+      ${r.decision_note ? `<div class="sub small mt">ردّك: ${esc(r.decision_note)}</div>` : ''}
+      ${r.status === 'pending' ? `<div class="actions"><button class="btn btn-ok sm" onclick="approveTutorRequest(${jsq(r.id)})">✓ موافقة وتنفيذ</button>
+        <button class="btn btn-ghost sm" onclick="rejectTutorRequest(${jsq(r.id)})">✕ رفض</button>
+        ${st ? `<button class="btn btn-ghost sm" onclick="openStudentProfile(${jsq(st.id)})">🎒 ملف الطالب</button>` : ''}</div>` : ''}
+    </div>`;
+  };
+  openModal(`طلبات المعلمات${pending.length ? ` (${pending.length})` : ''}`, `
+    ${pending.length ? `<div class="list">${pending.map(card).join('')}</div>` : '<div class="empty">مفيش طلبات مستنية 👌</div>'}
+    ${done.length ? `<details class="mt"><summary class="sub">آخر الطلبات اللي اتردّ عليها</summary><div class="list mt">${done.map(card).join('')}</div></details>` : ''}`);
+}
+async function decideRequest(r, status, note) {
+  await q(sb.from('tutor_requests').update({ status, decision_note: note || null, decided_by: currentUser.id, decided_at: new Date().toISOString() }).eq('id', r.id));
+}
+function rejectTutorRequest(id) {
+  const r = window._reqData.list.find(x => x.id === id);
+  openModal('رفض الطلب', `<div class="field"><label>سبب الرفض (هيوصل للمعلمة)</label><textarea id="rj-note" class="input" placeholder="مثال: الأسرة مش هتقدر في المعاد ده — هنكلمك نتفق على معاد تاني"></textarea></div>
+    <div class="modal-foot"><button class="btn btn-danger" style="background:var(--danger);color:#fff" id="form-submit" onclick="_rj()">رفض</button><button class="btn btn-ghost" onclick="openTutorRequests()">رجوع</button></div>`);
+  window._rj = () => runSubmit(async () => { await decideRequest(r, 'rejected', document.getElementById('rj-note').value.trim()); showToast('اترفض ✓ واتبلغت المعلمة'); await refreshAll(); openTutorRequests(); });
+}
+async function approveTutorRequest(id) {
+  const { list, sess } = window._reqData;
+  const r = list.find(x => x.id === id), s = sess.find(x => x.id === r.session_id);
+  const tu = byId(state.tutors, r.tutor_id), st = byId(state.students, r.student_id);
+  try {
+    if (r.kind === 'reschedule' && s) {
+      const conflicts = await findConflicts([{ ...s, scheduled_at: r.proposed_at }], s.id);
+      if (conflicts.length && !confirm(`⚠️ المعاد الجديد فيه تعارض:\n${conflicts.slice(0, 4).map(({ o }) => { const v = sessionView(o); return `• ${timeStr(new Date(o.scheduled_at))}: ${v.st?.name || ''} مع ${v.tu?.name || ''}`; }).join('\n')}\n\nتوافق برضه؟`)) return;
+      const oldIso = s.scheduled_at;
+      const patch = { scheduled_at: r.proposed_at, status: 'scheduled', actual_minutes: null, notes: [s.notes, `تأجيل بطلب المعلمة من ${fmtShortDate(oldIso)} ${timeStr(new Date(oldIso))}${r.reason ? ': ' + r.reason : ''}`].filter(Boolean).join(' | ') };
+      await q(s.group_key ? sb.from('sessions').update(patch).eq('group_key', s.group_key).in('status', ['scheduled', 'in_progress']) : sb.from('sessions').update(patch).eq('id', s.id));
+      await decideRequest(r, 'approved');
+      await refreshAll();
+      const fams = s.group_key ? [...new Map((await q(sb.from('sessions').select('student_id').eq('group_key', s.group_key))).map(x => sessionView(x).fam).filter(Boolean).map(f => [f.id, f])).values()] : [sessionView(s).fam].filter(Boolean);
+      const blocks = fams.map(f => { const c = COUNTRIES[f.country] || COUNTRIES['مصر'];
+        return msgBlock(`رسالة ${f.name}`, `السلام عليكم ورحمة الله 🌷
+نعتذر، تم تغيير موعد حصة ${s.group_key ? 'المجموعة' : st?.name || ''}${s.subject ? ` (${s.subject})` : ''}:
+❌ الموعد القديم: ${fmtDate(oldIso, c.tz)} الساعة ${fmtTime(oldIso, c.tz)}
+✅ الموعد الجديد: ${fmtDate(r.proposed_at, c.tz)} الساعة ${fmtTime(r.proposed_at, c.tz)} بتوقيت ${c.tzName}
+لو المعاد مش مناسب بلّغونا ونرتب معاد تاني إن شاء الله 🙏
+${SIGN_F}`, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id }); });
+      openModal('✅ اتوافق واتغير المعاد — بلّغ الأسرة', `<p class="sub small">المعلمة وصلها إشعار بالموافقة.</p><div class="list">${blocks.join('')}</div>
+        <div class="modal-foot"><button class="btn btn-ghost" onclick="openTutorRequests()">باقي الطلبات</button></div>`);
+      document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+      return;
+    }
+    if (r.kind === 'cancel' && s) {
+      const patch = { status: 'cancelled_by_tutor', cancel_reason: 'ظرف طارئ', cancel_note: r.reason || null, cancelled_at: r.created_at, cancelled_by_user: currentUser.id, cancel_scope: 'once' };
+      await q(s.group_key ? sb.from('sessions').update(patch).eq('group_key', s.group_key).in('status', ['scheduled', 'in_progress']) : sb.from('sessions').update(patch).eq('id', s.id));
+      await decideRequest(r, 'approved');
+      await refreshAll();
+      if (!s.group_key) return showCancelNotices(s, [s], { party: 'cancelled_by_tutor', scope: 'once', reason: 'ظرف طارئ' });
+      showToast('اتلغت حصة المجموعة ✓ — بلّغ الأسر من كارت المجموعة'); return openTutorRequests();
+    }
+    if (r.kind === 'absent' && s) {
+      await q(sb.from('sessions').update({ status: 'cancelled_by_student', cancel_reason: 'لم يحضر', cancel_note: r.reason || 'بلاغ من المعلمة', cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, cancel_scope: 'once', actual_minutes: null }).eq('id', s.id));
+    } else if (r.kind === 'extend' && s) {
+      await q(sb.from('sessions').update({ status: 'done', actual_minutes: r.proposed_minutes }).eq(s.group_key ? 'group_key' : 'id', s.group_key || s.id));
+    } else if (r.kind === 'remove_student') {
+      if (!confirm(`إيقاف ${st?.name || 'الطالب'} مع ${tu?.name || 'المعلمة'}: هيتشال من خطته مع المعلمة دي، والحصص الجاية معاها هتتلغي. تكمل؟`)) return;
+      const fut = await q(sb.from('sessions').select('id').eq('student_id', r.student_id).eq('tutor_id', r.tutor_id).eq('status', 'scheduled').gt('scheduled_at', new Date().toISOString()));
+      if (fut.length) await q(sb.from('sessions').update({ status: 'cancelled_by_tutor', cancel_reason: 'اعتذار عن الطالب', cancel_note: r.reason || null, cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, cancel_scope: 'permanent' }).in('id', fut.map(x => x.id)));
+      await q(sb.from('student_subjects').update({ tutor_id: null, tutor_rate_egp: null, meeting_link: null }).eq('student_id', r.student_id).eq('tutor_id', r.tutor_id));
+      await decideRequest(r, 'approved', fut.length ? `اتلغت ${fut.length} حصة جاية` : null);
+      showToast(`تم ✓${fut.length ? ` واتلغت ${fut.length} حصة جاية` : ''} — دوّر على معلمة بديلة للطالب`); await refreshAll(); return openTutorRequests();
+    }
+    await decideRequest(r, 'approved');
+    showToast('اتوافق ✓ واتبلغت المعلمة'); await refreshAll(); openTutorRequests();
+  } catch (e) { showToast(dbError(e), true); }
+}
+
+/* ============================================================
    قائمة إجراءات الحصة (⋯)
    ============================================================ */
 function openSessionActions(id) {
@@ -3268,6 +3365,8 @@ async function enterApp() {
   // تنظيف أي داتا تجريبية قديمة من النسخة السابقة
   try { localStorage.removeItem('ostaz_sessions'); } catch (e) {}
   // فتح يوم معيّن لو جاي من إشعار (?day=YYYY-MM-DD)
+  const openReq = new URLSearchParams(location.search).get('req');
+  if (openReq) setTimeout(() => openTutorRequests(), 1500);
   const qDay = new URLSearchParams(location.search).get('day');
   if (qDay && /^\d{4}-\d{2}-\d{2}$/.test(qDay)) state.day = qDay;
   // مسح بقايا رابط جوجل (?code=… / #…) من شريط العنوان

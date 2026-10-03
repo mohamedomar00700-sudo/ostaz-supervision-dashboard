@@ -53,6 +53,8 @@ async function tutorRefresh() {
       const [w, m, po] = await Promise.all([tutorPreviewRows(new Date(from.getTime() - 864e5), new Date(from.getTime() + 8 * 864e5)), tutorPreviewRows(mr.from, mr.to),
         q(sb.from('tutor_payouts').select('*').eq('tutor_id', T.preview).eq('paid', true).order('paid_at', { ascending: false }))]);
       T.week = w; T.monthRows = m;
+      try { const rq = await q(sb.from('tutor_requests').select('*').eq('tutor_id', T.preview).order('created_at', { ascending: false }).limit(20));
+        T.requests = rq.map(r => ({ ...r, student_name: byId(state.students, r.student_id)?.name, session_at: (w.concat(m).find(x => x.id === r.session_id) || {}).scheduled_at })); } catch (e) { T.requests = []; }
       T.payouts = po.map(p => ({ ...p, paid_at: p.paid_at || p.created_at }));
       T.students = state.plans.filter(p => p.tutor_id === T.preview).map(p => { const st = byId(state.students, p.student_id) || {};
         return { student_id: p.student_id, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', subject: p.subject, meeting_link: p.meeting_link, rate: p.tutor_rate_egp ?? byId(state.tutors, T.preview)?.default_rate_egp, weekly: p.weekly_sessions }; })
@@ -64,6 +66,7 @@ async function tutorRefresh() {
   try {
     const now = new Date(); const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const to = new Date(from.getTime() + 8 * 864e5);
     const mr = tMonthRange(T.month);
+    const rq = await sb.rpc('tutor_requests_mine'); T.requests = rq.data || [];
     const [a, b, c, d] = await Promise.all([
       sb.rpc('tutor_sessions', { p_from: new Date(from.getTime() - 864e5).toISOString(), p_to: to.toISOString() }),
       sb.rpc('tutor_students'), sb.rpc('tutor_payout_list'),
@@ -103,7 +106,9 @@ function tutorSessionCard(s, compact) {
     <div class="left"><div class="time">${tTime(s.scheduled_at)}</div><div class="sub small">حتى ${tTime(tEnd(s))}</div></div>
     <div><div class="item-head"><div class="item-title">${who}${kind}</div>${badge}</div>
       <div class="meta">${s.subject ? `<span>المادة: <b>${esc(s.subject)}</b>${s.en ? ' <span class="badge b-en">EN</span>' : ''}</span>` : ''}<span>المدة: <b>${durLabel(s.duration_minutes || 60)}</b></span></div>
+      ${tPendingFor(s) ? `<div class="cancel-info mt" style="background:var(--warn-soft);color:var(--warn)">⏳ طلب ${esc(T_REQ[tPendingFor(s).kind].l)} مستني رد الإشراف</div>` : ''}
       ${!tCancelled(s) && s.status !== 'done' ? `<div class="actions">
+        ${!tPendingFor(s) ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">✏️ طلب تغيير</button>` : ''}
         ${s.meeting_link ? `<a class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">🎥 دخول الحصة</a>`
           : `<button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(s.student_id)}, ${jsq(s.subject || null)}, '')">🔗 ضيفي لينك الحصة</button>`}
       </div>` : ''}
@@ -125,6 +130,7 @@ function tutorRender() {
         <div class="card stat"><div class="v num">${fmtU(todayList.reduce((a, s) => a + (s.duration_minutes || 60), 0) / 60)}</div><div class="l">ساعة النهارده</div></div>
         <div class="card stat"><div class="v" style="font-size:17px">${next ? tTime(next.scheduled_at) : '—'}</div><div class="l">${next ? 'الحصة الجاية: ' + esc(next.group_key ? next.group_name || 'مجموعة' : next.student_name) : 'مفيش حصص جاية'}</div></div>
       </div>
+      ${tutorRequestsHtml()}
       ${days.length ? days.map(k => `<div class="section-title"><h2>${k === todayKey ? 'النهارده' : esc(relDayLabel(byDay[k][0].scheduled_at, CAIRO_TZ))}</h2></div>
         <div class="list">${byDay[k].map(s => tutorSessionCard(s)).join('')}</div>`).join('')
         : '<div class="card empty">مفيش حصص في الأيام الجاية 👌<br><span class="small">أي حصة الإشراف يحجزها هتظهر هنا على طول، ويوصلك تذكير قبلها.</span></div>'}
@@ -136,7 +142,8 @@ function tutorRender() {
           <div class="sub small">${esc(r.grade || '')} · ${esc(r.subject || '')}${r.en ? ' <span class="badge b-en">EN</span>' : ''}${r.weekly ? ` · ${r.weekly} حصص/أسبوع` : ''}</div></div>
           <span class="sub small">${r.rate != null ? fmt(r.rate) + ' ج/ساعة' : ''}</span></div>
         <div class="actions">${r.meeting_link ? `<a class="btn btn-ghost sm" href="${esc(linkHref(r.meeting_link))}" target="_blank" rel="noopener">🎥 اللينك</a>` : '<span class="neg small">مفيش لينك</span>'}
-          <button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(r.student_id)}, ${jsq(r.subject)}, ${jsq(r.meeting_link || '')})">${r.meeting_link ? '✏️ تعديل اللينك' : '🔗 ضيفي لينك'}</button></div>
+          <button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(r.student_id)}, ${jsq(r.subject)}, ${jsq(r.meeting_link || '')})">${r.meeting_link ? '✏️ تعديل اللينك' : '🔗 ضيفي لينك'}</button>
+          <button class="btn btn-ghost sm" onclick="tutorRequest(null, ${jsq(r.student_id)})">📨 طلب بخصوص الطالب</button></div>
       </div>`).join('') || '<div class="card empty">لسه مفيش طلاب متسجلين معاكي.</div>'}</div>`;
   } else {
     const mr = tMonthRange(T.month);
@@ -206,4 +213,68 @@ async function tutorEnablePush() { await enablePush(); await tutorAlertIcon(); t
 async function tutorTestPush() {
   try { const { data, error } = await sb.functions.invoke('session-alerts', { body: { action: 'test' } }); if (error) throw error;
     showToast(data.sent ? 'اتبعت إشعار تجريبي ✓' : 'مفيش جهاز مفعّل', !data.sent); } catch (e) { showToast('فشل: ' + (e.message || e), true); }
+}
+
+/* ----- طلبات التغيير (بتروح للإشراف يوافق عليها) ----- */
+const T_REQ = {
+  reschedule: { l: 'تأجيل / تغيير المعاد', icon: '🔁', need: 'reason' },
+  cancel: { l: 'إلغاء الحصة', icon: '✖', need: 'reason' },
+  absent: { l: 'الطالب ماحضرش', icon: '🚫' },
+  extend: { l: 'الحصة اتمدت', icon: '⏱' },
+  remove_student: { l: 'إيقاف الطالب', icon: '⛔', need: 'reason' },
+  other: { l: 'طلب تاني', icon: '💬', need: 'reason' },
+};
+const T_REQ_ST = { pending: ['⏳ مستني الرد', 'b-pending'], approved: ['✅ اتوافق', 'b-done'], rejected: ['❌ اترفض', 'b-cancel'] };
+const tPendingFor = s => (T.requests || []).find(r => r.session_id === s.id && r.status === 'pending');
+function tutorRequestsHtml() {
+  const list = (T.requests || []).filter(r => r.status === 'pending' || (r.decided_at && Date.now() - new Date(r.decided_at) < 3 * 864e5));
+  if (!list.length) return '';
+  return `<div class="section-title"><h2>طلباتي</h2></div><div class="list">${list.map(r => `<div class="card item"><div class="item-head">
+      <div><b>${T_REQ[r.kind].icon} ${esc(T_REQ[r.kind].l)}</b> — ${esc(r.student_name || '')}
+        <div class="sub small">${r.session_at ? `حصة ${esc(relDayLabel(r.session_at, CAIRO_TZ))} ${tTime(r.session_at)}` : ''}${r.proposed_at ? ` ← ${esc(relDayLabel(r.proposed_at, CAIRO_TZ))} ${tTime(r.proposed_at)}` : ''}${r.proposed_minutes ? ` · ${durLabel(r.proposed_minutes)}` : ''}</div>
+        ${r.decision_note ? `<div class="small mt">📝 الإشراف: ${esc(r.decision_note)}</div>` : ''}</div>
+      <span class="badge ${T_REQ_ST[r.status][1]}">${T_REQ_ST[r.status][0]}</span></div></div>`).join('')}</div>`;
+}
+function tutorRequest(sessionId, studentId) {
+  if (T.preview) return showToast('ده عرض معاينة — المعلمة هي اللي بتبعت الطلبات من حسابها');
+  const s = sessionId ? T.week.find(x => x.id === sessionId) : null;
+  const st = s ? { name: s.group_key ? s.group_name || 'المجموعة' : s.student_name } : (T.students.find(x => x.student_id === studentId) ? { name: T.students.find(x => x.student_id === studentId).student_name } : { name: '' });
+  const started = s && Date.now() >= new Date(s.scheduled_at).getTime();
+  const kinds = s ? ['reschedule', 'cancel', ...(started ? ['absent', 'extend'] : [])] : ['remove_student', 'other'];
+  const rq = { kind: kinds[0], reason: '', mins: s ? (s.duration_minutes || 60) + 30 : null };
+  const d0 = s ? new Date(new Date(s.scheduled_at).getTime() + 864e5) : null;
+  window._rq = rq;
+  const render = () => {
+    const K = T_REQ[rq.kind];
+    document.getElementById('modal-body').innerHTML = `
+      <div class="sub small mb">${esc(st.name)}${s ? ` · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}` : ''}</div>
+      <div class="field"><label>نوع الطلب</label><div class="seg-wrap">${kinds.map(k => `<button type="button" class="chip ${rq.kind === k ? 'active' : ''}" onclick="_rq.kind='${k}'; _rqRender()">${T_REQ[k].icon} ${T_REQ[k].l}</button>`).join('')}</div></div>
+      ${rq.kind === 'reschedule' ? `<div class="field-row"><div class="field"><label>المعاد الجديد المقترح</label><input id="rq-date" type="date" class="input" value="${dateStr(d0)}"></div>
+        <div class="field"><label>الساعة (بتوقيت القاهرة)</label><input id="rq-time" type="time" class="input" value="${timeStr(new Date(s.scheduled_at))}"></div></div>` : ''}
+      ${rq.kind === 'extend' ? `<div class="field"><label>المدة الفعلية للحصة</label><div class="chips" style="margin:0">${[15, 30, 45, 60, 90].map(x => (s.duration_minutes || 60) + x).map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>` : ''}
+      <div class="field"><label>${K.need ? 'السبب' : 'ملاحظة (اختياري)'}</label><textarea id="rq-reason" class="input" placeholder="${rq.kind === 'remove_student' ? 'مثال: الطالب مش ملتزم / مش مناسب لمستوايا' : rq.kind === 'cancel' ? 'مثال: ظرف طارئ' : 'اكتبي التفاصيل'}" oninput="_rq.reason=this.value">${esc(rq.reason)}</textarea></div>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_rqSend()">إرسال للإشراف</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>
+      <p class="sub small">الطلب بيروح للإشراف يوافق عليه، وبعدها التغيير بيتنفذ ويتبلغ لولي الأمر. ⚠️ أي تغيير مهم لازم كمان تبلّغي بيه الإشراف على الجروب.</p>`;
+  };
+  window._rqRender = render;
+  openModal(sessionId ? 'طلب تغيير في الحصة' : 'طلب بخصوص الطالب', ''); render();
+  window._rqSend = () => runSubmit(async () => {
+    const K = T_REQ[rq.kind];
+    if (K.need && !rq.reason.trim()) return formError('اكتبي السبب عشان الإشراف يقدر يتصرف');
+    let at = null;
+    if (rq.kind === 'reschedule') { const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`); if (isNaN(d)) return formError('اختاري المعاد الجديد'); at = d.toISOString(); }
+    const { error } = await sb.rpc('tutor_request_create', { p_kind: rq.kind, p_session: s?.id || null, p_student: s ? null : studentId, p_proposed_at: at, p_minutes: rq.kind === 'extend' ? rq.mins : null, p_reason: rq.reason });
+    if (error) throw error;
+    const text = `السلام عليكم 👋 — ${T.me.name}
+📨 طلب ${K.l}: ${st.name}${s ? `\n📅 الحصة: ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}${s.subject ? ' — ' + s.subject : ''}` : ''}${at ? `\n➡️ المعاد المقترح: ${relDayLabel(at, CAIRO_TZ)} الساعة ${tTime(at)}` : ''}${rq.kind === 'extend' ? `\n⏱ المدة الفعلية: ${durLabel(rq.mins)}` : ''}${rq.reason ? `\n📝 ${rq.reason}` : ''}
+(الطلب متسجل على بوابة المعلمات)`;
+    window._rqText = text;
+    openModal('✅ الطلب اتبعت للإشراف', `<p>الإشراف هيراجع الطلب، وهيوصلك إشعار بالرد.</p>
+      <div class="card item" style="background:var(--warn-soft);border-color:var(--warn)"><b>⚠️ مهم:</b> بلّغي الإشراف كمان على الجروب عشان يتصرفوا بسرعة.</div>
+      <div class="msg-preview mt">${esc(text)}</div>
+      <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._rqText, ${jsq(T.me.group)}); closeModal()">💬 انسخي وافتحي جروب الإشراف</button>` : ''}
+        <button class="btn btn-ghost" onclick="copyText(window._rqText,'اتنسخ ✓ الصقيه في جروب الإشراف')">📋 نسخ الرسالة</button></div>`);
+    tutorRefresh();
+  });
 }
