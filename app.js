@@ -1652,6 +1652,7 @@ function openTutorForm(id) {
      { name: 'default_rate_egp', label: 'أجر الساعة (EGP)', type: 'number', value: t?.default_rate_egp, hint: 'بيتضرب في مدة الحصة الفعلية' }],
     [{ name: 'vodafone_cash', label: 'رقم فودافون كاش', type: 'tel', value: t?.vodafone_cash },
      { name: 'bank_account', label: 'الحساب البنكي / InstaPay', value: t?.bank_account }],
+    { name: 'meeting_link', label: 'لينك الحصة الثابت (زووم / ميت)', type: 'url', value: t?.meeting_link, placeholder: 'https://zoom.us/j/…', hint: 'بيتحط لوحده على كل حصص المعلمة اللي مالهاش لينك خاص بالطالب' },
     { name: 'email', label: 'إيميل المعلمة (للدخول على بوابة المعلمات)', type: 'email', value: t?.email, placeholder: 'name@gmail.com',
       hint: t?.user_id ? '✅ المعلمة دخلت البوابة بالإيميل ده' : 'بعد الحفظ دوس "📲 دعوة للبوابة" من كارت المعلمة' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: t?.notes },
@@ -1663,10 +1664,14 @@ function openTutorForm(id) {
   openModal(t ? 'تعديل معلم' : 'معلم جديد', formHtml(fields, 'حفظ', subjBlock));
   window._formSubmit = () => runSubmit(async () => {
     const row = { name: fv('name'), phone: fv('phone') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), default_rate_egp: fnum('default_rate_egp'),
-      vodafone_cash: fv('vodafone_cash') || null, bank_account: fv('bank_account') || null, notes: fv('notes') || null, email: fv('email').toLowerCase() || null };
+      vodafone_cash: fv('vodafone_cash') || null, bank_account: fv('bank_account') || null, notes: fv('notes') || null, email: fv('email').toLowerCase() || null, meeting_link: fv('meeting_link').trim() || null };
     if (t && t.user_id && (t.email || '') !== (row.email || '') && !confirm('المعلمة مربوطة بالإيميل القديم — تغيير الإيميل مش هيفصلها. تكمل؟')) return;
     let tutorId = t?.id;
     if (t) await q(sb.from('tutors').update(row).eq('id', t.id));
+    if (t && row.meeting_link && row.meeting_link !== t.meeting_link) { // اللينك الجديد يتطبق على الطلاب والحصص الجاية اللي ماخدتش لينك خاص
+      await q(sb.from('student_subjects').update({ meeting_link: row.meeting_link }).eq('tutor_id', t.id).or(`meeting_link.is.null${t.meeting_link ? `,meeting_link.eq.${t.meeting_link}` : ''}`));
+      await q(sb.from('sessions').update({ meeting_link: row.meeting_link }).eq('tutor_id', t.id).eq('status', 'scheduled').gte('scheduled_at', new Date().toISOString()).or(`meeting_link.is.null${t.meeting_link ? `,meeting_link.eq.${t.meeting_link}` : ''}`));
+    }
     else { const [nt] = await q(sb.from('tutors').insert(row).select()); tutorId = nt.id; }
     const seen = new Set();
     const subjRows = [...document.querySelectorAll('#subj-rows .subj-row')].map(r => ({
