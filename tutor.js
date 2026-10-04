@@ -103,7 +103,8 @@ function tutorSessionCard(s, compact) {
   const start = new Date(s.scheduled_at).getTime(), end = start + tDur(s) * 60e3, now = Date.now();
   const live = !tCancelled(s) && s.status !== 'done' && now >= start - 10 * 60e3 && now <= end;
   const soon = !tCancelled(s) && s.status === 'scheduled' && start > now && start - now < 60 * 60e3;
-  const badge = tCancelled(s) ? '<span class="badge b-cancel">اتلغت</span>' : s.status === 'done' ? '<span class="badge b-done">تمت</span>'
+  const badge = tCancelled(s) ? '<span class="badge b-cancel">اتلغت</span>' : s.status === 'done' ? '<span class="badge b-done">تمت ✓</span>'
+    : now > end ? '<span class="badge b-pending">⏳ مستنية تأكيد الإشراف</span>'
     : live ? '<span class="badge b-now">دلوقتي</span>' : soon ? `<span class="badge b-pending">بعد ${Math.round((start - now) / 60e3)} د</span>` : '';
   const who = s.group_key ? `👥 ${esc(s.group_name || 'مجموعة')}: ${esc(s.names.join('، '))}` : `${esc(s.student_name)} <span class="sub small">${esc(s.grade || '')}</span>`;
   const kind = s.kind === 'trial' ? ' <span class="badge b-trial">🧪 تجريبية — طالب جديد</span>' : s.kind === 'revision' ? ' <span class="badge b-rev">مراجعة</span>' : '';
@@ -161,28 +162,37 @@ function tutorRender() {
   } else {
     const mr = tMonthRange(T.month);
     const done = T.monthRows.filter(s => s.status === 'done');
+    // حصص عدّت ولسه الإشراف ماأكدهاش: بتظهر لوحدها عشان المعلمة متقلقش إنها اتنست
+    const pend = T.monthRows.filter(s => (s.status === 'scheduled' || s.status === 'in_progress') && Date.now() >= new Date(s.scheduled_at).getTime() + (s.duration_minutes || 60) * 60e3);
     const per = {};
-    done.forEach(s => { const k = s.group_key ? 'g:' + (s.group_name || s.group_key) : s.student_id;
-      const x = per[k] ||= { who: s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name, mins: 0, amt: 0, subj: new Set(), seen: new Set() };
+    const slot = s => { const k = s.group_key ? 'g:' + (s.group_name || s.group_key) : s.student_id;
+      return per[k] ||= { who: s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name, mins: 0, amt: 0, pmins: 0, pamt: 0, subj: new Set(), seen: new Set(), pseen: new Set() }; };
+    done.forEach(s => { const x = slot(s);
       if (!s.group_key || !x.seen.has(s.group_key)) { x.mins += tMins(s); if (s.group_key) x.seen.add(s.group_key); }
       x.amt += Number(s.tutor_charge_egp || 0); if (s.subject) x.subj.add(s.subject); });
-    const list = Object.values(per).sort((a, b) => b.mins - a.mins);
+    pend.forEach(s => { const x = slot(s), r = tRepFor(s);
+      if (r && !r.attended) return; // التقرير بيقول الطالب ماحضرش
+      const m = r?.minutes || s.duration_minutes || 60;
+      if (!s.group_key || !x.pseen.has(s.group_key)) { x.pmins += m; if (s.group_key) x.pseen.add(s.group_key); }
+      x.pamt += Number(s.tutor_cost_egp || 0) * m / 60; if (s.subject) x.subj.add(s.subject); });
+    const list = Object.values(per).sort((a, b) => (b.mins + b.pmins) - (a.mins + a.pmins));
     const total = list.reduce((a, x) => a + x.amt, 0), mins = list.reduce((a, x) => a + x.mins, 0);
+    const pMins = list.reduce((a, x) => a + x.pmins, 0), pAmt = list.reduce((a, x) => a + x.pamt, 0);
     const paidM = T.payouts.filter(p => p.period_start && new Date(p.period_start) >= new Date(mr.from.getTime() - 864e5) && new Date(p.period_start) < mr.to).reduce((a, p) => a + Number(p.total_egp), 0);
     const label = mr.from.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' });
     el.innerHTML = `
       <div class="chips">${[0, -1, -2].map(k => `<button class="chip ${T.month === k ? 'active' : ''}" onclick="tutorMonth(${k})">${tMonthRange(k).from.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' })}</button>`).join('')}</div>
       <div class="kpis">
-        <div class="card kpi"><div class="l">حصص ${label}</div><div class="v num">${fmtU(mins / 60)}</div><div class="s">${durLabel(mins)} · الساعة = حصة</div></div>
-        <div class="card kpi"><div class="l">مستحقك عن الشهر</div><div class="v num">${fmt(total)}</div><div class="s">جنيه</div></div>
+        <div class="card kpi"><div class="l">حصص ${label} المؤكدة</div><div class="v num">${fmtU(mins / 60)}</div><div class="s">${durLabel(mins)} · الساعة = حصة${pMins ? `<br><span class="warn-txt">⏳ + ${fmtU(pMins / 60)} مستنية تأكيد الإشراف</span>` : ''}</div></div>
+        <div class="card kpi"><div class="l">مستحقك عن الشهر</div><div class="v num">${fmt(total)}</div><div class="s">جنيه${pAmt ? `<br><span class="warn-txt">⏳ + حوالي ${fmt(pAmt)} ج أول ما تتأكد</span>` : ''}</div></div>
         <div class="card kpi"><div class="l">اتحوّل عن الشهر</div><div class="v num ${paidM >= total && total ? 'pos' : ''}">${fmt(paidM)}</div><div class="s">${total - paidM > 0.5 ? `باقي ${fmt(total - paidM)} ج` : paidM - total > 0.5 ? `💚 منهم ${fmt(paidM - total)} ج مقدّم للحصص الجاية` : total ? 'اتحوّل بالكامل ✅' : '—'}</div></div>
       </div>
       <div class="section-title"><h2>حصصك لكل طالب</h2></div>
       <div class="card scrollx"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>المستحق</th></tr></thead><tbody>
-        ${list.map(x => `<tr><td><b>${esc(x.who)}</b></td><td class="num"><b>${fmtU(x.mins / 60)}</b><div class="sub small">${durLabel(x.mins)}</div></td><td class="small">${esc([...x.subj].join('، '))}</td><td class="num">${fmt(x.amt, 2)} ج</td></tr>`).join('')
+        ${list.map(x => `<tr><td><b>${esc(x.who)}</b></td><td class="num"><b>${fmtU(x.mins / 60)}</b><div class="sub small">${durLabel(x.mins)}</div>${x.pmins ? `<div class="small warn-txt">⏳ + ${fmtU(x.pmins / 60)} مستنية تأكيد</div>` : ''}</td><td class="small">${esc([...x.subj].join('، '))}</td><td class="num">${fmt(x.amt, 2)} ج${x.pamt ? `<div class="small warn-txt">+ ≈ ${fmt(x.pamt)}</div>` : ''}</td></tr>`).join('')
           || '<tr><td colspan="4" class="empty">لسه مفيش حصص متسجلة في الشهر ده</td></tr>'}
       </tbody></table></div>
-      <p class="sub small">الحصة بتتسجل هنا بعد ما الإشراف يأكدها. لو فيه حصة ناقصة أو مدة مختلفة بلّغي الإشراف قبل التحويل.</p>
+      <p class="sub small">✅ المؤكد = الإشراف سجّله "تمت" وبيتحسب في التحويل. ⏳ مستني تأكيد = حصص عدّت (بالمدة اللي في تقريرك) والإشراف هيأكدها — مش هتضيع. لو فيه حصة ناقصة خالص بلّغي الإشراف أو اطلبي "حصة إضافية".</p>
       <div class="section-title"><h2>التحويلات</h2></div>
       <div class="card item">${T.payouts.slice(0, 8).map(p => `<div class="item-head" style="padding:4px 0"><span>${fmtShortDate(p.paid_at)} · ${esc(p.method || '')}<div class="sub small">${esc(p.note || '')}</div></span><b class="num">${fmt(p.total_egp, 2)} ج</b></div>`).join('') || '<div class="sub small">لا توجد تحويلات بعد</div>'}
         <p class="sub small" style="margin:8px 0 0">بيتحوّل على: ${T.me.pay ? `<b>${esc(T.me.pay)}</b>` : '<b>لسه مش متسجل</b>'}</p>
