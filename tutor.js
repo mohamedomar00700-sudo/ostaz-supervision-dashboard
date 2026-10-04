@@ -277,6 +277,7 @@ function tutorRequest(sessionId, studentId, subject, preset) {
         <div class="field"><label>الساعة (بتوقيت القاهرة)</label><input id="rq-time" type="time" class="input" value="${esc(rq.time || t0)}" onchange="_rq.time=this.value"></div></div>
         <div class="field"><label>المدة</label><div class="chips" style="margin:0">${[30, 45, 60, 90, 120, 150, 180, 240].map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>
         ${hmHtml('rq_hm', rq.mins)}
+        <div class="sub small mb">💡 لو الحصة اتعملت خلاص ومتسجلتش على البوابة، اختاري تاريخها وساعتها اللي فاتوا (لحد أسبوعين).</div>
         <div class="field"><label>الحصة دي</label><div class="seg-wrap"><button type="button" class="chip ${rq.scope === 'once' ? 'active' : ''}" onclick="_rq.scope='once'; _rqRender()">مرة واحدة (زيادة / تعويض)</button>
           <button type="button" class="chip ${rq.scope === 'permanent' ? 'active' : ''}" onclick="_rq.scope='permanent'; _rqRender()">🔁 ميعاد ثابت كل أسبوع</button></div></div>` : ''}
       ${rq.kind === 'extend' ? `<div class="field"><label>المدة الفعلية للحصة</label><div class="chips" style="margin:0">${[15, 30, 45, 60, 90].map(x => (s.duration_minutes || 60) + x).map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>${hmHtml('rq_hm', rq.mins)}` : ''}
@@ -296,7 +297,8 @@ function tutorRequest(sessionId, studentId, subject, preset) {
     if (rq.kind === 'add_session') {
       const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`);
       if (isNaN(d)) return formError('اختاري اليوم والساعة');
-      if (d.getTime() < Date.now() - 864e5) return formError('المعاد ده فات');
+      if (rq.scope === 'permanent' && d.getTime() < Date.now() - 864e5) return formError('الميعاد الثابت لازم يبدأ من النهارده أو بعد كده');
+      if (d.getTime() < Date.now() - 14 * 864e5) return formError('الحصة دي قديمة أوي — ابعتي تفاصيلها للإشراف على الجروب');
       const { error } = await sb.rpc('tutor_request_add_session', { p_student: studentId, p_subject: subject || null, p_at: d.toISOString(), p_minutes: rq.mins, p_weekly: rq.scope === 'permanent', p_reason: rq.reason });
       if (error) throw error;
       at = d.toISOString();

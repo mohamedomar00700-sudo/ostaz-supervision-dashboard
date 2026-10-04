@@ -3501,7 +3501,7 @@ async function approveTutorRequest(id) {
       return openSessionForm(null, { student_id: r.student_id, tutor_id: r.tutor_id, subject: r.new_value || pl?.subject, plan_id: pl?.id, at: r.proposed_at,
         duration: r.proposed_minutes, repeat: r.scope === 'permanent' ? 8 : 1, notes: `بطلب ${tu?.name || 'المعلمة'}${r.reason ? ': ' + r.reason : ''}`,
         title: `➕ موافقة على طلب ${tu?.name || 'المعلمة'}`, notify: true,
-        intro: `<div class="card item mb" style="background:var(--warn-soft)">راجع المعاد والسعر${r.scope === 'permanent' ? ' وعدد الأسابيع' : ''} قبل الإضافة — الحصة هتتعمل والمعلمة هيوصلها إشعار بالموافقة.${r.reason ? `<div class="small mt">📝 ${esc(r.reason)}</div>` : ''}</div>`,
+        intro: `<div class="card item mb" style="background:var(--warn-soft)">${new Date(r.proposed_at) < new Date() ? '<b>⚠️ الحصة دي معادها فات — المعلمة بتقول إنها اتعملت ومتسجلتش. بعد الإضافة سجّلها "تمت".</b><br>' : ''}راجع المعاد والسعر${r.scope === 'permanent' ? ' وعدد الأسابيع' : ''} قبل الإضافة — الحصة هتتعمل والمعلمة هيوصلها إشعار بالموافقة.${r.reason ? `<div class="small mt">📝 ${esc(r.reason)}</div>` : ''}</div>`,
         onDone: () => decideRequest(r, 'approved') });
     }
     if (r.kind === 'payment_info') {
