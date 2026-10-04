@@ -244,32 +244,76 @@ Deno.serve(async (req) => {
     }
   }
 
-  // تذكير تاني للمعلمة لو لسه ماكتبتش التقرير بعد الحصة بساعتين
+  // تذكير المعلمة بالتقرير لحد ما تكتبه: بعد الحصة بنص ساعة، وساعتين، و6 ساعات، وكل يوم 10 الصبح (آخر 3 أيام)
+  // + لو عدّى 24 ساعة من غير تقرير بيتبعت تنبيه للإشراف. مفيش تذكيرات بالليل (11م لـ 8ص بتوقيت القاهرة).
   const nagReport: any[] = [];
   {
     const n0 = Date.now();
-    const { data: linkedT } = await admin.from('tutors').select('id,user_id').not('user_id', 'is', null);
+    const cp = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(n0)).map((x) => [x.type, x.value]));
+    const cH = Number(cp.hour) % 24, cM = Number(cp.minute), cDay = `${cp.year}-${cp.month}-${cp.day}`;
+    const quiet = cH >= 23 || cH < 8;
+    const { data: linkedT } = await admin.from('tutors').select('id,name,user_id').not('user_id', 'is', null);
     const lIds = (linkedT || []).map((t: any) => t.id);
-    const { data: cand } = lIds.length ? await admin.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,subject,student_id,tutor_id,group_key,group_name,status')
-      .in('tutor_id', lIds).in('status', ['scheduled', 'in_progress', 'done']).gte('scheduled_at', new Date(n0 - 14 * 3600e3).toISOString()).lte('scheduled_at', new Date(n0 - 2 * 3600e3).toISOString()) : { data: [] as any[] };
+    const { data: cand } = lIds.length ? await admin.from('sessions').select('id,scheduled_at,duration_minutes,subject,student_id,tutor_id,group_key,group_name,status')
+      .in('tutor_id', lIds).in('status', ['scheduled', 'in_progress', 'done']).gte('scheduled_at', new Date(n0 - 3 * 864e5).toISOString()).lte('scheduled_at', new Date(n0 - 20 * 60e3).toISOString()).order('scheduled_at') : { data: [] as any[] };
+    const ids = (cand || []).map((x: any) => x.id), gks = [...new Set((cand || []).map((x: any) => x.group_key).filter(Boolean))];
+    const [{ data: r1 }, { data: r2 }] = await Promise.all([
+      ids.length ? admin.from('session_reports').select('session_id,group_key').in('session_id', ids) : Promise.resolve({ data: [] as any[] }),
+      gks.length ? admin.from('session_reports').select('session_id,group_key').in('group_key', gks) : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const reps = [...(r1 || []), ...(r2 || [])];
     const seen = new Set<string>();
-    for (const s of cand || []) {
-      const key = s.group_key || s.id; if (seen.has(key)) continue; seen.add(key);
+    const missing = (cand || []).filter((s: any) => {
+      const k = s.group_key || s.id; if (seen.has(k)) return false; seen.add(k);
       const endT = new Date(s.scheduled_at).getTime() + Number(s.duration_minutes || 60) * 60e3;
-      if (!(n0 >= endT + 2 * 3600e3 && n0 < endT + 2 * 3600e3 + 10 * 60e3)) continue;
-      const { data: hasRep } = s.group_key ? await admin.from('session_reports').select('id').eq('group_key', s.group_key).limit(1) : await admin.from('session_reports').select('id').eq('session_id', s.id).limit(1);
-      if (hasRep?.length) continue;
-      const { data: cl } = await admin.from('session_alert_log').upsert([{ session_id: s.id, kind: `repnag@${new Date(s.scheduled_at).getTime()}` }], { onConflict: 'session_id,kind', ignoreDuplicates: true }).select();
-      if (!cl?.length) continue;
-      const tu: any = (linkedT || []).find((t: any) => t.id === s.tutor_id);
-      const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
-      if (!tsubs?.length) continue;
-      const { data: stu } = s.group_key ? { data: null } : await admin.from('students').select('name').eq('id', s.student_id).maybeSingle();
-      nagReport.push(await pushToSubs(tsubs as Sub[], {
-        title: `⏰ لسه تقرير حصة ${s.group_key ? '👥 ' + (s.group_name || 'المجموعة') : (stu as any)?.name || 'الطالب'} مااتكتبش`,
-        body: `${s.subject ? s.subject + ' · ' : ''}${dayTime(s.scheduled_at)}\nاكتبيه دلوقتي عشان يوصل لولي الأمر النهارده 🙏`,
-        tag: `t:${s.id}:repnag`, url: `./?rep=${s.id}`, requireInteraction: true,
-      }, vapid));
+      return n0 >= endT && !reps.some((r: any) => r.session_id === s.id || (s.group_key && r.group_key === s.group_key));
+    });
+    const stIds = [...new Set(missing.map((s: any) => s.student_id))];
+    const { data: sts } = stIds.length ? await admin.from('students').select('id,name').in('id', stIds) : { data: [] as any[] };
+    const who = (s: any) => s.group_key ? `👥 ${s.group_name || 'المجموعة'}` : (sts?.find((x: any) => x.id === s.student_id)?.name || 'الطالب');
+    const claim = async (sid: string, kind: string) => { const { data } = await admin.from('session_alert_log').upsert([{ session_id: sid, kind }], { onConflict: 'session_id,kind', ignoreDuplicates: true }).select(); return !!data?.length; };
+    const subsOf = async (uid: string) => (await admin.from('push_subscriptions').select('*').eq('user_id', uid)).data || [];
+    // 1) تذكيرات متدرجة لكل حصة
+    const steps: [string, number, string][] = [['30m', 30, '📝 متنسيش تقرير حصة'], ['2h', 120, '⏰ لسه تقرير حصة'], ['6h', 360, '⏰ لسه تقرير حصة']];
+    for (const s of missing) {
+      const t = new Date(s.scheduled_at).getTime(), endT = t + Number(s.duration_minutes || 60) * 60e3;
+      const tu: any = (linkedT || []).find((x: any) => x.id === s.tutor_id); if (!tu) continue;
+      for (const [k, off, title] of steps) {
+        if (quiet || n0 < endT + off * 60e3 || n0 >= endT + off * 60e3 + 10 * 60e3) continue;
+        if (!(await claim(s.id, `repnag${k}@${t}`))) continue;
+        const subs = await subsOf(tu.user_id); if (!subs.length) continue;
+        nagReport.push(await pushToSubs(subs as Sub[], {
+          title: k === '30m' ? `${title} ${who(s)}` : `${title} ${who(s)} مااتكتبش`,
+          body: `${s.subject ? s.subject + ' · ' : ''}${dayTime(s.scheduled_at)}\nدقيقة واحدة وتوصل للإشراف ولولي الأمر 🙏`,
+          tag: `t:${s.id}:repnag`, url: `./?rep=${s.id}`, requireInteraction: true,
+        }, vapid));
+      }
+      // 2) بعد 24 ساعة من غير تقرير → تنبيه للإشراف
+      if (!quiet && n0 >= endT + 24 * 3600e3 && n0 < endT + 26 * 3600e3 && (await claim(s.id, `repesc@${t}`))) {
+        const { data: sups } = await admin.from('supervisors').select('id').eq('active', true);
+        const sIds2 = (sups || []).map((x: any) => x.id);
+        const { data: ssubs } = sIds2.length ? await admin.from('push_subscriptions').select('*').in('user_id', sIds2) : { data: [] };
+        nagReport.push(await pushToSubs((ssubs || []) as Sub[], {
+          title: `⚠️ ${tu.name} لسه ماكتبتش تقرير حصة ${who(s)}`,
+          body: `${s.subject ? s.subject + ' · ' : ''}${dayTime(s.scheduled_at)} — عدّى عليها يوم. كلّمها أو ابعتلها تذكير من اللوحة.`,
+          tag: `esc:${s.id}`, url: './?missing=1', requireInteraction: false,
+        }, vapid));
+      }
+    }
+    // 3) ملخص الصبح 10:00 لكل معلمة عندها تقارير ناقصة
+    if (cH === 10 && cM < 10) {
+      const byT: Record<string, any[]> = {};
+      for (const s of missing) (byT[s.tutor_id] ||= []).push(s);
+      for (const [tid, list] of Object.entries(byT)) {
+        const tu: any = (linkedT || []).find((x: any) => x.id === tid); if (!tu) continue;
+        if (!(await claim(list[0].id, `repday@${cDay}`))) continue;
+        const subs = await subsOf(tu.user_id); if (!subs.length) continue;
+        nagReport.push(await pushToSubs(subs as Sub[], {
+          title: list.length === 1 ? `📝 صباح الخير — فاضل تقرير حصة ${who(list[0])}` : `📝 صباح الخير — فاضل ${list.length} تقارير حصص`,
+          body: list.slice(0, 5).map((s: any) => `• ${who(s)} — ${dayTime(s.scheduled_at)}`).join('\n') + '\nافتحي البوابة واكتبيهم 🙏',
+          tag: `t:repday:${tid}`, url: list.length === 1 ? `./?rep=${list[0].id}` : './', requireInteraction: true,
+        }, vapid));
+      }
     }
   }
 

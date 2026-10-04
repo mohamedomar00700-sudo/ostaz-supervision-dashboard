@@ -3767,6 +3767,7 @@ async function enterApp() {
   const openReq = new URLSearchParams(location.search).get('req');
   if (openReq) setTimeout(() => openTutorRequests(), 1500);
   if (new URLSearchParams(location.search).get('reports')) setTimeout(() => openReports(), 1500);
+  if (new URLSearchParams(location.search).get('missing')) setTimeout(() => openMissingReports(), 1500);
   const qDay = new URLSearchParams(location.search).get('day');
   if (qDay && /^\d{4}-\d{2}-\d{2}$/.test(qDay)) state.day = qDay;
   // مسح بقايا رابط جوجل (?code=… / #…) من شريط العنوان

@@ -79,6 +79,7 @@ async function tutorRefresh() {
     try { const rr = await sb.rpc('tutor_reports_mine', { p_from: new Date(from.getTime() - 40 * 864e5).toISOString(), p_to: to.toISOString() }); T.reports = rr.data || []; } catch (e) { T.reports = []; }
     tutorRender();
     tutorReportPrompt();
+    tutorBadge();
   } catch (e) { showToast(dbError(e), true); }
 }
 function tutorTab(t) { T.tab = t; document.querySelectorAll('#tutor-tabs .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t)); tutorRender(); }
@@ -137,6 +138,7 @@ function tutorRender() {
         <div class="card stat"><div class="v num">${fmtU(todayList.filter(s => s.status === 'done').reduce((a, s) => a + tDur(s), 0) / 60)}</div><div class="l">اتسجلت تمت</div></div>
         <div class="card stat"><div class="v" style="font-size:17px">${next ? tTime(next.scheduled_at) : '—'}</div><div class="l">${next ? 'الحصة الجاية: ' + esc(next.group_key ? next.group_name || 'مجموعة' : next.student_name) : 'مفيش حصص جاية'}</div></div>
       </div>
+      ${T.pushOff ? `<div class="card item" style="border-color:var(--danger)"><b>🔕 الإشعارات مقفولة على الموبايل ده</b><div class="sub small">فعّليها عشان يوصلك تذكير قبل كل حصة وتذكير بتقرير الحصة.</div><button class="btn btn-brand sm mt" onclick="tutorAlertsPanel()">🔔 فعّلي الإشعارات</button></div>` : ''}
       ${needRep.length ? `<div class="card item rep-nudge"><b>📝 ${needRep.length === 1 ? 'فيه حصة محتاجة تقرير' : `فيه ${needRep.length} حصص محتاجة تقرير`}</b>
         <div class="sub small">اكتبي تقرير قصير بعد كل حصة (المدة واللي اتشرح والواجب) — الإشراف بيبعته لولي الأمر، وكده حسابك بيتأكد أول بأول.</div>
         ${needRep.filter(s => !occ.some(o => o.id === s.id)).map(s => `<div class="item-head mt" style="gap:8px"><span>${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)} <span class="sub small">${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</span></span>${tRepBtn(s)}</div>`).join('')}</div>` : ''}
@@ -452,4 +454,15 @@ function tShowReportPrompt() {
     <div class="list">${need.map(s => `<div class="card item"><div class="item-head" style="gap:8px"><span><b>${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)}</b> <span class="sub small">${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</span></span>
       <button class="btn btn-brand sm" onclick="tutorReport(${jsq(s.id)})">📝 اكتبي التقرير</button></div></div>`).join('')}</div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">بعدين</button></div>`);
+}
+
+// عدد التقارير الناقصة على أيقونة التطبيق + عنوان الصفحة، وتنبيه لو الإشعارات مقفولة
+async function tutorBadge() {
+  if (T.preview) return;
+  const n = tNeedReports().length;
+  try { if (n && navigator.setAppBadge) await navigator.setAppBadge(n); else if (navigator.clearAppBadge) await navigator.clearAppBadge(); } catch (e) {}
+  document.title = (n ? `(${n}) ` : '') + 'بوابة المعلمات — أستاذ أونلاين';
+  let off = false;
+  try { off = typeof Notification === 'undefined' || Notification.permission !== 'granted' || !(await currentPushSub()); } catch (e) { off = true; }
+  if (off !== !!T.pushOff) { T.pushOff = off; if (T.tab === 'today') tutorRender(); }
 }
