@@ -1338,14 +1338,24 @@ function openPaymentForm(familyId) {
     const np = document.getElementById('wrap_newpkg'); if (np) { np.classList.toggle('hidden', f?.billing_cycle !== 'prepaid'); const nn = document.getElementById('f_newpkg_n'); if (nn && !nn.value && f?.package_size) nn.value = f.package_size; }
     document.getElementById('hint_amount').textContent = cur ? `بالـ ${cur} — ده اللي بيتخصم من مستحقات الأسرة` : 'بعملة الأسرة';
     const egpFam = cur === 'EGP';
-    document.getElementById('wrap_received_egp').classList.toggle('hidden', egpFam || !isAdmin);
+    const egpPay = $('method').value === 'استلام بالجنيه المصري';
+    document.getElementById('wrap_received_egp').classList.toggle('hidden', egpFam || (!isAdmin && !egpPay));
+    // استلام بالمصري: اكتب الجنيه واحنا نحسب المقابل بعملة الأسرة (لو المبلغ ماتكتبش يدوي)
+    if (egpPay && !egpFam && document.activeElement === $('received_egp') && fxRate(cur)) {
+      const g = Number($('received_egp').value) || 0;
+      let a = g ? Math.round(g / (Math.round(fxRate(cur) * 100) / 100) * 100) / 100 : 0;
+      const due = -famBalance(f).balance; // لو دفعوا مقابل الفاتورة بالظبط (فرق تقريب الجنيه) → نسجّل المستحق بالظبط
+      if (a && due > 0 && Math.abs(a - due) <= Math.max(0.5, due * 0.01)) a = Math.round(due * 100) / 100;
+      $('amount').value = a || '';
+    }
     const amt = Number($('amount').value) || 0, got = Number($('received_egp').value) || 0, mr = fxRate(cur);
     let h = cur && !egpFam ? `بسعر السوق النهارده ≈ ${fmt(amt * mr, 2)} ج (1 ${cur} = ${fmt(mr, 4)} ج).` : '';
     if (got && amt && !egpFam) {
       const eff = got / amt, diff = got - amt * mr;
       h += ` السعر الفعلي اللي وصلك: ${fmt(eff, 4)} ج — ${diff >= 0 ? 'مكسب' : 'خسارة'} فرق عملة ${fmt(Math.abs(diff), 2)} ج.`;
     }
-    if (!egpFam) h += ' لو مش عارفه دلوقتي سيبه فاضي وعدّله بعدين.';
+    if (egpPay && !egpFam) h = `اكتب الجنيهات اللي وصلت، والمقابل بالـ ${cur} هيتحسب لوحده فوق (بسعر ${fmt(mr, 2)}). لو دفعوا مقابل الفاتورة، هيتسجل المستحق بالظبط من غير كسور.`;
+    else if (!egpFam) h += ' لو مش عارفه دلوقتي سيبه فاضي وعدّله بعدين.';
     document.getElementById('hint_received_egp').textContent = h;
     document.querySelector('#wrap_received_egp label').textContent = $('method').value === 'استلام بالجنيه المصري'
       ? 'المبلغ اللي استلمته بالجنيه *' : 'المبلغ اللي وصلك فعلاً بالجنيه';
@@ -1425,6 +1435,15 @@ function tutorStudentSummary(ss) {
 const fmtU = u => { u = Math.round(u * 100) / 100; return Number.isInteger(u) ? String(u) : fmt(u, 2).replace(/0$/, ''); };
 const nSess = n => { n = Math.round(n * 100) / 100; return n === 1 ? 'حصة واحدة' : n === 2 ? 'حصتين' : n === 0.5 ? 'نص حصة' : `${fmtU(n)} ${Number.isInteger(n) && n >= 3 && n <= 10 ? 'حصص' : 'حصة'}`; };
 const unitsOf = rows => rows.reduce((a, s) => a + sMins(s), 0) / 60;
+const _invRate = {};
+async function toggleInvoiceEgp(familyId, which, detailed) {
+  const f = byId(state.families, familyId);
+  try {
+    await q(sb.from('families').update({ invoice_egp: !f.invoice_egp }).eq('id', familyId));
+    f.invoice_egp = !f.invoice_egp;
+    openFamilyInvoice(familyId, which, detailed);
+  } catch (e) { showToast(dbError(e), true); }
+}
 async function openFamilyInvoice(familyId, which = null, detailed = false) {
   const f = byId(state.families, familyId);
   const cycle = f.billing_cycle || 'monthly';
@@ -1446,6 +1465,12 @@ async function openFamilyInvoice(familyId, which = null, detailed = false) {
     const prev = paidOf(txBefore) - sum(ssBefore);          // رصيد قبل الفترة (+ لصالحهم / − عليهم)
     const bal = prev + paid - total;                         // الرصيد في نهاية الفترة
     const cur = f.currency;
+    // المقابل بالجنيه: بسعر السوق النهارده (قابل للتعديل)، والمبلغ بيتقرّب لأعلى جنيه
+    const showEgp = cur !== 'EGP' && !!f.invoice_egp;
+    const rate = showEgp ? (Number(_invRate[familyId]) || Math.round(fxRate(cur) * 100) / 100) : 0;
+    const egpOf = v => Math.ceil(v * rate);
+    const egpLine = showEgp && bal < 0 && rate > 0
+      ? `\nبالجنيه المصري: *${fmt(egpOf(-bal), 0)} ج.م*\n(سعر الصرف: 1 ${cur} = ${fmt(rate, 2)} ج — بتاريخ ${new Date().toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', year: 'numeric' })})` : '';
     const lines = detailed
       ? ss.map(s => { const v = sessionView(s);
           return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ` (${kindWord(s)})`}${s.group_key ? ' 👥' : ''} — ${durLabel(sMins(s))} = ${s.kind === 'trial' ? 'مجانية 🎁' : `${fmt(charges(s).fam, 2)} ${cur}`}`; }).join('\n')
@@ -1460,7 +1485,7 @@ ${lines || '— لا توجد حصص منفذة في الفترة —'}
 
 عدد الحصص: ${fmtU(unitsOf(ss))} (الساعة = حصة) · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
 إجمالي الحصص: *${fmt(total, 2)} ${cur}*${Math.abs(prev) >= 0.01 ? `\n${prev < 0 ? 'متأخرات سابقة' : 'رصيد سابق لصالحكم'}: ${fmt(Math.abs(prev), 2)} ${cur}` : ''}${paid ? `\nالمدفوع في الفترة: ${fmt(paid, 2)} ${cur}` : ''}
-${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}
+${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*${egpLine}` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}
 
 ${closing}
 ${SIGN_F}`;
@@ -1473,6 +1498,10 @@ ${SIGN_F}`;
         ${state.fin ? chip('fin', '📊 ' + finPeriod().label + ' (من المالية)') : ''}</div>
       <div class="chips"><button class="chip ${!detailed ? 'active' : ''}" onclick="openFamilyInvoice(${F}, ${W}, false)">ملخص لكل طالب</button>
         <button class="chip ${detailed ? 'active' : ''}" onclick="openFamilyInvoice(${F}, ${W}, true)">بالتفصيل حصة حصة</button></div>
+      ${cur !== 'EGP' ? `<div class="chips"><button class="chip ${showEgp ? 'active' : ''}" onclick="toggleInvoiceEgp(${F}, ${W}, ${detailed})">💱 ${showEgp ? 'المقابل بالمصري ظاهر' : 'اكتب المقابل بالجنيه المصري'}</button>
+        ${showEgp ? `<span class="sub small" style="align-self:center">سعر ${cur}:</span><input class="input" type="number" step="0.01" style="width:90px" value="${rate}"
+          onchange="_invRate[${F}]=Number(this.value)||0; openFamilyInvoice(${F}, ${W}, ${detailed})">
+          <span class="sub small" style="align-self:center">(سعر السوق النهارده ${fmt(fxRate(cur), 2)})</span>` : ''}</div>` : ''}
       <div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}
       ${Math.abs(nowBal - bal) >= 0.01 ? `<p class="sub small mt">ℹ️ الفاتورة محسوبة لحد آخر ${p.label}. رصيد الأسرة النهارده: ${nowBal < 0 ? 'عليها' : 'لها'} ${fmt(Math.abs(nowBal), 2)} ${cur} (فيه حصص أو دفعات بعد الفترة).</p>` : ''}`);
   } catch (e) { showToast(dbError(e), true); }
