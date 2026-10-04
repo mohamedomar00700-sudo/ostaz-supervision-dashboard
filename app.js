@@ -1669,8 +1669,8 @@ function openTutorForm(id) {
     let tutorId = t?.id;
     if (t) await q(sb.from('tutors').update(row).eq('id', t.id));
     if (t && row.meeting_link && row.meeting_link !== t.meeting_link) { // اللينك الجديد يتطبق على الطلاب والحصص الجاية اللي ماخدتش لينك خاص
-      await q(sb.from('student_subjects').update({ meeting_link: row.meeting_link }).eq('tutor_id', t.id).or(`meeting_link.is.null${t.meeting_link ? `,meeting_link.eq.${t.meeting_link}` : ''}`));
-      await q(sb.from('sessions').update({ meeting_link: row.meeting_link }).eq('tutor_id', t.id).eq('status', 'scheduled').gte('scheduled_at', new Date().toISOString()).or(`meeting_link.is.null${t.meeting_link ? `,meeting_link.eq.${t.meeting_link}` : ''}`));
+      await q(sb.from('student_subjects').update({ meeting_link: row.meeting_link }).eq('tutor_id', t.id).or(`meeting_link.is.null${t.meeting_link ? `,meeting_link.eq."${t.meeting_link}"` : ''}`));
+      await q(sb.from('sessions').update({ meeting_link: row.meeting_link }).eq('tutor_id', t.id).eq('status', 'scheduled').gte('scheduled_at', new Date().toISOString()).or(`meeting_link.is.null${t.meeting_link ? `,meeting_link.eq."${t.meeting_link}"` : ''}`));
     }
     else { const [nt] = await q(sb.from('tutors').insert(row).select()); tutorId = nt.id; }
     const seen = new Set();
