@@ -175,7 +175,7 @@ function tutorRender() {
       <div class="kpis">
         <div class="card kpi"><div class="l">حصص ${label}</div><div class="v num">${fmtU(mins / 60)}</div><div class="s">${durLabel(mins)} · الساعة = حصة</div></div>
         <div class="card kpi"><div class="l">مستحقك عن الشهر</div><div class="v num">${fmt(total)}</div><div class="s">جنيه</div></div>
-        <div class="card kpi"><div class="l">اتحوّل عن الشهر</div><div class="v num ${paidM >= total && total ? 'pos' : ''}">${fmt(paidM)}</div><div class="s">${total - paidM > 0.5 ? `باقي ${fmt(total - paidM)} ج` : total ? 'اتحوّل بالكامل ✅' : '—'}</div></div>
+        <div class="card kpi"><div class="l">اتحوّل عن الشهر</div><div class="v num ${paidM >= total && total ? 'pos' : ''}">${fmt(paidM)}</div><div class="s">${total - paidM > 0.5 ? `باقي ${fmt(total - paidM)} ج` : paidM - total > 0.5 ? `💚 منهم ${fmt(paidM - total)} ج مقدّم للحصص الجاية` : total ? 'اتحوّل بالكامل ✅' : '—'}</div></div>
       </div>
       <div class="section-title"><h2>حصصك لكل طالب</h2></div>
       <div class="card scrollx"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>المستحق</th></tr></thead><tbody>

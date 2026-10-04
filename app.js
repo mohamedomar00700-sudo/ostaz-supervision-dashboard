@@ -1501,7 +1501,7 @@ ${lines || '— لا توجد حصص —'}
 
 إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
 إجمالي المستحق عن الفترة: *${fmt(earned, 2)} جنيه*${paid ? `\nتم تحويل: ${fmt(paid, 2)} جنيه` : ''}
-${b.due > 0 ? `المتبقي لكِ حالياً: *${fmt(b.due, 2)} جنيه*` : 'لا يوجد متبقي ✅'}
+${b.due > 0.01 ? `المتبقي لكِ حالياً: *${fmt(b.due, 2)} جنيه*` : b.due < -0.01 ? `💚 مدفوع لكِ مقدّم: *${fmt(-b.due, 2)} جنيه* — هيتخصم من الحصص الجاية` : 'لا يوجد متبقي ✅'}
 
 لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل.
 ${SIGN_T}`;
@@ -1548,8 +1548,8 @@ function renderTutors() {
           <div class="sub small" dir="ltr" style="text-align:right">${esc(t.phone || '')}</div>
         </div>
         <div style="text-align:left">
-          <div class="num ${b.due > 0 ? 'neg' : ''}" style="font-weight:800">${money(b.due, 'EGP')}</div>
-          <div class="sub small">مستحقات لم تُصرف</div>
+          <div class="num ${b.due > 0.01 ? 'neg' : b.due < -0.01 ? 'pos' : ''}" style="font-weight:800">${money(Math.abs(b.due), 'EGP')}</div>
+          <div class="sub small">${b.due < -0.01 ? 'مدفوع مقدّم (للحصص الجاية)' : 'مستحقات لم تُصرف'}</div>
         </div>
       </div>
       ${t.whatsapp_group || t.phone ? `<div class="actions" style="margin-top:8px">
@@ -1677,7 +1677,7 @@ function openPayoutForm(tutorId) {
   const b = tutBalance(t);
   const range = finRange();
   const fields = [
-    { name: 'total_egp', label: 'المبلغ المصروف (EGP)', type: 'number', required: true, value: b.due.toFixed(2), hint: `إجمالي المستحق حالياً: ${money(b.due, 'EGP')}` },
+    { name: 'total_egp', label: 'المبلغ المصروف (EGP)', type: 'number', required: true, value: Math.max(b.due, 0).toFixed(2), hint: b.due < -0.01 ? `ليها رصيد مقدّم ${money(-b.due, 'EGP')} — أي مبلغ هتصرفه هيزود المقدّم` : `إجمالي المستحق حالياً: ${money(b.due, 'EGP')}` },
     { name: 'method', label: 'طريقة الصرف', type: 'select', value: t.vodafone_cash ? 'فودافون كاش' : 'تحويل بنكي',
       options: ['فودافون كاش', 'InstaPay', 'تحويل بنكي', 'كاش'].map(x => ({ v: x, l: x })) },
     [{ name: 'period_start', label: 'عن الفترة من', type: 'date', value: range.from }, { name: 'period_end', label: 'إلى', type: 'date', value: range.toIncl }],
@@ -1756,7 +1756,7 @@ function renderFinance() {
   const paidPerTutor = {};
   payouts.filter(p => p.paid).forEach(p => paidPerTutor[p.tutor_id] = (paidPerTutor[p.tutor_id] || 0) + Number(p.total_egp));
   const tutorRows = state.tutors.map(t => ({ t, p: perTutor[t.id] || { n: 0, egp: 0, h: 0 }, paid: paidPerTutor[t.id] || 0, b: tutBalance(t) }))
-    .filter(x => x.p.n || x.b.due > 0 || x.paid).sort((a, b) => b.b.due - a.b.due);
+    .filter(x => x.p.n || Math.abs(x.b.due) > 0.01 || x.paid).sort((a, b) => b.b.due - a.b.due);
 
   // الأسر — حصص الفترة والمدفوع والرصيد
   const famPeriod = {};
@@ -1783,8 +1783,8 @@ function renderFinance() {
       ${tutorRows.map(x => `<tr><td>${esc(x.t.name)}${x.t.default_rate_egp == null ? '<div class="small neg">بدون أجر ساعة</div>' : ''}</td>
         <td class="num">${nSess(x.p.h || 0)}</td>
         <td class="num">${fmt(x.p.egp)}</td><td class="num">${x.paid ? fmt(x.paid) : '—'}</td>
-        <td class="num ${x.b.due > 0 ? 'neg' : ''}">${fmt(x.b.due)}</td>
-        <td class="row-gap">${x.b.due > 0 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${jsq(x.t.id)})">صرف</button>` : '<span class="pill ok">مصروف</span>'}
+        <td class="num ${x.b.due > 0.01 ? 'neg' : x.b.due < -0.01 ? 'pos' : ''}">${x.b.due < -0.01 ? `مقدّم ${fmt(-x.b.due)}<div class="sub small">للحصص الجاية</div>` : fmt(x.b.due)}</td>
+        <td class="row-gap">${x.b.due > 0.01 ? `<button class="btn btn-brand sm" onclick="openPayoutForm(${jsq(x.t.id)})">صرف</button>` : x.b.due < -0.01 ? '<span class="pill ok">مدفوع مقدّم</span>' : '<span class="pill ok">مصروف</span>'}
           <button class="btn btn-wa sm" onclick="openTutorPeriodMessage(${jsq(x.t.id)})">📲 كشف</button></td></tr>`).join('')
         || '<tr><td colspan="6" class="empty">لا توجد حصص أو مستحقات في الفترة</td></tr>'}
     </tbody></table></div>
@@ -2261,7 +2261,7 @@ async function openTutorStatementMessage(tutorId) {
 ${lines || '— لا توجد حصص مسجلة —'}
 
 إجمالي الوقت: ${durLabel(totalMins)}
-*المستحق: ${fmt(b.due, 2)} جنيه*${t.default_rate_egp != null ? ` (أجر الساعة ${fmt(t.default_rate_egp)} ج)` : ''}
+${b.due < -0.01 ? `💚 *مدفوع لكِ مقدّم: ${fmt(-b.due, 2)} جنيه* (للحصص الجاية)` : `*المستحق: ${fmt(b.due, 2)} جنيه*`}${t.default_rate_egp != null ? ` (أجر الساعة ${fmt(t.default_rate_egp)} ج)` : ''}
 
 لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل.
 ${SIGN_T}`;
