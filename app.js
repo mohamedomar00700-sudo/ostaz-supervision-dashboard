@@ -3475,7 +3475,7 @@ async function openReports() {
 /* ============================================================
    طلبات المعلمات (تأجيل / إلغاء / غياب / مدة / إيقاف طالب)
    ============================================================ */
-const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب', payment_info: '💳 تغيير رقم التحويل', add_session: '➕ حصة إضافية / تعويض' };
+const REQ_KIND = { reschedule: '🔁 تأجيل / تغيير المعاد', cancel: '✖ إلغاء الحصة', absent: '🚫 الطالب ماحضرش', extend: '⏱ الحصة اتمدت', remove_student: '⛔ إيقاف الطالب', other: '💬 طلب', payment_info: '💳 تغيير رقم التحويل', add_session: '➕ حصة إضافية / تعويض', swap_student: '👥 حضر أخ/أخت بدل الطالب' };
 async function openTutorRequests() {
   let list = [];
   try { list = await q(sb.from('tutor_requests').select('*').order('created_at', { ascending: false }).limit(40)); } catch (e) { return showToast(dbError(e), true); }
@@ -3496,6 +3496,7 @@ async function openTutorRequests() {
         ${s ? `<span>الحصة: <b>${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</b>${s.subject ? ' · ' + esc(s.subject) : ''}${isCancelled(s) ? ' <span class="neg">(ملغاة)</span>' : ''}</span>` : ''}
         ${r.proposed_at ? `<span>${r.kind === 'add_session' ? (r.scope === 'permanent' ? 'من' : 'المعاد') : 'المقترح'}: <b>${fmtShortDate(r.proposed_at)} ${timeStr(new Date(r.proposed_at))}</b> <span class="sub small">(القاهرة ${fmtTime(r.proposed_at, CAIRO_TZ)})</span></span>` : ''}
         ${r.proposed_minutes ? `<span>المدة: <b>${durLabel(r.proposed_minutes)}</b></span>` : ''}
+        ${r.kind === 'swap_student' ? `<span>اللي حضر فعلاً: <b class="pos">${esc(byId(state.students, r.new_value)?.name || '')}</b></span>` : ''}
         ${r.kind === 'reschedule' ? `<span>النوع: <b>${r.scope === 'permanent' ? '♾ تغيير دايم' : 'الحصة دي بس'}</b></span>` : ''}
         ${r.kind === 'add_session' ? `${r.new_value ? `<span>المادة: <b>${esc(r.new_value)}</b></span>` : ''}<span>النوع: <b>${r.scope === 'permanent' ? '🔁 ميعاد ثابت كل أسبوع' : 'مرة واحدة'}</b></span>` : ''}</div>`}
       ${r.reason && r.kind !== 'payment_info' ? `<div class="mt" style="white-space:pre-wrap">📝 ${esc(r.reason)}</div>` : ''}
@@ -3532,6 +3533,16 @@ async function approveTutorRequest(id) {
         title: `➕ موافقة على طلب ${tu?.name || 'المعلمة'}`, notify: true,
         intro: `<div class="card item mb" style="background:var(--warn-soft)">${new Date(r.proposed_at) < new Date() ? '<b>⚠️ الحصة دي معادها فات — المعلمة بتقول إنها اتعملت ومتسجلتش. بعد الإضافة سجّلها "تمت".</b><br>' : ''}راجع المعاد والسعر${r.scope === 'permanent' ? ' وعدد الأسابيع' : ''} قبل الإضافة — الحصة هتتعمل والمعلمة هيوصلها إشعار بالموافقة.${r.reason ? `<div class="small mt">📝 ${esc(r.reason)}</div>` : ''}</div>`,
         onDone: () => decideRequest(r, 'approved') });
+    }
+    if (r.kind === 'swap_student') {
+      const to = byId(state.students, r.new_value);
+      if (!s || !to) return showToast('الحصة أو الطالب مش موجودين', true);
+      if (to.family_id !== st?.family_id) return showToast('ده مش من نفس الأسرة', true);
+      const priceNote = Number(to.default_price) !== Number(st?.default_price) ? `\n\n⚠️ سعر ${to.name} (${to.default_price}) مختلف عن ${st?.name} (${st?.default_price}) — الحصة هتفضل بسعرها الحالي ${s.student_price}، عدّله من الحصة لو محتاج.` : '';
+      if (!confirm(`حصة ${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}${s.subject ? ' — ' + s.subject : ''}\nهتتحسب على ${to.name} بدل ${st?.name || ''}؟${priceNote}`)) return;
+      await q(sb.from('sessions').update({ student_id: to.id, notes: [s.notes, `حضر ${to.name} بدل ${st?.name || ''} (بطلب ${tu?.name || 'المعلمة'})`].filter(Boolean).join(' | ') }).eq('id', s.id));
+      await decideRequest(r, 'approved', `اتسجلت الحصة على ${to.name}`);
+      await refreshAll(); showToast(`اتسجلت على ${to.name} ✓ واتبلغت المعلمة`); return openTutorRequests();
     }
     if (r.kind === 'payment_info') {
       if (!confirm(`اعتماد رقم التحويل الجديد لـ ${tu?.name || 'المعلمة'}؟\n\nالقديم: ${r.old_value || '—'}\nالجديد: ${r.new_value}\n\nاتأكدت منها بنفسك؟`)) return;

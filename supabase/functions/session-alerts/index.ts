@@ -158,7 +158,7 @@ Deno.serve(async (req) => {
   if (body.action === 'tutor_request' || body.action === 'tutor_request_decided') {
     const { data: r } = await admin.from('tutor_requests').select('*, tutors(name,user_id), students(name), sessions(scheduled_at,subject,duration_minutes)').eq('id', body.id).maybeSingle();
     if (!r) return json({ error: 'not found' }, 404);
-    const KIND: Record<string, string> = { reschedule: 'تأجيل / تغيير معاد', cancel: 'إلغاء حصة', absent: 'الطالب ماحضرش', extend: 'الحصة اتمدت', remove_student: 'إيقاف طالب', other: 'طلب', payment_info: '💳 تغيير رقم التحويل', add_session: '➕ حصة إضافية' };
+    const KIND: Record<string, string> = { reschedule: 'تأجيل / تغيير معاد', cancel: 'إلغاء حصة', absent: 'الطالب ماحضرش', extend: 'الحصة اتمدت', remove_student: 'إيقاف طالب', other: 'طلب', payment_info: '💳 تغيير رقم التحويل', add_session: '➕ حصة إضافية', swap_student: '👥 حضر أخ/أخت بداله' };
     const when = r.sessions?.scheduled_at ? ` (${new Date(r.sessions.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' })} ${cairoTime(r.sessions.scheduled_at)})` : '';
     const to = r.proposed_at ? `\n➡️ المعاد المقترح: ${new Date(r.proposed_at).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' })} ${cairoTime(r.proposed_at)}` : r.proposed_minutes ? `\n⏱ المدة: ${r.proposed_minutes} دقيقة` : '';
     if (body.action === 'tutor_request') {

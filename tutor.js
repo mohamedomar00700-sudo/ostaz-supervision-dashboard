@@ -119,7 +119,7 @@ function tutorSessionCard(s, compact) {
         ${!tPendingFor(s) ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">✏️ طلب تغيير</button>` : ''}
         ${s.meeting_link ? `<a class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">🎥 دخول الحصة</a>`
           : `<button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(s.student_id)}, ${jsq(s.subject || null)}, '')">🔗 ضيفي لينك الحصة</button>`}
-      </div>` : !tCancelled(s) && tRepBtn(s) ? `<div class="actions">${tRepBtn(s)}</div>` : ''}
+      </div>` : !tCancelled(s) && s.status === 'done' ? `<div class="actions">${tRepBtn(s)}${!s.group_key && !tPendingFor(s) && Date.now() - new Date(s.scheduled_at) < 14 * 864e5 ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">👥 حضر أخ/أخت بداله؟</button>` : ''}</div>` : ''}
     </div></div>`;
 }
 
@@ -251,6 +251,7 @@ const T_REQ = {
   other: { l: 'طلب تاني', icon: '💬', need: 'reason' },
   payment_info: { l: 'تغيير رقم التحويل', icon: '💳' },
   add_session: { l: 'حصة إضافية / تعويض', icon: '➕' },
+  swap_student: { l: 'اللي حضر أخ/أخت تاني', icon: '👥' },
 };
 const T_REQ_ST = { pending: ['⏳ مستني الرد', 'b-pending'], approved: ['✅ اتوافق', 'b-done'], rejected: ['❌ اترفض', 'b-cancel'] };
 const tPendingFor = s => (T.requests || []).find(r => r.session_id === s.id && r.status === 'pending');
@@ -268,7 +269,8 @@ function tutorRequest(sessionId, studentId, subject, preset) {
   const s = sessionId ? T.week.find(x => x.id === sessionId) : null;
   const st = s ? { name: s.group_key ? s.group_name || 'المجموعة' : s.student_name } : (T.students.find(x => x.student_id === studentId) ? { name: T.students.find(x => x.student_id === studentId).student_name } : { name: '' });
   const started = s && Date.now() >= new Date(s.scheduled_at).getTime();
-  const kinds = s ? (started ? ['cancel', 'reschedule'] : ['reschedule', 'cancel']) : ['add_session', 'remove_student', 'other']; // الحضور والمدة بقوا في تقرير الحصة
+  const swap = s && !s.group_key ? ['swap_student'] : [];
+  const kinds = s ? (s.status === 'done' ? swap : (started ? ['cancel', 'reschedule'] : ['reschedule', 'cancel']).concat(swap)) : ['add_session', 'remove_student', 'other']; // الحضور والمدة بقوا في تقرير الحصة
   const lastOf = !s && (T.week || []).filter(x => x.student_id === studentId && (!subject || x.subject === subject)).sort((a, b) => b.scheduled_at < a.scheduled_at ? -1 : 1)[0];
   const rq = { kind: preset && kinds.includes(preset) ? preset : kinds[0], reason: '', scope: 'once', mins: s ? (s.duration_minutes || 60) + 30 : (lastOf?.duration_minutes || 60) };
   const d0 = s ? new Date(new Date(s.scheduled_at).getTime() + 864e5) : new Date(Date.now() + 864e5);
@@ -290,17 +292,26 @@ function tutorRequest(sessionId, studentId, subject, preset) {
         <div class="sub small mb">💡 لو الحصة اتعملت خلاص ومتسجلتش على البوابة، اختاري تاريخها وساعتها اللي فاتوا (لحد أسبوعين).</div>
         <div class="field"><label>الحصة دي</label><div class="seg-wrap"><button type="button" class="chip ${rq.scope === 'once' ? 'active' : ''}" onclick="_rq.scope='once'; _rqRender()">مرة واحدة (زيادة / تعويض)</button>
           <button type="button" class="chip ${rq.scope === 'permanent' ? 'active' : ''}" onclick="_rq.scope='permanent'; _rqRender()">🔁 ميعاد ثابت كل أسبوع</button></div></div>` : ''}
+      ${rq.kind === 'swap_student' ? `<div class="field"><label>مين اللي حضر الحصة فعلاً بدل ${esc(st.name)}؟</label>
+        <div class="seg-wrap">${rq.sibs == null ? '<span class="sub small">بيحمّل…</span>' : rq.sibs.length ? rq.sibs.map(x => `<button type="button" class="chip ${rq.swapTo === x.student_id ? 'active' : ''}" onclick="_rq.swapTo='${x.student_id}'; _rqRender()">${esc(x.name)}</button>`).join('') : '<span class="sub small">مالوش إخوات متسجلين عندنا — ابعتي للإشراف على الجروب</span>'}</div>
+        <div class="sub small mt">💡 الحصة هتتحسب على الأخ/الأخت اللي حضر بعد ما الإشراف يوافق. حسابك مش هيتغير.</div></div>` : ''}
       ${rq.kind === 'extend' ? `<div class="field"><label>المدة الفعلية للحصة</label><div class="chips" style="margin:0">${[15, 30, 45, 60, 90].map(x => (s.duration_minutes || 60) + x).map(m => `<button type="button" class="chip ${rq.mins === m ? 'active' : ''}" onclick="_rq.mins=${m}; _rqRender()">${durLabel(m)}</button>`).join('')}</div></div>${hmHtml('rq_hm', rq.mins)}` : ''}
       <div class="field"><label>${K.need ? 'السبب' : rq.kind === 'add_session' ? 'السبب (تعويض؟ امتحان؟) — اختياري' : 'ملاحظة (اختياري)'}</label><textarea id="rq-reason" class="input" placeholder="${rq.kind === 'add_session' ? 'مثال: تعويض حصة الأحد اللي اتلغت / الطالب عنده امتحان' : rq.kind === 'remove_student' ? 'مثال: الطالب مش ملتزم / مش مناسب لمستوايا' : rq.kind === 'cancel' ? 'مثال: ظرف طارئ' : 'اكتبي التفاصيل'}" oninput="_rq.reason=this.value">${esc(rq.reason)}</textarea></div>
       <div id="form-error" class="err hidden"></div>
       <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_rqSend()">إرسال للإشراف</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>
       <p class="sub small">الطلب بيروح للإشراف يوافق عليه، وبعدها التغيير بيتنفذ ويتبلغ لولي الأمر. ⚠️ أي تغيير مهم لازم كمان تبلّغي بيه الإشراف على الجروب.</p>`;
   };
+  if (swap.length && !T.preview) sb.rpc('tutor_siblings', { p_session: s.id }).then(({ data }) => { rq.sibs = data || []; if (document.getElementById('rq-reason')) window._rqRender(); });
   window._rqRender = () => { render(); hmWire('rq_hm', v => { rq.mins = v; document.querySelectorAll('#modal-body .chips .chip').forEach(c => c.classList.remove('active')); }); };
   openModal(sessionId ? 'طلب تغيير في الحصة' : rq.kind === 'add_session' ? '➕ طلب حصة إضافية' : 'طلب بخصوص الطالب', ''); window._rqRender();
   window._rqSend = () => runSubmit(async () => {
     const K = T_REQ[rq.kind];
     if (K.need && !rq.reason.trim()) return formError('اكتبي السبب عشان الإشراف يقدر يتصرف');
+    if (rq.kind === 'swap_student') {
+      if (!rq.swapTo) return formError('اختاري مين اللي حضر');
+      const { error } = await sb.rpc('tutor_request_swap', { p_session: s.id, p_student: rq.swapTo, p_reason: rq.reason });
+      if (error) throw /duplicate/.test(error.message || '') ? new Error('فيه طلب زي ده مستني رد الإشراف') : error;
+    }
     let at = null;
     if (rq.kind === 'add_session' && !(rq.mins >= 15 && rq.mins <= 240)) return formError('المدة لازم تكون بين ربع ساعة و4 ساعات');
     if (rq.kind === 'extend' && !(rq.mins >= 5 && rq.mins <= 720)) return formError('اكتبي المدة الفعلية صح');
@@ -313,11 +324,11 @@ function tutorRequest(sessionId, studentId, subject, preset) {
       if (error) throw error;
       at = d.toISOString();
     } else if (rq.kind === 'reschedule') { const d = new Date(`${document.getElementById('rq-date').value}T${document.getElementById('rq-time').value}`); if (isNaN(d)) return formError('اختاري المعاد الجديد'); at = d.toISOString(); }
-    const { error } = rq.kind === 'add_session' ? { error: null } : await sb.rpc('tutor_request_create', { p_kind: rq.kind, p_session: s?.id || null, p_student: s ? null : studentId, p_proposed_at: at, p_minutes: rq.kind === 'extend' ? rq.mins : null, p_reason: rq.reason, p_scope: rq.kind === 'reschedule' ? rq.scope : 'once' });
+    const { error } = rq.kind === 'add_session' || rq.kind === 'swap_student' ? { error: null } : await sb.rpc('tutor_request_create', { p_kind: rq.kind, p_session: s?.id || null, p_student: s ? null : studentId, p_proposed_at: at, p_minutes: rq.kind === 'extend' ? rq.mins : null, p_reason: rq.reason, p_scope: rq.kind === 'reschedule' ? rq.scope : 'once' });
     if (error) throw error;
     const text = `السلام عليكم 👋 — ${T.me.name}
 📨 طلب ${K.l}${rq.kind === 'reschedule' && rq.scope === 'permanent' ? ' (دايم)' : rq.kind === 'add_session' && rq.scope === 'permanent' ? ' (ميعاد ثابت كل أسبوع)' : ''}: ${st.name}${!s && subject ? ' — ' + subject : ''}${s ? `\n📅 الحصة: ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}${s.subject ? ' — ' + s.subject : ''}` : ''}${at ? `\n➡️ ${rq.kind === 'add_session' ? (rq.scope === 'permanent' ? 'من' : 'المعاد') : 'المعاد المقترح'}: ${relDayLabel(at, CAIRO_TZ)} الساعة ${tTime(at)}${rq.kind === 'add_session' ? ' — ' + durLabel(rq.mins) : ''}` : ''}${rq.kind === 'extend' ? `\n⏱ المدة الفعلية: ${durLabel(rq.mins)}` : ''}${rq.reason ? `\n📝 ${rq.reason}` : ''}
-(الطلب متسجل على بوابة المعلمات)`;
+${rq.kind === 'swap_student' ? `👥 اللي حضر فعلاً: ${(rq.sibs || []).find(x => x.student_id === rq.swapTo)?.name || ''}\n` : ''}(الطلب متسجل على بوابة المعلمات)`;
     window._rqText = text;
     openModal('✅ الطلب اتبعت للإشراف', `<p>الإشراف هيراجع الطلب، وهيوصلك إشعار بالرد.</p>
       <div class="card item" style="background:var(--warn-soft);border-color:var(--warn)"><b>⚠️ مهم:</b> بلّغي الإشراف كمان على الجروب عشان يتصرفوا بسرعة.</div>
