@@ -1203,6 +1203,8 @@ function openFamilyForm(id) {
      { name: 'currency', label: 'عملة الدفع', type: 'select', required: true, value: f?.currency || 'SAR',
        options: CURRENCIES.map(c => ({ v: c, l: c })) }],
     { name: 'billing_cycle', label: 'طريقة المحاسبة', type: 'select', value: f?.billing_cycle || 'monthly', options: Object.entries(CYCLES).map(([v, l]) => ({ v, l })) },
+    [{ name: 'cycle_start', label: 'بداية الباقة الحالية', type: 'date', value: f?.cycle_start || '', hint: 'للباقة بس — عدّ الحصص في التقرير بيبدأ من هنا' },
+     { name: 'package_size', label: 'عدد حصص الباقة', type: 'number', value: f?.package_size ?? '', hint: 'مثال: 16' }],
     { name: 'whatsapp_group', label: 'لينك جروب واتساب الأسرة', type: 'url', value: f?.whatsapp_group, placeholder: 'https://chat.whatsapp.com/…' },
     { name: 'whatsapp', label: 'رقم واتساب ولي الأمر', type: 'tel', value: f?.whatsapp, placeholder: '9665xxxxxxxx', hint: 'بكود الدولة — للاستخدام الداخلي فقط ولا يظهر للمعلم' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: f?.notes },
@@ -1218,7 +1220,7 @@ function openFamilyForm(id) {
     document.getElementById('f_currency').value = COUNTRIES[e.target.value].cur;
   });
   window._formSubmit = () => runSubmit(async () => {
-    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), billing_cycle: fv('billing_cycle'), notes: fv('notes') || null };
+    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), billing_cycle: fv('billing_cycle'), cycle_start: fv('cycle_start') || null, package_size: fnum('package_size') || null, notes: fv('notes') || null };
     if (!f && fv('st_name') && !fv('st_grade')) return formError('اكتب صف الطالب أو امسح اسمه');
     if (f) {
       await q(sb.from('families').update(row).eq('id', f.id));
@@ -1327,11 +1329,13 @@ function openPaymentForm(familyId) {
     { name: 'date', label: 'تاريخ الاستلام', type: 'date', value: todayStr() },
     { name: 'note', label: 'ملاحظة', placeholder: 'مثال: شهر أكتوبر — رقم الحوالة MTCN …' },
   ];
-  openModal('تسجيل دفعة', formHtml(fields, 'تسجيل'));
+  openModal('تسجيل دفعة', formHtml(fields, 'تسجيل', `<label class="radio mb hidden" id="wrap_newpkg"><input type="checkbox" id="f_newpkg"> دي باقة جديدة — ابدأ عدّ الحصص من أول حصة بعد النهارده
+    <span class="field-row" style="display:flex;gap:8px;align-items:center;margin-top:6px">عدد الحصص: <input id="f_newpkg_n" class="input" type="number" min="1" style="width:90px"></span></label>`));
   const $ = n => document.getElementById('f_' + n);
   const upd = () => {
     const f = byId(state.families, $('family_id').value);
     const cur = f?.currency || '';
+    const np = document.getElementById('wrap_newpkg'); if (np) { np.classList.toggle('hidden', f?.billing_cycle !== 'prepaid'); const nn = document.getElementById('f_newpkg_n'); if (nn && !nn.value && f?.package_size) nn.value = f.package_size; }
     document.getElementById('hint_amount').textContent = cur ? `بالـ ${cur} — ده اللي بيتخصم من مستحقات الأسرة` : 'بعملة الأسرة';
     const egpFam = cur === 'EGP';
     document.getElementById('wrap_received_egp').classList.toggle('hidden', egpFam || !isAdmin);
@@ -1357,6 +1361,8 @@ function openPaymentForm(familyId) {
     const d = fv('date') ? new Date(`${fv('date')}T12:00:00`) : new Date();
     await q(sb.from('family_transactions').insert({ family_id: f.id, amount, currency: f.currency, type: fv('type'), method: fv('method'),
       received_egp: got || null, note: fv('note') || null, created_at: d.toISOString() }));
+    if (f.billing_cycle === 'prepaid' && document.getElementById('f_newpkg')?.checked)
+      await q(sb.from('families').update({ cycle_start: fv('date') || todayStr(), package_size: Number(document.getElementById('f_newpkg_n').value) || f.package_size || null }).eq('id', f.id));
     closeModal(); showToast('تم تسجيل الدفعة ✓'); await refreshAll();
   });
 }
@@ -3306,7 +3312,15 @@ async function repSessionRows(r) {
   }
   return rows;
 }
-function reportFamilyText(r, s, st, fam, absent) {
+function seqLine(q) {
+  if (!q || !q.seq) return '';
+  const month = new Date(q.cycle_start + 'T12:00:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' });
+  const units = q.total_minutes / 60, rem = q.package_size ? q.package_size - units : null;
+  return `🔢 الحصة رقم ${q.seq}${q.is_package ? (q.package_size ? ` من باقة ${q.package_size} حصة` : ' في الباقة الحالية') : ` في شهر ${month}`}
+⏳ المجموع لحد دلوقتي: ${durLabel(q.total_minutes)}${Math.abs(units - q.seq) > 0.01 ? ` (= ${fmtU(units)} حصة)` : ''}${rem != null ? (rem > 0.01 ? ` · فاضل ${fmtU(rem)} من الباقة` : rem > -0.01 ? ' · الباقة خلصت ✅' : ` · زيادة ${fmtU(-rem)} عن الباقة`) : ''}`;
+}
+async function sessionSeq(id) { try { const { data } = await sb.rpc('session_seq', { p_session: id }); return Array.isArray(data) ? data[0] : data; } catch (e) { return null; } }
+function reportFamilyText(r, s, st, fam, absent, q) {
   const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
   const subj = s.subject ? ` — ${s.subject}` : '';
   if (absent) return `السلام عليكم ورحمة الله 🌷
@@ -3316,7 +3330,7 @@ ${SIGN_F}`;
   return `السلام عليكم ورحمة الله 🌷
 📝 تقرير حصة ${st?.name || ''}${subj}
 📅 ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}
-⏱ مدة الحصة: ${durLabel(r.minutes)}${r.topics ? `\n📚 اللي اتشرح: ${r.topics}` : ''}${r.homework ? `\n✍️ الواجب: ${r.homework}` : ''}${r.level ? `\n⭐ المشاركة: ${REP_LEVEL[r.level]}` : ''}
+⏱ مدة الحصة: ${durLabel(r.minutes)}${q && q.seq ? `\n${seqLine(q)}` : ''}${r.topics ? `\n📚 اللي اتشرح: ${r.topics}` : ''}${r.homework ? `\n✍️ الواجب: ${r.homework}` : ''}${r.level ? `\n⭐ المشاركة: ${REP_LEVEL[r.level]}` : ''}
 لو عندكم أي ملاحظة على الحصة بلّغونا 🙏
 ${SIGN_F}`;
 }
@@ -3331,11 +3345,14 @@ async function openReport(id) {
   const curMins = s0.actual_minutes || planned;
   const who = s0.group_key ? `👥 ${s0.group_name || 'مجموعة'}` : (byId(state.students, s0.student_id)?.name || '');
   // رسالة لكل أسرة (في المجموعة: الغايب بياخد رسالة غياب)
-  const blocks = (s0.group_key ? rows : [s0]).filter(x => !isCancelled(x) || x.status === 'done' || (r.absent_ids || []).includes(x.student_id)).map(x => {
+  const brows = (s0.group_key ? rows : [s0]).filter(x => !isCancelled(x) || x.status === 'done' || (r.absent_ids || []).includes(x.student_id));
+  const seqs = await Promise.all(brows.map(x => sessionSeq(x.id)));
+  const blocks = brows.map((x, i) => {
     const st = byId(state.students, x.student_id), fam = st ? byId(state.families, st.family_id) : null;
     const absent = !r.attended || (r.absent_ids || []).includes(x.student_id);
-    return msgBlock(`رسالة ${fam?.name || 'الأسرة'}${s0.group_key ? ` (${st?.name || ''})` : ''}${absent ? ' — غياب' : ''}`, reportFamilyText(r, x, st, fam, absent), { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id });
+    return msgBlock(`رسالة ${fam?.name || 'الأسرة'}${s0.group_key ? ` (${st?.name || ''})` : ''}${absent ? ' — غياب' : ''}`, reportFamilyText(r, x, st, fam, absent, absent ? null : seqs[i]), { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id });
   });
+  const q0 = !s0.group_key && r.attended ? seqs[0] : null;
   const absentNames = (r.absent_ids || []).map(sid => byId(state.students, sid)?.name).filter(Boolean);
   openModal(`📝 تقرير حصة ${who}`, `
     <div class="sub small mb">${esc(tu?.name || '')} · ${esc(s0.subject || '')} · ${fmtDate(s0.scheduled_at)} ${timeStr(new Date(s0.scheduled_at))} · اتكتب ${ago(r.updated_at || r.created_at)}</div>
@@ -3345,6 +3362,7 @@ async function openReport(id) {
         ${absentNames.length ? `<span class="neg">غاب: <b>${esc(absentNames.join('، '))}</b></span>` : ''}${r.level ? `<span>المشاركة: <b>${REP_LEVEL[r.level]}</b></span>` : ''}</div>
         ${r.topics ? `<div class="mt">📚 <b>اللي اتشرح:</b> ${esc(r.topics)}</div>` : ''}${r.homework ? `<div class="mt">✍️ <b>الواجب:</b> ${esc(r.homework)}</div>` : ''}`
         : `<div class="neg"><b>🚫 الطالب ماحضرش الحصة</b></div>`}
+      ${q0 && q0.seq ? `<div class="mt" style="white-space:pre-line">${esc(seqLine(q0))}</div>` : ''}
       ${r.tutor_note ? `<div class="mt sub">🔒 ملاحظة للإشراف بس: ${esc(r.tutor_note)}</div>` : ''}
     </div>
     ${r.attended && anyOpen ? `<div class="card item mb" style="background:var(--warn-soft)">الحصة لسه متسجلتش. <button class="btn btn-ok sm" onclick="applyReport(${jsq(r.id)}, 'done')">✓ سجّلها تمت (${durLabel(r.minutes)})</button></div>` : ''}

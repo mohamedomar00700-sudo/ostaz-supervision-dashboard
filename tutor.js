@@ -418,10 +418,11 @@ function tutorReport(sessionId) {
     if (error && /too old/.test(error.message)) return formError('الحصة دي قديمة — ابعتي التفاصيل للإشراف على الجروب');
     if (error) throw error;
     const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : s.student_name;
+    const q = attended && !s.group_key ? await sessionSeq(s.id) : null;
     const absentNames = members.filter(m => R.absent.has(m.id)).map(m => m.name);
     window._trText = `📝 تقرير حصة ${who}${s.subject ? ' — ' + s.subject : ''} (${T.me.name})
 📅 ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}
-${attended ? `⏱ ${durLabel(R.mins)}${R.mins !== planned ? ` ⚠️ (المعاد ${durLabel(planned)})` : ''}${absentNames.length ? `\n🚫 غاب: ${absentNames.join('، ')}` : ''}\n📚 ${R.topics.trim()}${R.homework.trim() ? `\n✍️ الواجب: ${R.homework.trim()}` : ''}` : '🚫 الطالب ماحضرش'}`;
+${attended ? `⏱ ${durLabel(R.mins)}${R.mins !== planned ? ` ⚠️ (المعاد ${durLabel(planned)})` : ''}${q && q.seq ? `\n${seqLine(q)}` : ''}${absentNames.length ? `\n🚫 غاب: ${absentNames.join('، ')}` : ''}\n📚 ${R.topics.trim()}${R.homework.trim() ? `\n✍️ الواجب: ${R.homework.trim()}` : ''}` : '🚫 الطالب ماحضرش'}`;
     openModal(old ? '✅ اتعدل التقرير' : '✅ التقرير وصل للإشراف', `<p>شكراً 🌷 الإشراف هيراجعه ويبعته لولي الأمر.</p>
       <div class="msg-preview mt">${esc(window._trText)}</div>
       <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._trText, ${jsq(T.me.group)}); closeModal()">💬 انسخيه وابعتيه على جروب الإشراف</button>` : ''}
