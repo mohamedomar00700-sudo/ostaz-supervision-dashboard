@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="أستاذ أونلاين">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css?v=own1">
+<link rel="stylesheet" href="styles.css?v=fin2">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -154,17 +154,20 @@
       <div class="toolbar">
         <div class="daynav">
           <select id="fin-period" class="input" onchange="onFinPeriod()">
-            <option value="this">هذا الشهر</option>
-            <option value="last">الشهر الماضي</option>
-            <option value="custom">فترة مخصصة</option>
+            <option value="this">الشهر ده</option>
+            <option value="last">الشهر اللي فات</option>
+            <option value="q">آخر 3 شهور</option>
+            <option value="year">السنة دي</option>
+            <option value="lastyear">السنة اللي فاتت</option>
+            <option value="custom">من تاريخ لتاريخ</option>
           </select>
           <input type="date" id="fin-from" class="input hidden" onchange="loadFinance()">
           <input type="date" id="fin-to" class="input hidden" onchange="loadFinance()">
         </div>
-        <div class="row-gap">
-          <button class="btn btn-brand" onclick="openPaymentForm()">+ تسجيل دفعة</button>
-          <button class="btn btn-ghost" onclick="exportSessionsCSV()">⬇️ الحصص Excel</button>
-          <button class="btn btn-ghost" onclick="exportPaymentsCSV()">⬇️ المدفوعات Excel</button>
+        <div class="row-gap fin-actions">
+          <button class="btn btn-brand" onclick="openPaymentForm()">+ دفعة من أسرة</button>
+          <button class="btn btn-ghost sm" onclick="exportSessionsCSV()" title="تنزيل الحصص Excel">⬇️ الحصص</button>
+          <button class="btn btn-ghost sm" onclick="exportPaymentsCSV()" title="تنزيل المدفوعات Excel">⬇️ الدفعات</button>
         </div>
       </div>
       <div id="fin-content"></div>
@@ -219,6 +222,6 @@
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
 <script src="tutor.js?v=swap1"></script>
-<script src="app.js?v=free1"></script>
+<script src="app.js?v=fin2"></script>
 </body>
 </html>
