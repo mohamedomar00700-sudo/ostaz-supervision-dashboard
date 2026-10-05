@@ -1294,7 +1294,7 @@ async function openFamilyStatement(familyId) {
       studIds.length ? q(sb.from('sessions').select('*').in('student_id', studIds).eq('status', 'done')) : [],
     ]);
     const rows = [
-      ...tx.map(t => ({ at: t.created_at, desc: (t.type === 'refund' ? 'استرداد' : 'دفعة') + (t.note ? ` — ${t.note}` : ''), amt: t.type === 'refund' ? -Number(t.amount) : Number(t.amount), id: t.id, kind: 'tx' })),
+      ...tx.map(t => ({ at: t.created_at, desc: (t.type === 'refund' ? 'استرداد' : t.type === 'discount' ? '🎁 خصم' : 'دفعة') + (t.note ? ` — ${t.note}` : ''), amt: t.type === 'refund' ? -Number(t.amount) : Number(t.amount), id: t.id, kind: 'tx' })),
       ...ss.map(s => ({ at: s.scheduled_at, desc: `${kindWord(s)} ${byId(state.students, s.student_id)?.name || ''}${s.subject ? ' — ' + s.subject : ''} (${durLabel(sMins(s))})`, amt: -charges(s).fam, kind: 'session' })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at));
     let run = 0;
@@ -1316,12 +1316,13 @@ async function openFamilyStatement(familyId) {
 const PAY_METHODS = ['ويسترن يونيون', 'تطبيق تحويل', 'استلام بالجنيه المصري', 'تحويل بنكي', 'أخرى'];
 const CYCLES = { monthly: 'شهري', weekly: 'أسبوعي', prepaid: 'مقدّم (باقة)' };
 function txEgp(t) { // الجنيه اللي وصل فعلاً (أو تقدير بسعر السوق لو ماتسجلش)
+  if (t.type === 'discount') return { v: 0, est: false }; // الخصم مش فلوس داخلة
   const sign = t.type === 'refund' ? -1 : 1;
   if (t.received_egp != null) return { v: sign * Number(t.received_egp), est: false };
   return { v: sign * Number(t.amount) * Number(t.market_rate || fxRate(t.currency)), est: t.currency !== 'EGP' };
 }
 function txFxDiff(t) { // فرق العملة = الواصل فعلاً − المبلغ × سعر السوق يوم الدفع
-  if (t.received_egp == null || t.currency === 'EGP' || !t.market_rate) return null;
+  if (t.type === 'discount' || t.received_egp == null || t.currency === 'EGP' || !t.market_rate) return null;
   const sign = t.type === 'refund' ? -1 : 1;
   return sign * (Number(t.received_egp) - Number(t.amount) * Number(t.market_rate));
 }
@@ -1330,7 +1331,7 @@ function openPaymentForm(familyId) {
   const fields = [
     { name: 'family_id', label: 'الأسرة', type: 'select', searchable: true, required: true, placeholder: 'اختر الأسرة…', value: familyId,
       options: state.families.map(f => ({ v: f.id, l: `${f.name} (${f.currency})` })) },
-    [{ name: 'type', label: 'النوع', type: 'select', value: 'payment', options: [{ v: 'payment', l: 'دفعة مستلمة' }, { v: 'refund', l: 'استرداد للأسرة' }] },
+    [{ name: 'type', label: 'النوع', type: 'select', value: 'payment', options: [{ v: 'payment', l: 'دفعة مستلمة' }, { v: 'discount', l: '🎁 خصم للأسرة' }, { v: 'refund', l: 'استرداد للأسرة' }] },
      { name: 'method', label: 'طريقة الاستلام', type: 'select', value: 'ويسترن يونيون', options: PAY_METHODS.map(m => ({ v: m, l: m })) }],
     { name: 'amount', label: 'المبلغ اللي اتحسب للأسرة', type: 'number', required: true, hint: 'بعملة الأسرة' },
     { name: 'received_egp', label: 'المبلغ اللي وصلك فعلاً بالجنيه', type: 'number', hint: ' ' },
@@ -1347,7 +1348,10 @@ function openPaymentForm(familyId) {
     document.getElementById('hint_amount').textContent = cur ? `بالـ ${cur} — ده اللي بيتخصم من مستحقات الأسرة` : 'بعملة الأسرة';
     const egpFam = cur === 'EGP';
     const egpPay = $('method').value === 'استلام بالجنيه المصري';
-    document.getElementById('wrap_received_egp').classList.toggle('hidden', egpFam || (!isAdmin && !egpPay));
+    const isDisc = $('type').value === 'discount';
+    document.getElementById('wrap_received_egp').classList.toggle('hidden', isDisc || egpFam || (!isAdmin && !egpPay));
+    document.getElementById('wrap_method')?.classList.toggle('hidden', isDisc);
+    document.querySelector('#wrap_amount label').textContent = isDisc ? 'قيمة الخصم' : 'المبلغ اللي اتحسب للأسرة';
     // استلام بالمصري: اكتب الجنيه واحنا نحسب المقابل بعملة الأسرة (لو المبلغ ماتكتبش يدوي)
     if (egpPay && !egpFam && document.activeElement === $('received_egp') && fxRate(cur)) {
       const g = Number($('received_egp').value) || 0;
@@ -1368,16 +1372,17 @@ function openPaymentForm(familyId) {
     document.querySelector('#wrap_received_egp label').textContent = $('method').value === 'استلام بالجنيه المصري'
       ? 'المبلغ اللي استلمته بالجنيه *' : 'المبلغ اللي وصلك فعلاً بالجنيه';
   };
-  ['family_id', 'amount', 'received_egp', 'method'].forEach(n => { $(n).addEventListener('input', upd); $(n).addEventListener('change', upd); });
+  ['family_id', 'amount', 'received_egp', 'method', 'type'].forEach(n => { $(n).addEventListener('input', upd); $(n).addEventListener('change', upd); });
   upd();
   window._formSubmit = () => runSubmit(async () => {
     const f = byId(state.families, fv('family_id'));
     const amount = fnum('amount');
     if (!(amount > 0)) return formError('اكتب مبلغ صحيح');
-    const got = f.currency === 'EGP' ? amount : fnum('received_egp');
-    if (fv('method') === 'استلام بالجنيه المصري' && !(got > 0)) return formError('اكتب المبلغ اللي استلمته بالجنيه');
+    const disc = fv('type') === 'discount';
+    const got = disc ? null : f.currency === 'EGP' ? amount : fnum('received_egp');
+    if (!disc && fv('method') === 'استلام بالجنيه المصري' && !(got > 0)) return formError('اكتب المبلغ اللي استلمته بالجنيه');
     const d = fv('date') ? new Date(`${fv('date')}T12:00:00`) : new Date();
-    await q(sb.from('family_transactions').insert({ family_id: f.id, amount, currency: f.currency, type: fv('type'), method: fv('method'),
+    await q(sb.from('family_transactions').insert({ family_id: f.id, amount, currency: f.currency, type: fv('type'), method: disc ? 'خصم' : fv('method'),
       received_egp: got || null, note: fv('note') || null, created_at: d.toISOString() }));
     if (f.billing_cycle === 'prepaid' && document.getElementById('f_newpkg')?.checked)
       await q(sb.from('families').update({ cycle_start: fv('date') || todayStr(), package_size: Number(document.getElementById('f_newpkg_n').value) || f.package_size || null }).eq('id', f.id));
@@ -1469,6 +1474,7 @@ async function openFamilyInvoice(familyId, which = null, detailed = false) {
     const c = COUNTRIES[f.country] || COUNTRIES['مصر'];
     const sum = (rows) => rows.reduce((a, s) => a + charges(s).fam, 0);
     const paidOf = (rows) => rows.reduce((a, t) => a + (t.type === 'refund' ? -1 : 1) * Number(t.amount), 0);
+    const discOf = rows => rows.filter(t => t.type === 'discount').reduce((a, t) => a + Number(t.amount), 0);
     const bill = ss.filter(s => charges(s).fam > 0), free = ss.filter(s => !(charges(s).fam > 0)); // المجانية / المش محسوبة ما تدخلش في العدد
     const freeMins = free.reduce((a, s) => a + sMins(s), 0);
     const total = sum(ss), mins = bill.reduce((a, s) => a + sMins(s), 0), paid = paidOf(tx);
@@ -1494,7 +1500,7 @@ ${cycle === 'prepaid' ? 'كشف رصيد الباقة' : 'فاتورة حصص'} 
 ${lines || '— لا توجد حصص منفذة في الفترة —'}
 
 عدد الحصص: ${fmtU(unitsOf(bill))} (الساعة = حصة) · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}${freeMins ? `\n＋ ${durLabel(freeMins)} ${free.every(x => x.kind === 'trial') ? 'تجريبية مجانية' : 'مش محسوبة عليكم'} 🎁` : ''}
-إجمالي الحصص: *${fmt(total, 2)} ${cur}*${Math.abs(prev) >= 0.01 ? `\n${prev < 0 ? 'متأخرات سابقة' : 'رصيد سابق لصالحكم'}: ${fmt(Math.abs(prev), 2)} ${cur}` : ''}${paid ? `\nالمدفوع في الفترة: ${fmt(paid, 2)} ${cur}` : ''}
+إجمالي الحصص: *${fmt(total, 2)} ${cur}*${Math.abs(prev) >= 0.01 ? `\n${prev < 0 ? 'متأخرات سابقة' : 'رصيد سابق لصالحكم'}: ${fmt(Math.abs(prev), 2)} ${cur}` : ''}${paid - discOf(tx) ? `\nالمدفوع في الفترة: ${fmt(paid - discOf(tx), 2)} ${cur}` : ''}${discOf(tx) ? `\nخصم: ${fmt(discOf(tx), 2)} ${cur} 🎁` : ''}
 ${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*${egpLine}` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}
 
 ${closing}
@@ -1820,14 +1826,15 @@ function finCount(kind) { const el = document.getElementById(`fin-${kind}-count`
 function renderFinance() {
   const { sessions, tx, payouts, expenses = [], range } = state.fin;
   const done = sessions.filter(s => s.status === 'done');
-  const rev = done.reduce((a, s) => a + Number(s.revenue_egp || 0), 0);
+  const discEgp = tx.filter(t => t.type === 'discount').reduce((a, t) => a + Number(t.amount) * Number(t.market_rate || fxRate(t.currency)), 0);
+  const rev = done.reduce((a, s) => a + Number(s.revenue_egp || 0), 0) - discEgp;
   const cost = done.reduce((a, s) => a + charges(s).tut, 0);
   const hoursDone = occurrences(done).reduce((a, s) => a + sMins(s), 0) / 60;
   const exp = expenses.reduce((a, e) => a + Number(e.amount_egp), 0), sal = expenses.filter(e => e.category === 'salary').reduce((a, e) => a + Number(e.amount_egp), 0);
   const net = rev - cost - exp;
   let cashIn = 0, estCount = 0, fxDiff = 0, fxKnown = 0; const collected = {};
   tx.forEach(t => { const e = txEgp(t); cashIn += e.v; if (e.est) estCount++; const d = txFxDiff(t); if (d != null) { fxDiff += d; fxKnown++; }
-    collected[t.currency] = (collected[t.currency] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount); });
+    if (t.type !== 'discount') collected[t.currency] = (collected[t.currency] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount); });
   const paidOut = payouts.filter(p => p.paid).reduce((a, p) => a + Number(p.total_egp), 0);
   // أرصدة دلوقتي
   const owing = state.families.map(f => ({ f, b: famBalance(f) })).filter(x => x.b.balance < -0.01);
@@ -1928,7 +1935,7 @@ function renderFinance() {
       <input class="input search mb" placeholder="🔎 ابحث باسم الأسرة أو الملاحظة…" oninput="finSearch('pay', this.value)">
       <div class="card scrollx"><table><thead><tr><th>التاريخ</th><th>الأسرة</th><th>المبلغ</th><th class="owner-only">وصل بالجنيه</th><th class="owner-only">فرق العملة</th><th>الطريقة</th></tr></thead><tbody id="fin-pay-list">
         ${tx.map(t => { const e = txEgp(t), d = txFxDiff(t), fn = byId(state.families, t.family_id)?.name || ''; return `<tr data-q="${esc(normAr(fn + ' ' + (t.note || '') + ' ' + (t.method || '')))}"><td class="num">${fmtShortDate(t.created_at)}</td><td>${esc(fn)}<div class="sub small">${esc(t.note || '')}</div></td>
-          <td class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</td>
+          <td class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}${t.type === 'discount' ? ' <span class="badge b-pending">🎁 خصم</span>' : ''}</td>
           <td class="num owner-only">${e.est ? `<a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})" title="مقدّر بسعر السوق — دوس لتسجيل المبلغ الفعلي">≈ ${fmt(e.v)} ✎</a>` : `${fmt(e.v)}${t.currency !== 'EGP' ? ` <a href="javascript:void(0)" onclick="openEditReceived(${jsq(t.id)})">✎</a>` : ''}`}</td>
           <td class="num owner-only ${d == null ? '' : d >= 0 ? 'pos' : 'neg'}">${d == null ? '—' : (d >= 0 ? '+' : '') + fmt(d)}</td>
           <td class="sub small">${esc(t.method || '')}</td></tr>`; }).join('') || '<tr><td colspan="6" class="empty">لا توجد دفعات في الفترة</td></tr>'}
@@ -2074,7 +2081,7 @@ async function openFamilyStatement(familyId) {
       ${rows.map(r => `<tr><td>${new Date(r.k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}</td><td class="num">${r.mins ? fmtU(r.mins / 60) : '—'}</td>
         <td class="num">${fmt(r.charge, 2)}</td><td class="num pos">${r.paid ? fmt(r.paid, 2) : '—'}</td><td class="num ${r.bal < -0.01 ? 'neg' : 'pos'}"><b>${r.bal < -0.01 ? 'عليها ' : 'ليها '}${fmt(Math.abs(r.bal), 2)}</b></td></tr>`).join('') || '<tr><td colspan="5" class="empty">مفيش حركة</td></tr>'}
       </tbody></table></div><p class="sub small">المبالغ بالـ ${cur}. الرصيد تراكمي من أول تعامل.</p>
-      ${tx.length ? `<details class="mt"><summary class="sub">الدفعات (${tx.length})</summary><div class="list mt">${tx.slice().reverse().map(t => `<div class="card item"><div class="item-head"><span>${fmtShortDate(t.created_at)} · ${esc(t.method || '')}</span><b class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</b></div>${t.note ? `<div class="sub small">${esc(t.note)}</div>` : ''}</div>`).join('')}</div></details>` : ''}
+      ${tx.length ? `<details class="mt"><summary class="sub">الدفعات (${tx.length})</summary><div class="list mt">${tx.slice().reverse().map(t => `<div class="card item"><div class="item-head"><span>${fmtShortDate(t.created_at)} · ${esc(t.method || '')}</span><b class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'discount' ? '🎁 خصم ' : t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</b></div>${t.note ? `<div class="sub small">${esc(t.note)}</div>` : ''}</div>`).join('')}</div></details>` : ''}
       <div class="modal-foot"><button class="btn btn-wa" onclick="openFamilyInvoice(${jsq(familyId)})">📄 فاتورة</button><button class="btn btn-brand" onclick="openPaymentForm(${jsq(familyId)})">+ دفعة</button></div>`);
   } catch (e) { showToast(dbError(e), true); }
 }
@@ -2581,7 +2588,7 @@ function exportSessionsCSV() {
 function exportPaymentsCSV() {
   if (!state.fin) return;
   const r = state.fin.range;
-  const rows = state.fin.tx.map(t => { const d = txFxDiff(t); return [dateStr(new Date(t.created_at)), byId(state.families, t.family_id)?.name, t.type === 'refund' ? 'استرداد' : 'دفعة', t.amount, t.currency,
+  const rows = state.fin.tx.map(t => { const d = txFxDiff(t); return [dateStr(new Date(t.created_at)), byId(state.families, t.family_id)?.name, t.type === 'refund' ? 'استرداد' : t.type === 'discount' ? 'خصم' : 'دفعة', t.amount, t.currency,
     t.method, isAdmin ? t.received_egp ?? '' : '', isAdmin ? t.market_rate ?? '' : '', d == null || !isAdmin ? '' : d.toFixed(2), t.note]; });
   const po = state.fin.payouts.map(p => [dateStr(new Date(p.paid_at || p.created_at)), byId(state.tutors, p.tutor_id)?.name, 'صرف لمعلم', p.total_egp, 'EGP', p.method, p.total_egp, '', '', p.note]);
   downloadCSV(`مدفوعات_${r.from}_${r.toIncl}.csv`, ['التاريخ', 'الأسرة / المعلم', 'النوع', 'المبلغ', 'العملة', 'الطريقة', 'وصل/اتحوّل بالجنيه', 'سعر السوق يومها', 'فرق العملة (EGP)', 'ملاحظة'], [...rows, ...po]);
