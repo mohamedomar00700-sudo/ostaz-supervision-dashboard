@@ -274,7 +274,7 @@ async function confirmDelete(what, fn) {
 async function q(p) { const { data, error } = await p; if (error) throw error; return data; }
 
 async function loadMasters() {
-  const [families, students, tutors, subjects, fx, fb, tb, plans] = await Promise.all([
+  const [families, students, tutors, subjects, fx, fb, tb, plans, act] = await Promise.all([
     q(sb.from('families').select('*').order('name')),
     q(sb.from('students').select('*').order('name')),
     q(sb.from('tutors').select('*').order('name')),
@@ -283,8 +283,10 @@ async function loadMasters() {
     q(sb.from('family_balances').select('*')),
     q(sb.from('tutor_balances').select('*')),
     q(sb.from('student_subjects').select('*').order('created_at')),
+    q(sb.from('sessions').select('student_id,tutor_id').eq('status', 'done').gte('scheduled_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(5000)),
   ]);
   state.plans = plans;
+  state.act = { stu: new Set(act.map(x => x.student_id)), tut: new Set(act.map(x => x.tutor_id)) };
   state.families = families; state.students = students; state.tutors = tutors; state.subjects = subjects;
   state.fx = Object.fromEntries(fx.map(r => [r.currency, Number(r.rate_to_egp)]));
   state.fxRows = fx;
@@ -1148,6 +1150,12 @@ function renderFamilies() {
   document.getElementById('family-chips').innerHTML = [['all', 'الكل'], ['owe', '💸 عليها فلوس'], ['low', '🪫 باقة قربت تخلص'], ['nogroup', 'بدون جروب'], ['noprice', 'طالب بدون سعر']]
     .filter(([k]) => k === 'all' || counts[k] || state.famFilter === k)
     .map(([k, l]) => `<button class="chip ${(state.famFilter || 'all') === k ? 'active' : ''}" onclick="state.famFilter='${k}'; renderFamilies()">${l} (${counts[k]})</button>`).join('');
+  const fams = state.families.filter(f => state.students.some(s => s.family_id === f.id)), act = state.act || { stu: new Set() };
+  const actFam = new Set(state.students.filter(s => act.stu.has(s.id)).map(s => s.family_id));
+  const byC = {}; fams.forEach(f => byC[f.country || '—'] = (byC[f.country || '—'] || 0) + 1);
+  document.getElementById('families-stats').innerHTML = `<div class="sstat"><b class="num">${fams.length}</b><span>أسرة</span></div><div class="sstat"><b class="num">${state.students.length}</b><span>طالب</span></div>
+    <div class="sstat"><b class="num pos">${act.stu.size}</b><span>طالب حضر آخر 30 يوم</span></div><div class="sstat"><b class="num pos">${actFam.size}</b><span>أسرة نشطة</span></div>
+    ${Object.entries(byC).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<div class="sstat"><b class="num">${n}</b><span>${(COUNTRIES[c]?.flag || '') + ' ' + esc(c)}</span></div>`).join('')}`;
   const list = state.families.filter(FF[state.famFilter || 'all'] || FF.all).filter(f => {
     if (!term) return true;
     const studs = state.students.filter(s => s.family_id === f.id).map(s => `${s.name} ${s.notes || ''} ${plansOf(s.id).map(p => planLabel(p)).join(' ')}`).join(' ');
@@ -1562,6 +1570,10 @@ function renderTutors() {
   document.getElementById('tutor-chips').innerHTML = [['all', 'الكل'], ['due', '💰 ليه مستحقات'], ['norate', 'بدون أجر ساعة'], ['nogroup', 'بدون جروب']]
     .filter(([k]) => k === 'all' || tc[k] || state.tutFilter === k)
     .map(([k, l]) => `<button class="chip ${(state.tutFilter || 'all') === k ? 'active' : ''}" onclick="state.tutFilter='${k}'; renderTutors()">${l} (${tc[k]})</button>`).join('');
+  { const act = state.act || { tut: new Set() }; const due = state.tutors.filter(t => tutBalance(t).due > 0.01);
+    document.getElementById('tutors-stats').innerHTML = `<div class="sstat"><b class="num">${state.tutors.length}</b><span>معلم/ة</span></div><div class="sstat"><b class="num pos">${act.tut.size}</b><span>شغالين آخر 30 يوم</span></div>
+      <div class="sstat"><b class="num">${state.tutors.filter(t => t.user_id).length}</b><span>على البوابة</span></div><div class="sstat"><b class="num">${new Set(state.plans.filter(p => p.tutor_id).map(p => p.student_id)).size}</b><span>طالب ليه معلم ثابت</span></div>
+      <div class="sstat"><b class="num ${due.length ? 'neg' : ''}">${fmt(Math.round(due.reduce((a, t) => a + tutBalance(t).due, 0)))}</b><span>ج مستحقات لـ ${due.length}</span></div>`; }
   const list = state.tutors.filter(TF[state.tutFilter || 'all'] || TF.all).filter(t => {
     if (!term) return true;
     const subs = state.subjects.filter(s => s.tutor_id === t.id).map(s => s.subject).join(' ');
@@ -1838,25 +1850,25 @@ function renderFinance() {
     body = `
       ${isAdmin ? `<div class="section-title"><h2>الربح عن ${esc(periodLbl)}</h2></div>
       <div class="kpis">
-        ${kpiCard('إيراد الحصص اللي تمت', fmt(rev), `ج · ${nSess(unitsOf(occurrences(done)))} · ${fmt(hoursDone, 1)} ساعة`, cm(rev, 'rev'))}
-        ${kpiCard('مستحقات المعلمين', fmt(cost), 'ج عن حصص الفترة', cm(cost, 'tc', true))}
-        ${kpiCard('الرواتب والمصروفات', fmt(exp), sal ? `ج · منها رواتب ${fmt(sal)}` : 'ج', cm(exp, 'ex', true))}
-        ${kpiCard('صافي الربح', fmt(net), `ج · ${rev ? Math.round(net / rev * 100) : 0}% من الإيراد`, cm(net, 'net'), { vcls: net >= 0 ? 'pos' : 'neg', cls: 'kpi-hero' })}
+        ${kpiCard('إيراد الحصص اللي تمت', fmt(Math.round(rev)), `ج · ${nSess(unitsOf(occurrences(done)))} · ${fmt(hoursDone, 1)} ساعة`, cm(rev, 'rev'))}
+        ${kpiCard('مستحقات المعلمين', fmt(Math.round(cost)), 'ج عن حصص الفترة', cm(cost, 'tc', true))}
+        ${kpiCard('الرواتب والمصروفات', fmt(Math.round(exp)), sal ? `ج · منها رواتب ${fmt(sal)}` : 'ج', cm(exp, 'ex', true))}
+        ${kpiCard('صافي الربح', fmt(Math.round(net)), `ج · ${rev ? Math.round(net / rev * 100) : 0}% من الإيراد`, cm(net, 'net'), { vcls: net >= 0 ? 'pos' : 'neg', cls: 'kpi-hero' })}
       </div>
       <div class="section-title"><h2>الكاش في ${esc(periodLbl)}</h2></div>
       <div class="kpis">
-        ${kpiCard('الفلوس اللي دخلت', fmt(cashIn), `ج · ${Object.entries(collected).map(([cu, v]) => `${fmt(v)} ${cu}`).join(' + ') || '—'}${estCount ? ` · ${estCount} مقدّرة` : ''}`, cm(cashIn, 'cin'))}
-        ${kpiCard('اتحوّل للمعلمين', fmt(paidOut), 'ج', cm(paidOut, 'po', true))}
-        ${kpiCard('رواتب ومصروفات', fmt(exp), 'ج')}
-        ${kpiCard('صافي الكاش', fmt(cashIn - paidOut - exp), 'ج = اللي دخل − المعلمين − المصروفات', '', { vcls: cashIn - paidOut - exp >= 0 ? 'pos' : 'neg' })}
+        ${kpiCard('الفلوس اللي دخلت', fmt(Math.round(cashIn)), `ج · ${Object.entries(collected).map(([cu, v]) => `${fmt(v)} ${cu}`).join(' + ') || '—'}${estCount ? ` · ${estCount} مقدّرة` : ''}`, cm(cashIn, 'cin'))}
+        ${kpiCard('اتحوّل للمعلمين', fmt(Math.round(paidOut)), 'ج', cm(paidOut, 'po', true))}
+        ${kpiCard('رواتب ومصروفات', fmt(Math.round(exp)), 'ج')}
+        ${kpiCard('صافي الكاش', fmt(Math.round(cashIn - paidOut - exp)), 'ج = اللي دخل − المعلمين − المصروفات', '', { vcls: cashIn - paidOut - exp >= 0 ? 'pos' : 'neg' })}
         ${kpiCard('فرق العملة', fxKnown ? (fxDiff >= 0 ? '+' : '') + fmt(fxDiff) : '—', fxKnown ? `ج · من ${fxKnown} تحويل مقابل سعر السوق` : 'سجّل اللي وصل بالجنيه مع الدفعات', '', { vcls: fxDiff >= 0 ? 'pos' : 'neg' })}
       </div>` : `<div class="section-title"><h2>${esc(periodLbl)}</h2></div>
-      <div class="kpis">${kpiCard('مستحقات المعلمين عن الفترة', fmt(cost), `ج · ${nSess(unitsOf(occurrences(done)))}`)}${kpiCard('اتحوّل للمعلمين', fmt(paidOut), 'ج')}${kpiCard('دفعات من الأسر', String(tx.length), 'دفعة في الفترة')}</div>`}
+      <div class="kpis">${kpiCard('مستحقات المعلمين عن الفترة', fmt(Math.round(cost)), `ج · ${nSess(unitsOf(occurrences(done)))}`)}${kpiCard('اتحوّل للمعلمين', fmt(Math.round(paidOut)), 'ج')}${kpiCard('دفعات من الأسر', String(tx.length), 'دفعة في الفترة')}</div>`}
       <div class="section-title"><h2>الوضع دلوقتي</h2></div>
       <div class="kpis">
         <div class="card kpi clickable" onclick="state.finF_families='owing'; setFinTab('families')"><div class="l">فلوس عند الأسر</div><div class="v num neg">${isAdmin ? fmt(Math.round(recvEgp)) : owing.length}</div>
           <div class="s">${isAdmin ? `ج تقريباً · ${owing.length} أسرة` : 'أسرة عليها فلوس'} · ${Object.entries(recvByCur).map(([cu, v]) => `<bdi>${fmt(v)} ${cu}</bdi>`).join(' + ') || '—'}</div><div class="s kpi-cmp">اعرض الأسر ←</div></div>
-        <div class="card kpi clickable" onclick="state.finF_tutors='due'; setFinTab('tutors')"><div class="l">لسه للمعلمين</div><div class="v num">${fmt(tutDue)}</div><div class="s">ج · ${tutDueN} معلم/ة</div><div class="s kpi-cmp">اعرض المعلمين ←</div></div>
+        <div class="card kpi clickable" onclick="state.finF_tutors='due'; setFinTab('tutors')"><div class="l">لسه للمعلمين</div><div class="v num">${fmt(Math.round(tutDue))}</div><div class="s">ج · ${tutDueN} معلم/ة</div><div class="s kpi-cmp">اعرض المعلمين ←</div></div>
         ${kpiCard('طلاب حضروا في الفترة', String(activeStu), `${new Set(done.map(s => s.tutor_id)).size} معلم/ة شغالين`)}
       </div>
       ${isAdmin ? finChartHtml(range) : ''}
@@ -1936,7 +1948,7 @@ function renderFinance() {
     const byCat = {}; expenses.forEach(e => byCat[e.category] = (byCat[e.category] || 0) + Number(e.amount_egp));
     body = `<div class="fin-tools"><button class="btn btn-brand" onclick="openExpenseForm()">+ راتب / مصروف</button>
         <button class="btn btn-ghost" onclick="copyLastSalaries()">📋 نفس رواتب الشهر اللي فات</button></div>
-      <div class="kpis mb">${kpiCard('إجمالي الفترة', fmt(exp), 'ج')}${Object.entries(byCat).map(([k, v]) => kpiCard(EXP_CAT[k] || k, fmt(v), 'ج')).join('')}</div>
+      <div class="kpis mb">${kpiCard('إجمالي الفترة', fmt(Math.round(exp)), 'ج')}${Object.entries(byCat).map(([k, v]) => kpiCard(EXP_CAT[k] || k, fmt(Math.round(v)), 'ج')).join('')}</div>
       ${Object.keys(byMonth).sort().reverse().map(m => `<div class="section-title"><h2>${new Date(m + '-01T12:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}</h2><span class="sub num">${fmt(byMonth[m].reduce((a, e) => a + Number(e.amount_egp), 0))} ج</span></div>
         <div class="list">${byMonth[m].map(e => `<div class="card item"><div class="item-head"><div><div class="item-title">${esc(e.payee || EXP_CAT[e.category])}</div>
           <div class="sub small">${EXP_CAT[e.category] || ''}${e.method ? ' · ' + esc(e.method) : ''} · اتدفع ${fmtShortDate(e.paid_at)}${e.note ? ' · ' + esc(e.note) : ''}</div></div>
@@ -2021,11 +2033,11 @@ function finMonthlyHtml() {
   const mName = mo => new Date(Y, mo - 1, 15).toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' });
   return `<div class="chips">${years.map(y => `<button class="chip ${y === Y ? 'active' : ''}" onclick="state.finYear=${y}; renderFinance()">${y}</button>`).join('')}</div>
     <div class="kpis mb">
-      ${kpiCard(`إيراد ${Y}`, fmt(A.rev), `ج · ${fmt(A.h, 0)} ساعة`, `مقابل ${Y - 1}: ${deltaHtml(A.rev, B.rev, hasB)}`)}
-      ${kpiCard('المعلمين', fmt(A.tc), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.tc, B.tc, hasB, true)}`)}
-      ${kpiCard('رواتب ومصروفات', fmt(A.ex), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.ex, B.ex, hasB, true)}`)}
-      ${kpiCard(`صافي ربح ${Y}`, fmt(A.net), `ج · ${A.rev ? Math.round(A.net / A.rev * 100) : 0}%`, `مقابل ${Y - 1}: ${deltaHtml(A.net, B.net, hasB)}`, { vcls: A.net >= 0 ? 'pos' : 'neg', cls: 'kpi-hero' })}
-      ${kpiCard(`الفلوس اللي دخلت ${Y}`, fmt(A.cin), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.cin, B.cin, hasB)}`)}
+      ${kpiCard(`إيراد ${Y}`, fmt(Math.round(A.rev)), `ج · ${fmt(Math.round(A.h))} ساعة`, `مقابل ${Y - 1}: ${deltaHtml(A.rev, B.rev, hasB)}`)}
+      ${kpiCard('المعلمين', fmt(Math.round(A.tc)), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.tc, B.tc, hasB, true)}`)}
+      ${kpiCard('رواتب ومصروفات', fmt(Math.round(A.ex)), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.ex, B.ex, hasB, true)}`)}
+      ${kpiCard(`صافي ربح ${Y}`, fmt(Math.round(A.net)), `ج · ${A.rev ? Math.round(A.net / A.rev * 100) : 0}%`, `مقابل ${Y - 1}: ${deltaHtml(A.net, B.net, hasB)}`, { vcls: A.net >= 0 ? 'pos' : 'neg', cls: 'kpi-hero' })}
+      ${kpiCard(`الفلوس اللي دخلت ${Y}`, fmt(Math.round(A.cin)), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.cin, B.cin, hasB)}`)}
     </div>
     <div class="card scrollx"><table class="fin-month"><thead><tr><th>الشهر</th><th>ساعات</th><th>الإيراد</th><th>المعلمين</th><th>المصروفات</th><th>صافي الربح</th><th>الهامش</th><th>اللي دخل</th><th>مقابل ${Y - 1}</th></tr></thead><tbody>
       ${rows.map(({ mo, a, b }) => { const x = v(a), y = v(b); if (!x || !(x.h || x.cin || x.ex)) return `<tr class="sub"><td>${mName(mo)}</td><td colspan="8">—</td></tr>`;
@@ -2608,7 +2620,12 @@ function bars(entries, max, cls = '') {
     <span class="bar-track"><span class="bar-fill ${cls}" style="width:${max ? Math.max(4, v / max * 100) : 0}%"></span></span><span class="num bar-val">${v}</span></div>`).join('');
 }
 function renderReports() {
-  const el = document.getElementById('reports-content'); if (!el || !state.rep) return;
+  const el = document.getElementById('reports-content'); if (!el) return;
+  const view = state.repView || 'biz';
+  const sw = `<div class="chips fin-tabs no-print"><button class="chip ${view === 'biz' ? 'active' : ''}" onclick="state.repView='biz'; renderReports()">🏢 لوحة الأعمال</button>
+    <button class="chip ${view === 'ops' ? 'active' : ''}" onclick="state.repView='ops'; renderReports()">📋 الالتزام والتشغيل</button></div>`;
+  if (view === 'biz') { el.innerHTML = sw + renderBusiness(); return; }
+  if (!state.rep) { el.innerHTML = sw + '<div class="card empty">بيحمّل…</div>'; return; }
   const { rows, r } = state.rep;
   const past = rows.filter(s => s.status !== 'scheduled' || sStart(s) < Date.now());
   const done = past.filter(s => s.status === 'done');
@@ -2649,7 +2666,7 @@ function renderReports() {
   const tutRows = Object.entries(tut).map(([id, x]) => ({ t: byId(state.tutors, id), x, k: commitment(x.d, x.c) })).filter(r => r.t)
     .sort((a, b) => (a.k.rate ?? 1) - (b.k.rate ?? 1) || b.x.c - a.x.c);
 
-  el.innerHTML = `
+  el.innerHTML = sw + `
     <div class="chips">${[['this', 'الشهر ده'], ['last', 'الشهر اللي فات'], ['3m', 'آخر 3 شهور'], ['year', 'السنة دي']].map(([k, l]) => `<button class="chip ${state.repPeriod === k ? 'active' : ''}" onclick="setRepPeriod('${k}')">${l}</button>`).join('')}</div>
     <div class="kpis">
       <div class="card kpi"><div class="l">حصص تمت</div><div class="v num">${occurrences(done).length}</div><div class="s">${fmt(hours, 1)} ساعة تدريس</div></div>
@@ -4118,3 +4135,195 @@ sb.auth.onAuthStateChange((event, session) => {
     showView('auth');
   }
 })();
+
+/* ============================================================
+   لوحة الأعمال — صورة البيزنس كاملة (للإدارة وللعرض على مستثمر)
+   ============================================================ */
+const CURR_L = { arabic: 'عربي', languages: 'لغات', international: 'دولي' };
+function gradeStage(g) {
+  g = g || '';
+  if (/روضة|KG|تمهيدي/i.test(g)) return 'رياض أطفال';
+  if (/عشر|العاشر|ثانوي/.test(g)) return 'ثانوي';
+  if (/السابع|الثامن|التاسع|إعدادي|متوسط/.test(g)) return 'إعدادي / متوسط';
+  if (/الأول|الثاني|الثالث|الرابع|الخامس|السادس|ابتدائي/.test(g)) return 'ابتدائي';
+  return 'غير محدد';
+}
+async function fetchAll(build) { // تخطي حد الألف صف
+  const out = []; for (let i = 0; ; i += 1000) { const rows = await q(build().range(i, i + 999)); out.push(...rows); if (rows.length < 1000) break; } return out;
+}
+async function loadBusiness() {
+  const now = new Date(), from = new Date(now.getFullYear(), now.getMonth() - 12, 1);
+  setLoading(true);
+  try {
+    const cols = 'id,student_id,tutor_id,status,scheduled_at,duration_minutes,actual_minutes,subject,kind,group_key,revenue_egp,tutor_charge_egp,student_charge,student_currency,cancel_reason,trial_outcome,trial_switched_to,created_at';
+    const [ss, reps, monthly] = await Promise.all([
+      fetchAll(() => sb.from('sessions').select(cols).gte('scheduled_at', from.toISOString()).lte('scheduled_at', new Date(now.getTime() + 864e5).toISOString()).order('scheduled_at')),
+      q(sb.from('session_reports').select('session_id,group_key,created_at').gte('created_at', new Date(now.getTime() - 40 * 864e5).toISOString())),
+      isAdmin ? sb.rpc('finance_monthly', { p_from: dateStr(from), p_to: dateStr(now) }).then(x => x.data || []) : [],
+    ]);
+    state.biz = { ss, reps, monthly, at: Date.now() };
+    renderReports();
+  } catch (e) { showToast(dbError(e), true); } finally { setLoading(false); }
+}
+function bizCompute() {
+  const { ss, reps, monthly } = state.biz, now = Date.now(), D = 864e5;
+  const done = ss.filter(s => s.status === 'done');
+  const stuOf = id => byId(state.students, id), famOf = sid => byId(state.families, stuOf(sid)?.family_id);
+  const win = (a, b) => done.filter(s => { const t = new Date(s.scheduled_at).getTime(); return t >= now - a * D && t < now - b * D; });
+  const cur = win(30, 0), prev = win(60, 30);
+  const agg = list => { const occ = occurrences(list); return {
+    stu: new Set(list.map(s => s.student_id)), fam: new Set(list.map(s => stuOf(s.student_id)?.family_id).filter(Boolean)), tut: new Set(list.map(s => s.tutor_id)),
+    h: occ.reduce((a, s) => a + sMins(s), 0) / 60, rev: list.reduce((a, s) => a + Number(s.revenue_egp || 0), 0), tc: list.reduce((a, s) => a + charges(s).tut, 0), n: occ.length }; };
+  const A = agg(cur), P = agg(prev);
+  // شهور
+  const months = []; const d0 = new Date(); for (let i = 11; i >= 0; i--) months.push(monthKey(new Date(d0.getFullYear(), d0.getMonth() - i, 1)));
+  const byM = Object.fromEntries(months.map(k => [k, []])); done.forEach(s => { const k = monthKey(new Date(s.scheduled_at)); if (byM[k]) byM[k].push(s); });
+  const firstSeen = {}; done.forEach(s => { const k = monthKey(new Date(s.scheduled_at)); if (!firstSeen[s.student_id] || k < firstSeen[s.student_id]) firstSeen[s.student_id] = k; });
+  const firstData = months.find(k => byM[k].length);
+  const M = months.map((k, i) => { const a = agg(byM[k]); const prevSet = i ? agg(byM[months[i - 1]]).stu : new Set();
+    const kept = [...prevSet].filter(x => a.stu.has(x)).length;
+    const fm = (monthly || []).find(m => m.month.slice(0, 7) === k);
+    return { k, ...a, newStu: [...a.stu].filter(x => firstSeen[x] === k && k !== firstData).length, lost: k === months[months.length - 1] ? null : prevSet.size - kept,
+      ret: prevSet.size && k !== months[months.length - 1] ? kept / prevSet.size : null, ex: fm ? +fm.expenses_egp : 0, cin: fm ? +fm.cash_in_egp : 0 }; });
+  const startIdx = M.findIndex(m => m.n); const MM = startIdx < 0 ? [] : M.slice(startIdx);
+  const lastFull = MM.length >= 2 ? MM[MM.length - 2] : null;
+  // توزيعات (آخر 30 يوم بالساعات + عدد الطلاب)
+  const dist = keyFn => { const m = {}; occurrences(cur).forEach(o => { const k = keyFn(o) || 'غير محدد'; const x = m[k] ||= { h: 0, stu: new Set(), rev: 0 }; x.h += sMins(o) / 60; (o._members || [o]).forEach(z => { x.stu.add(z.student_id); x.rev += Number(z.revenue_egp || 0); }); });
+    return Object.entries(m).map(([k, x]) => ({ k, h: x.h, n: x.stu.size, rev: x.rev })).sort((a, b) => b.h - a.h); };
+  const byCountry = dist(o => famOf(o.student_id)?.country), byCurr = dist(o => CURR_L[stuOf(o.student_id)?.curriculum]), byStage = dist(o => gradeStage(stuOf(o.student_id)?.grade_level)), bySubj = dist(o => normSubj(o.subject));
+  const topFam = (() => { const m = {}; cur.forEach(s => { const f = famOf(s.student_id); if (!f) return; const x = m[f.id] ||= { f, h: 0, rev: 0, stu: new Set() }; x.h += sMins(s) / 60; x.rev += Number(s.revenue_egp || 0); x.stu.add(s.student_id); }); return Object.values(m).sort((a, b) => b.h - a.h); })();
+  const topTut = (() => { const m = {}; occurrences(cur).forEach(o => { const x = m[o.tutor_id] ||= { t: byId(state.tutors, o.tutor_id), h: 0, stu: new Set(), cost: 0 }; x.h += sMins(o) / 60; x.cost += occTut(o); (o._members || [o]).forEach(z => x.stu.add(z.student_id)); }); return Object.values(m).filter(x => x.t).sort((a, b) => b.h - a.h); })();
+  // جودة التشغيل (آخر 30 يوم)
+  const past30 = ss.filter(s => { const t = new Date(s.scheduled_at).getTime(); return t >= now - 30 * D && t < now; });
+  const cS = past30.filter(s => s.status === 'cancelled_by_student').length, cT = past30.filter(s => s.status === 'cancelled_by_tutor').length;
+  const commit = cur.length + cS + cT ? cur.length / (cur.length + cS + cT) : null;
+  const linked = new Set(state.tutors.filter(t => t.user_id).map(t => t.id));
+  const repBase = occurrences(cur.filter(s => linked.has(s.tutor_id) && new Date(s.scheduled_at).getTime() >= now - 14 * D));
+  const repDone = repBase.filter(o => reps.some(r => r.session_id === o.id || (o.group_key && r.group_key === o.group_key))).length;
+  const trials = ss.filter(s => s.kind === 'trial' && new Date(s.scheduled_at).getTime() >= now - 90 * D && s.status === 'done');
+  const trialWon = trials.filter(s => s.trial_outcome === 'converted' || s.trial_outcome === 'switched').length, trialDecided = trials.filter(s => s.trial_outcome).length;
+  // الأرصدة
+  const owing = state.families.map(f => ({ f, b: famBalance(f) })).filter(x => x.b.balance < -0.01);
+  const recv = owing.reduce((a, x) => a + -x.b.balance * fxRate(x.f.currency), 0);
+  const tutDue = state.tutors.reduce((a, t) => a + Math.max(0, tutBalance(t).due), 0);
+  const famWithStu = state.families.filter(f => state.students.some(s => s.family_id === f.id));
+  return { A, P, MM, lastFull, byCountry, byCurr, byStage, bySubj, topFam, topTut, commit, cS, cT, repBase: repBase.length, repDone, trials: trials.length, trialWon, trialDecided, owing, recv, tutDue,
+    totals: { fam: famWithStu.length, stu: state.students.length, tut: state.tutors.length, linked: linked.size } };
+}
+function normSubj(s) { s = (s || '').trim(); if (!s) return 'غير محدد'; if (/رياض|math/i.test(s)) return 'رياضيات'; if (/إنج|انج|english/i.test(s)) return 'إنجليزي'; if (/عربي|لغة عربية|arabic/i.test(s)) return 'عربي';
+  if (/علوم|science/i.test(s)) return 'علوم'; if (/قرآن|قران|إسلام|اسلام|دين/.test(s)) return 'قرآن وتربية إسلامية'; return s; }
+const pctChg = (a, b) => b ? (a - b) / Math.abs(b) * 100 : null;
+const chgHtml = (a, b, inv) => { const p = pctChg(a, b); if (p == null) return a ? '<span class="sub">جديد</span>' : ''; const good = inv ? p <= 0 : p >= 0;
+  return `<span class="${good ? 'pos' : 'neg'}">${p >= 0 ? '▲' : '▼'} ${Math.abs(p) >= 100 ? Math.round(Math.abs(p)) : Math.abs(p).toFixed(1)}%</span>`; };
+function bizKpi(label, val, sub, chg, opts = {}) {
+  return `<div class="card kpi biz-kpi ${opts.cls || ''}"${opts.click ? ` onclick="${opts.click}" style="cursor:pointer"` : ''}><div class="l">${opts.icon ? `<span class="biz-ic">${opts.icon}</span>` : ''}${label}</div>
+    <div class="v num ${opts.vcls || ''}">${val}</div>${sub ? `<div class="s">${sub}</div>` : ''}${chg ? `<div class="s kpi-cmp">${chg} <span class="sub">مقابل الـ30 يوم اللي قبلهم</span></div>` : ''}</div>`;
+}
+function distCard(title, rows, total, money) {
+  if (!rows.length) return '';
+  const colors = ['#3b82f6', '#16a34a', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#ec4899'];
+  let acc = 0; const segs = rows.slice(0, 8).map((r, i) => { const w = total ? r.h / total * 100 : 0; acc += w; return `<span style="width:${w}%;background:${colors[i % 8]}" title="${esc(r.k)} ${Math.round(w)}%"></span>`; }).join('');
+  return `<div class="card item biz-dist"><h3>${title}</h3><div class="stackbar">${segs}</div>
+    ${rows.slice(0, 8).map((r, i) => `<div class="dist-row"><i style="background:${colors[i % 8]}"></i><span class="dist-k">${esc(r.k)}</span>
+      <span class="sub small">${r.n} طالب</span><span class="num"><b>${total ? Math.round(r.h / total * 100) : 0}%</b></span>${money && isAdmin ? `<span class="num small sub">${fmtK(r.rev)} ج</span>` : ''}</div>`).join('')}</div>`;
+}
+function bizTrendHtml(MM) {
+  if (!MM.length) return '';
+  const showMoney = isAdmin;
+  const maxH = Math.max(1, ...MM.map(m => m.h)), maxR = Math.max(1, ...MM.map(m => m.rev));
+  const mn = k => new Date(k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'short' });
+  return `<div class="card item"><div class="fc-legend"><span><i class="fc-rev"></i>ساعات التدريس</span>${showMoney ? '<span><i class="fc-net"></i>الإيراد</span>' : ''}<span><i style="background:var(--text)"></i>طلاب حضروا</span></div>
+    <div class="fc">${MM.map((m, i) => `<div class="fc-col" title="${m.k}: ${fmt(m.h, 1)} ساعة · ${m.stu.size} طالب${showMoney ? ` · ${fmt(m.rev)} ج` : ''}">
+      <div class="fc-top num">${m.stu.size}</div>
+      <div class="fc-bars"><div class="fc-bar fc-rev" style="height:${m.h / maxH * 100}%"></div>${showMoney ? `<div class="fc-bar fc-net" style="height:${m.rev / maxR * 100}%"></div>` : ''}</div>
+      <div class="fc-lbl">${mn(m.k)}${i === MM.length - 1 ? ' <span class="sub">(لسه)</span>' : ''}</div><div class="fc-val num">${fmt(Math.round(m.h))}س</div></div>`).join('')}</div></div>`;
+}
+function renderBusiness() {
+  if (!state.biz || Date.now() - state.biz.at > 5 * 60e3) { if (!state._bizLoading) { state._bizLoading = true; loadBusiness().finally(() => state._bizLoading = false); } if (!state.biz) return '<div class="card empty">بيحمّل الأرقام…</div>'; }
+  const z = bizCompute(), A = z.A, P = z.P, lf = z.lastFull;
+  const arpf = A.fam.size ? A.rev / A.fam.size : 0, perHour = A.h ? A.rev / A.h : 0, costHour = A.h ? A.tc / A.h : 0, gm = A.rev ? (A.rev - A.tc) / A.rev : 0;
+  const hPerStu = A.stu.size ? A.h / A.stu.size : 0;
+  const runRev = lf ? lf.rev * 12 : A.rev * 12, runNet = lf ? (lf.rev - lf.tc - lf.ex) * 12 : (A.rev - A.tc) * 12;
+  const repRate = z.repBase ? z.repDone / z.repBase : null;
+  const newThis = z.MM.length ? z.MM[z.MM.length - 1].newStu : 0;
+  const totalH = A.h;
+  const html = `
+    <div class="biz-hero card">
+      <div class="biz-hero-t"><img src="logo.png" alt="" onerror="this.remove()"><div><h2>أكاديمية أستاذ أونلاين</h2><div class="sub">دروس خصوصية 1-on-1 أونلاين · طلاب في الإمارات والسعودية ومصر · معلمين من مصر</div></div></div>
+      <div class="biz-hero-n">
+        <div><b class="num">${z.totals.fam}</b><span>أسرة</span></div><div><b class="num">${z.totals.stu}</b><span>طالب</span></div>
+        <div><b class="num">${z.totals.tut}</b><span>معلم/ة</span></div><div><b class="num">${fmt(Math.round(A.h))}</b><span>ساعة آخر 30 يوم</span></div>
+        ${isAdmin ? `<div><b class="num">${fmtK(runRev)}</b><span>إيراد سنوي متوقع (ج)</span></div>` : ''}
+      </div>
+      <div class="biz-actions no-print"><button class="btn btn-brand sm" onclick="bizPrint()">🖨️ تقرير PDF للعرض</button><button class="btn btn-ghost sm" onclick="bizCopy()">📋 نسخ الملخص</button><button class="btn btn-ghost sm" onclick="state.biz=null; loadBusiness()">🔄 تحديث</button></div>
+    </div>
+
+    <div class="section-title"><h2>👥 العملاء والنشاط <span class="sub small">(آخر 30 يوم)</span></h2></div>
+    <div class="kpis">
+      ${bizKpi('طلاب حضروا', A.stu.size, `من ${z.totals.stu} طالب مسجّل${newThis ? ` · ${newThis} جديد الشهر ده` : ''}`, chgHtml(A.stu.size, P.stu.size), { icon: '🎒' })}
+      ${bizKpi('أسر نشطة', A.fam.size, `من ${z.totals.fam} أسرة · ${A.fam.size ? (A.stu.size / A.fam.size).toFixed(1) : 0} طالب لكل أسرة`, chgHtml(A.fam.size, P.fam.size), { icon: '👨‍👩‍👧' })}
+      ${bizKpi('معلمين شغالين', A.tut.size, `من ${z.totals.tut} · ${z.totals.linked} على بوابة المعلمات`, chgHtml(A.tut.size, P.tut.size), { icon: '🧑‍🏫' })}
+      ${bizKpi('ساعات التدريس', fmt(A.h, 1), `${A.n} حصة · ${hPerStu.toFixed(1)} ساعة لكل طالب`, chgHtml(A.h, P.h), { icon: '⏱' })}
+    </div>
+
+    ${isAdmin ? `<div class="section-title"><h2>💰 الاقتصاديات <span class="sub small">(آخر 30 يوم)</span></h2></div>
+    <div class="kpis">
+      ${bizKpi('الإيراد', fmt(A.rev), 'ج بسعر الصرف يوم الحصة', chgHtml(A.rev, P.rev), { icon: '📈' })}
+      ${bizKpi('الربح الإجمالي', fmt(A.rev - A.tc), `ج · هامش ${Math.round(gm * 100)}% بعد المعلمين`, chgHtml(A.rev - A.tc, P.rev - P.tc), { icon: '💵', vcls: 'pos', cls: 'kpi-hero' })}
+      ${bizKpi('متوسط سعر الساعة', fmt(Math.round(perHour)), `ج · تكلفة المعلم ${fmt(Math.round(costHour))} ج للساعة`, chgHtml(perHour, P.h ? P.rev / P.h : 0), { icon: '🏷️' })}
+      ${bizKpi('متوسط إيراد الأسرة', fmt(Math.round(arpf)), 'ج شهرياً لكل أسرة نشطة', chgHtml(arpf, P.fam.size ? P.rev / P.fam.size : 0), { icon: '🏠' })}
+      ${lf ? bizKpi(`صافي ربح ${new Date(lf.k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' })}`, fmt(lf.rev - lf.tc - lf.ex), `ج بعد المعلمين والرواتب (${lf.rev ? Math.round((lf.rev - lf.tc - lf.ex) / lf.rev * 100) : 0}%)`, '', { icon: '🏦', vcls: lf.rev - lf.tc - lf.ex >= 0 ? 'pos' : 'neg' }) : ''}
+      ${bizKpi('صافي ربح سنوي متوقع', fmtK(runNet), `ج لو استمر نفس معدل ${lf ? 'الشهر اللي فات' : 'آخر 30 يوم'}`, '', { icon: '🚀' })}
+    </div>` : ''}
+
+    <div class="section-title"><h2>📊 النمو شهر بشهر</h2></div>
+    ${bizTrendHtml(z.MM)}
+    ${z.MM.length > 1 ? `<div class="card scrollx mt"><table class="fin-month"><thead><tr><th>الشهر</th><th>طلاب</th><th>جداد</th><th>وقفوا</th><th>الاستمرار</th><th>أسر</th><th>ساعات</th>${isAdmin ? '<th>الإيراد</th><th>صافي الربح</th>' : ''}</tr></thead><tbody>
+      ${z.MM.map((m, i) => `<tr><td><b>${new Date(m.k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}</b>${i === z.MM.length - 1 ? ' <span class="sub small">(لسه شغال)</span>' : ''}</td>
+        <td class="num">${m.stu.size}</td><td class="num pos">${i ? (m.newStu ? '+' + m.newStu : '—') : '<span class="sub small">البداية</span>'}</td><td class="num ${m.lost ? 'neg' : ''}">${i && m.lost != null ? (m.lost ? '−' + m.lost : '0') : '—'}</td>
+        <td class="num">${m.ret != null && i ? Math.round(m.ret * 100) + '%' : '—'}</td><td class="num">${m.fam.size}</td><td class="num">${fmt(m.h, 1)}</td>
+        ${isAdmin ? `<td class="num">${fmt(m.rev)}</td><td class="num ${m.rev - m.tc - m.ex >= 0 ? 'pos' : 'neg'}">${fmt(m.rev - m.tc - m.ex)}</td>` : ''}</tr>`).join('')}
+    </tbody></table></div><p class="sub small">"وقفوا" = طلاب حضروا الشهر اللي قبله ومحضروش الشهر ده. "الاستمرار" = نسبة اللي كمّلوا من الشهر اللي قبله.</p>` : ''}
+
+    <div class="section-title"><h2>🌍 مين عملاءنا؟ <span class="sub small">(نسبة من ساعات آخر 30 يوم)</span></h2></div>
+    <div class="grid2 biz-grid">
+      ${distCard('حسب البلد', z.byCountry, totalH, true)}${distCard('حسب المنهج', z.byCurr, totalH, true)}
+      ${distCard('حسب المرحلة', z.byStage, totalH, true)}${distCard('حسب المادة', z.bySubj, totalH, true)}
+    </div>
+
+    <div class="section-title"><h2>⭐ الأكثر نشاطاً <span class="sub small">(آخر 30 يوم)</span></h2></div>
+    <div class="grid2 biz-grid">
+      <div class="card item"><h3>أكبر الأسر</h3>${z.topFam.slice(0, 6).map((x, i) => `<div class="dist-row clickable" onclick="openFamilyStatement && openFamilyStatement(${jsq(x.f.id)})"><span class="rank">${i + 1}</span><span class="dist-k">${esc(x.f.name)}</span><span class="sub small">${x.stu.size} طالب</span><span class="num"><b>${fmt(x.h, 1)}</b> س</span>${isAdmin ? `<span class="num small sub">${fmtK(x.rev)} ج</span>` : ''}</div>`).join('') || '<div class="sub small">—</div>'}
+        ${isAdmin && z.topFam.length && A.rev ? `<div class="sub small mt">أكبر 3 أسر = ${Math.round(z.topFam.slice(0, 3).reduce((a, x) => a + x.rev, 0) / A.rev * 100)}% من الإيراد</div>` : ''}</div>
+      <div class="card item"><h3>أكتر المعلمين ساعات</h3>${z.topTut.slice(0, 6).map((x, i) => `<div class="dist-row"><span class="rank">${i + 1}</span><span class="dist-k">${esc(x.t.name)}</span><span class="sub small">${x.stu.size} طالب</span><span class="num"><b>${fmt(x.h, 1)}</b> س</span></div>`).join('') || '<div class="sub small">—</div>'}</div>
+    </div>
+
+    <div class="section-title"><h2>✅ جودة الخدمة <span class="sub small">(آخر 30 يوم)</span></h2></div>
+    <div class="kpis">
+      ${bizKpi('نسبة الالتزام', z.commit == null ? '—' : Math.round(z.commit * 100) + '%', `إلغاء من الأسر ${z.cS} · من المعلمين ${z.cT}`, '', { icon: '📆', vcls: z.commit == null ? '' : z.commit >= .9 ? 'pos' : z.commit >= .75 ? 'warn-txt' : 'neg', click: "state.repView='ops'; renderReports()" })}
+      ${bizKpi('تقارير الحصص', repRate == null ? '—' : Math.round(repRate * 100) + '%', repRate == null ? 'لسه مفيش معلمات على البوابة' : `${z.repDone} من ${z.repBase} حصة (آخر أسبوعين، معلمات البوابة)`, '', { icon: '📝', vcls: repRate == null ? '' : repRate >= .8 ? 'pos' : 'neg', click: 'openReports()' })}
+      ${bizKpi('تحويل الحصص التجريبية', z.trialDecided ? Math.round(z.trialWon / z.trialDecided * 100) + '%' : '—', `${z.trials} تجريبية في آخر 3 شهور${z.trialDecided ? ` · ${z.trialWon} كمّلوا` : ''}`, '', { icon: '🧪' })}
+      ${bizKpi('فلوس عند الأسر', isAdmin ? fmtK(z.recv) + ' ج' : String(z.owing.length), `${z.owing.length} أسرة عليها مستحقات`, '', { icon: '🧾', vcls: z.owing.length ? 'neg' : 'pos', click: "state.finTab='families'; state.finF_families='owing'; switchTab('fin')" })}
+    </div>
+    <p class="sub small mt no-print">كل الأرقام محسوبة لحظياً من الحصص المسجلة. "آخر 30 يوم" مقارنة بالـ30 يوم اللي قبلهم.</p>`;
+  state.bizSummary = { z, A, P, arpf, perHour, gm, runRev, runNet, lf, repRate };
+  return html;
+}
+function bizCopy() {
+  const s = state.bizSummary; if (!s) return;
+  const { z, A } = s;
+  const pct = r => r.slice(0, 3).map(x => `${x.k} ${Math.round(x.h / (A.h || 1) * 100)}%`).join('، ');
+  const t = `📊 أكاديمية أستاذ أونلاين — ملخص ${new Date().toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'long', year: 'numeric' })}
+
+👥 ${z.totals.fam} أسرة · ${z.totals.stu} طالب · ${z.totals.tut} معلم/ة
+🎒 طلاب حضروا آخر 30 يوم: ${A.stu.size} (${A.fam.size} أسرة)
+⏱ ساعات تدريس آخر 30 يوم: ${fmt(Math.round(A.h))} ساعة (${A.n} حصة)
+${isAdmin ? `💰 إيراد آخر 30 يوم: ${fmt(A.rev)} ج · هامش بعد المعلمين ${Math.round(s.gm * 100)}%
+🏷️ متوسط سعر الساعة: ${fmt(Math.round(s.perHour))} ج · متوسط إيراد الأسرة: ${fmt(Math.round(s.arpf))} ج/شهر
+🚀 إيراد سنوي متوقع: ${fmt(s.runRev)} ج · صافي ربح سنوي متوقع: ${fmt(s.runNet)} ج
+` : ''}🌍 البلاد: ${pct(z.byCountry)}
+📚 المواد: ${pct(z.bySubj)}
+✅ الالتزام: ${z.commit == null ? '—' : Math.round(z.commit * 100) + '%'}${z.trialDecided ? ` · تحويل التجريبي: ${Math.round(z.trialWon / z.trialDecided * 100)}%` : ''}`;
+  copyText(t, 'اتنسخ الملخص ✓');
+}
+function bizPrint() { document.body.classList.add('print-biz'); setTimeout(() => { window.print(); setTimeout(() => document.body.classList.remove('print-biz'), 500); }, 50); }

@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="أستاذ أونلاين">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css?v=fin2">
+<link rel="stylesheet" href="styles.css?v=biz1">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -89,7 +89,7 @@
     <button data-tab="families" class="tab" onclick="switchTab('families')"><span class="ti">👨‍👩‍👧</span><span class="tl">الأسر</span></button>
     <button data-tab="tutors" class="tab" onclick="switchTab('tutors')"><span class="ti">🧑‍🏫</span><span class="tl">المعلمون</span></button>
     <button data-tab="fin" class="tab" onclick="switchTab('fin')"><span class="ti">💰</span><span class="tl">المالية</span></button>
-    <button data-tab="reports" class="tab" onclick="switchTab('reports')"><span class="ti">📊</span><span class="tl">التقارير</span></button>
+    <button data-tab="reports" class="tab" onclick="switchTab('reports')"><span class="ti">📊</span><span class="tl">الأرقام</span></button>
   </nav>
 
   <main class="wrap">
@@ -135,6 +135,7 @@
         <input class="input search" id="family-search" placeholder="بحث باسم الأسرة أو الطالب أو الرقم…" oninput="renderFamilies()">
         <button class="btn btn-brand" onclick="openFamilyForm()">+ أسرة جديدة</button>
       </div>
+      <div class="sstats" id="families-stats"></div>
       <div class="chips" id="family-chips"></div>
       <div id="families-list" class="list grid2"></div>
     </section>
@@ -145,6 +146,7 @@
         <input class="input search" id="tutor-search" placeholder="بحث باسم المعلم أو المادة…" oninput="renderTutors()">
         <button class="btn btn-brand" onclick="openTutorForm()">+ معلم جديد</button>
       </div>
+      <div class="sstats" id="tutors-stats"></div>
       <div class="chips" id="tutor-chips"></div>
       <div id="tutors-list" class="list grid2"></div>
     </section>
@@ -222,6 +224,6 @@
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
 <script src="tutor.js?v=swap1"></script>
-<script src="app.js?v=fin2"></script>
+<script src="app.js?v=biz2"></script>
 </body>
 </html>
