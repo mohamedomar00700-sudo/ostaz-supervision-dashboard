@@ -1461,7 +1461,9 @@ async function openFamilyInvoice(familyId, which = null, detailed = false) {
     const c = COUNTRIES[f.country] || COUNTRIES['مصر'];
     const sum = (rows) => rows.reduce((a, s) => a + charges(s).fam, 0);
     const paidOf = (rows) => rows.reduce((a, t) => a + (t.type === 'refund' ? -1 : 1) * Number(t.amount), 0);
-    const total = sum(ss), mins = ss.reduce((a, s) => a + sMins(s), 0), paid = paidOf(tx);
+    const bill = ss.filter(s => charges(s).fam > 0), free = ss.filter(s => !(charges(s).fam > 0)); // المجانية / المش محسوبة ما تدخلش في العدد
+    const freeMins = free.reduce((a, s) => a + sMins(s), 0);
+    const total = sum(ss), mins = bill.reduce((a, s) => a + sMins(s), 0), paid = paidOf(tx);
     const prev = paidOf(txBefore) - sum(ssBefore);          // رصيد قبل الفترة (+ لصالحهم / − عليهم)
     const bal = prev + paid - total;                         // الرصيد في نهاية الفترة
     const cur = f.currency;
@@ -1473,8 +1475,8 @@ async function openFamilyInvoice(familyId, which = null, detailed = false) {
       ? `\nبالجنيه المصري: *${fmt(egpOf(-bal), 0)} ج.م*\n(سعر الصرف: 1 ${cur} = ${fmt(rate, 2)} ج — بتاريخ ${new Date().toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', year: 'numeric' })})` : '';
     const lines = detailed
       ? ss.map(s => { const v = sessionView(s);
-          return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ` (${kindWord(s)})`}${s.group_key ? ' 👥' : ''} — ${durLabel(sMins(s))} = ${s.kind === 'trial' ? 'مجانية 🎁' : `${fmt(charges(s).fam, 2)} ${cur}`}`; }).join('\n')
-      : perStudentSummary(ss).map(x => `• *${x.st?.name || ''}*: ${nSess(x.n)} (${Object.entries(x.subj).map(([k, n]) => `${k} ${n}`).join('، ')}) — ${durLabel(x.mins)} = ${fmt(x.amt, 2)} ${cur}`).join('\n');
+          return `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: c.tz })} — ${v.st?.name || ''}${s.subject ? ': ' + s.subject : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ` (${kindWord(s)})`}${s.group_key ? ' 👥' : ''} — ${durLabel(sMins(s))} = ${!(charges(s).fam > 0) ? (s.kind === 'trial' ? 'مجانية 🎁' : 'مش محسوبة عليكم ✓') : `${fmt(charges(s).fam, 2)} ${cur}`}`; }).join('\n')
+      : perStudentSummary(bill).map(x => `• *${x.st?.name || ''}*: ${nSess(x.n)} (${Object.entries(x.subj).map(([k, n]) => `${k} ${n}`).join('، ')}) — ${durLabel(x.mins)} = ${fmt(x.amt, 2)} ${cur}`).join('\n');
     const closing = cycle === 'prepaid'
       ? (bal <= 0 ? 'رصيد الباقة خلص، برجاء التجديد لاستمرار الحصص 🙏' : lowPrepaid(f) ? 'رصيد الباقة قرب يخلص، برجاء التجديد قريب 🙏' : 'شكراً لثقتكم 🌷')
       : (bal < 0 ? 'برجاء التكرم بسداد المستحق، ولأي استفسار إحنا موجودين 🙏' : 'شكراً لالتزامكم 🌷');
@@ -1483,7 +1485,7 @@ ${cycle === 'prepaid' ? 'كشف رصيد الباقة' : 'فاتورة حصص'} 
 
 ${lines || '— لا توجد حصص منفذة في الفترة —'}
 
-عدد الحصص: ${fmtU(unitsOf(ss))} (الساعة = حصة) · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
+عدد الحصص: ${fmtU(unitsOf(bill))} (الساعة = حصة) · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}${freeMins ? `\n＋ ${durLabel(freeMins)} ${free.every(x => x.kind === 'trial') ? 'تجريبية مجانية' : 'مش محسوبة عليكم'} 🎁` : ''}
 إجمالي الحصص: *${fmt(total, 2)} ${cur}*${Math.abs(prev) >= 0.01 ? `\n${prev < 0 ? 'متأخرات سابقة' : 'رصيد سابق لصالحكم'}: ${fmt(Math.abs(prev), 2)} ${cur}` : ''}${paid ? `\nالمدفوع في الفترة: ${fmt(paid, 2)} ${cur}` : ''}
 ${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*${egpLine}` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}
 
@@ -1794,7 +1796,7 @@ function renderFinance() {
 
   // الأسر — حصص الفترة والمدفوع والرصيد
   const famPeriod = {};
-  done.forEach(s => { const st = byId(state.students, s.student_id); if (!st) return; const x = famPeriod[st.family_id] ||= { charge: 0, mins: 0 }; x.charge += charges(s).fam; x.mins += sMins(s); });
+  done.forEach(s => { const st = byId(state.students, s.student_id); if (!st) return; const x = famPeriod[st.family_id] ||= { charge: 0, mins: 0 }; const c = charges(s).fam; x.charge += c; if (c > 0) x.mins += sMins(s); });
   const famPaid = {};
   tx.forEach(t => famPaid[t.family_id] = (famPaid[t.family_id] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount));
   const famRows = state.families.map(f => ({ f, p: famPeriod[f.id] || { charge: 0, mins: 0 }, paid: famPaid[f.id] || 0, b: famBalance(f) }))
