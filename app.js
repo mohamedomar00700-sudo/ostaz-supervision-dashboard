@@ -1427,6 +1427,7 @@ function lowPrepaid(f) {
 function finPeriod() { // فترة قسم المالية المختارة
   const r = state.fin?.range || finRange();
   const whole = r.fromD.getDate() === 1 && r.toD.getDate() === 1 && (r.toD.getMonth() - r.fromD.getMonth() + 12) % 12 === 1;
+  if (r.sel && r.sel !== 'custom' && r.sel !== 'this' && r.sel !== 'last' && FIN_LBL[r.sel]) return { from: r.fromD, to: r.toD, label: `${FIN_LBL[r.sel]} (${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'short', year: 'numeric' })} – ${new Date(r.toD.getTime() - 864e5).toLocaleDateString('ar-EG-u-nu-latn', { month: 'short', year: 'numeric' })})` };
   return { from: r.fromD, to: r.toD, label: whole ? `شهر ${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` : `الفترة من ${r.from} إلى ${r.toIncl}` };
 }
 // ملخص لكل طالب: عدد الحصص لكل مادة والوقت والمبلغ
@@ -1751,6 +1752,9 @@ function openPayoutForm(tutorId) {
 /* ============================================================
    المالية
    ============================================================ */
+const ACADEMY_START = new Date(2025, 5, 1); // أول شهر في الأكاديمية (يونيو 2025)
+const acadStart = d => new Date(d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1, 5, 1); // السنة الدراسية بتبدأ يونيو
+const FIN_LBL = { this: 'الشهر ده', last: 'الشهر اللي فات', q: 'آخر 3 شهور', year: 'السنة دي', lastyear: 'السنة اللي فاتت', ayear: 'السنة الدراسية دي', lastayear: 'السنة الدراسية اللي فاتت', all: 'كل الفترة من أول الأكاديمية' };
 function finRange() {
   const sel = document.getElementById('fin-period').value;
   const now = new Date(), Y = now.getFullYear(), M = now.getMonth();
@@ -1759,6 +1763,9 @@ function finRange() {
   else if (sel === 'q') { from = new Date(Y, M - 2, 1); to = new Date(Y, M + 1, 1); }
   else if (sel === 'year') { from = new Date(Y, 0, 1); to = new Date(Y, M + 1, 1); }
   else if (sel === 'lastyear') { from = new Date(Y - 1, 0, 1); to = new Date(Y, 0, 1); }
+  else if (sel === 'ayear') { from = acadStart(now); to = new Date(Y, M + 1, 1); }
+  else if (sel === 'lastayear') { from = addMonths(acadStart(now), -12); to = acadStart(now); }
+  else if (sel === 'all') { from = new Date(ACADEMY_START.getTime()); to = new Date(Y, M + 1, 1); }
   else if (sel === 'custom') {
     const a = document.getElementById('fin-from').value, b = document.getElementById('fin-to').value;
     from = a ? parseDay(a) : new Date(Y, M, 1);
@@ -1780,8 +1787,9 @@ async function loadFinance(silent) {
   const r = finRange();
   if (!silent) setLoading(true);
   try {
-    const mFrom = addMonths(new Date(r.fromD.getFullYear(), r.fromD.getMonth(), 1), -24); // لمقارنة الفترة اللي قبلها والسنة اللي فاتت
-    const mTo = addMonths(r.toD, -1);
+    const mFrom0 = addMonths(new Date(r.fromD.getFullYear(), r.fromD.getMonth(), 1), -24), mFrom = mFrom0 < ACADEMY_START ? mFrom0 : new Date(ACADEMY_START.getTime()); // لمقارنة الفترة اللي قبلها والسنة اللي فاتت
+    const nowM = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const mTo = addMonths(r.toD > addMonths(nowM, 1) ? r.toD : addMonths(nowM, 1), -1); // لازم يغطي السنة الدراسية دي عشان المقارنة
     const [sessions, tx, payouts, expenses, monthly, history] = await Promise.all([
       q(sb.from('sessions').select('*').gte('scheduled_at', r.fromD.toISOString()).lt('scheduled_at', r.toD.toISOString())),
       q(sb.from('family_transactions').select('*').gte('created_at', r.fromD.toISOString()).lt('created_at', r.toD.toISOString()).order('created_at', { ascending: false })),
@@ -1830,15 +1838,16 @@ function renderFinance() {
   const { sessions, tx, payouts, expenses = [], range } = state.fin;
   const done = sessions.filter(s => s.status === 'done');
   const discEgp = tx.filter(t => t.type === 'discount').reduce((a, t) => a + Number(t.amount) * Number(t.market_rate || fxRate(t.currency)), 0);
-  const rev = done.reduce((a, s) => a + Number(s.revenue_egp || 0), 0) - discEgp;
-  const cost = done.reduce((a, s) => a + charges(s).tut, 0);
-  const hoursDone = occurrences(done).reduce((a, s) => a + sMins(s), 0) / 60;
-  const exp = expenses.reduce((a, e) => a + Number(e.amount_egp), 0), sal = expenses.filter(e => e.category === 'salary').reduce((a, e) => a + Number(e.amount_egp), 0);
+  const hz = histInRange(range); // الشهور القديمة المتسجلة إجمالي (قبل السيستم)
+  const rev = done.reduce((a, s) => a + Number(s.revenue_egp || 0), 0) - discEgp + hz.rev;
+  const cost = done.reduce((a, s) => a + charges(s).tut, 0) + hz.tc;
+  const hoursDone = occurrences(done).reduce((a, s) => a + sMins(s), 0) / 60 + hz.h;
+  const exp = expenses.reduce((a, e) => a + Number(e.amount_egp), 0) + hz.ex, sal = expenses.filter(e => e.category === 'salary').reduce((a, e) => a + Number(e.amount_egp), 0) + hz.ex;
   const net = rev - cost - exp;
-  let cashIn = 0, estCount = 0, fxDiff = 0, fxKnown = 0; const collected = {};
+  let cashIn = hz.rev, estCount = 0, fxDiff = 0, fxKnown = 0; const collected = {};
   tx.forEach(t => { const e = txEgp(t); cashIn += e.v; if (e.est) estCount++; const d = txFxDiff(t); if (d != null) { fxDiff += d; fxKnown++; }
     if (t.type !== 'discount') collected[t.currency] = (collected[t.currency] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount); });
-  const paidOut = payouts.filter(p => p.paid).reduce((a, p) => a + Number(p.total_egp), 0);
+  const paidOut = payouts.filter(p => p.paid).reduce((a, p) => a + Number(p.total_egp), 0) + hz.tc;
   // أرصدة دلوقتي
   const owing = state.families.map(f => ({ f, b: famBalance(f) })).filter(x => x.b.balance < -0.01);
   const recvEgp = owing.reduce((a, x) => a + -x.b.balance * fxRate(x.f.currency), 0);
@@ -1859,6 +1868,7 @@ function renderFinance() {
     const cm = (cur, key, inv) => c ? `مقابل الفترة اللي قبلها ${deltaHtml(cur, c.prev[key], c.prev.any, inv)} · السنة اللي فاتت ${deltaHtml(cur, c.ly[key], c.ly.any, inv)}` : '';
     body = `
       ${isAdmin ? `<div class="section-title"><h2>الربح عن ${esc(periodLbl)}</h2></div>
+      ${hz.n ? `<p class="sub small mb">📚 الفترة دي فيها ${hz.n === 1 ? 'شهر' : hz.n + ' شهور'} من الحسابات القديمة (قبل السيستم) — داخلين في الأرقام كإجمالي، ومعتبرين اتحصّلوا واتصرفوا للمعلمين. تفاصيلهم في "📈 شهر بشهر".</p>` : ''}
       <div class="kpis">
         ${kpiCard('إيراد الحصص اللي تمت', fmt(Math.round(rev)), `ج · ${nSess(unitsOf(occurrences(done)))} · ${fmt(hoursDone, 1)} ساعة`, cm(rev, 'rev'))}
         ${kpiCard('مستحقات المعلمين', fmt(Math.round(cost)), 'ج عن حصص الفترة', cm(cost, 'tc', true))}
@@ -1881,6 +1891,7 @@ function renderFinance() {
         <div class="card kpi clickable" onclick="state.finF_tutors='due'; setFinTab('tutors')"><div class="l">لسه للمعلمين</div><div class="v num">${fmt(Math.round(tutDue))}</div><div class="s">ج · ${tutDueN} معلم/ة</div><div class="s kpi-cmp">اعرض المعلمين ←</div></div>
         ${kpiCard('طلاب حضروا في الفترة', String(activeStu), `${new Set(done.map(s => s.tutor_id)).size} معلم/ة شغالين`)}
       </div>
+      ${isAdmin ? finYearsHtml() : ''}
       ${isAdmin ? finChartHtml(range) : ''}
       ${isAdmin ? finFxHtml(done) : ''}`;
   }
@@ -2011,6 +2022,31 @@ async function copyLastSalaries() {
   } catch (e) { showToast(dbError(e), true); }
 }
 
+// مجموع الشهور القديمة (finance_history شهر واحد) اللي جوه الفترة
+function histInRange(r) {
+  const a = monthKey(r.fromD), b = r.toIncl.slice(0, 7), z = { rev: 0, tc: 0, ex: 0, h: 0, n: 0 };
+  (state.fin?.history || []).forEach(h => { const k = h.period_start.slice(0, 7); if (k !== h.period_end.slice(0, 7) || k < a || k > b) return;
+    z.rev += +h.revenue_egp || 0; z.tc += +h.tutor_cost_egp || 0; z.ex += +h.opex_egp || 0; z.h += +h.hours || 0; z.n++; });
+  return z;
+}
+// مقارنة السنة الدراسية دي باللي فاتت (السنة الدراسية من يونيو لمايو)
+function finYearsHtml() {
+  const now = new Date(), st = acadStart(now), nextM = addMonths(new Date(now.getFullYear(), now.getMonth(), 1), 1);
+  const cur = monthlySum(st, nextM), same = monthlySum(addMonths(st, -12), addMonths(nextM, -12)), full = monthlySum(addMonths(st, -12), st);
+  if (!full.any && !same.any) return '';
+  const ml = d => d.toLocaleDateString('ar-EG-u-nu-latn', { month: 'short', year: 'numeric' }), lastM = addMonths(nextM, -1);
+  const rows = [['الإيراد', 'rev'], ['أجور المعلمين', 'tc', true], ['رواتب ومصروفات وإعلانات', 'ex', true], ['صافي الربح', 'net'], ['الساعات', 'h']];
+  const f = (z, k) => k === 'h' ? fmt(Math.round(z.h)) : fmt(Math.round(z[k]));
+  return `<div class="section-title"><h2>السنة دي مقابل السنة اللي فاتت</h2><button class="btn btn-ghost sm" onclick="document.getElementById('fin-period').value='ayear'; onFinPeriod()">اعرض السنة الدراسية دي ←</button></div>
+    <div class="card scrollx"><table class="fin-years"><thead><tr><th></th>
+      <th>السنة اللي فاتت كاملة<div class="sub small">${ml(addMonths(st, -12))} – ${ml(addMonths(st, -1))}</div></th>
+      <th>نفس الشهور السنة اللي فاتت<div class="sub small">${ml(addMonths(st, -12))} – ${ml(addMonths(lastM, -12))}</div></th>
+      <th>السنة دي لحد دلوقتي<div class="sub small">${ml(st)} – ${ml(lastM)}</div></th><th>التغيير</th></tr></thead><tbody>
+      ${rows.map(([l, k, inv]) => `<tr${k === 'net' ? ' class="fin-total"' : ''}><td><b>${l}</b></td><td class="num">${f(full, k)}</td><td class="num">${f(same, k)}</td><td class="num"><b>${f(cur, k)}</b></td><td class="num">${deltaHtml(cur[k], same[k], same.any, inv)}</td></tr>`).join('')}
+      <tr><td><b>هامش الربح</b></td><td class="num">${full.rev ? Math.round(full.net / full.rev * 100) + '%' : '—'}</td><td class="num">${same.rev ? Math.round(same.net / same.rev * 100) + '%' : '—'}</td><td class="num"><b>${cur.rev ? Math.round(cur.net / cur.rev * 100) + '%' : '—'}</b></td><td></td></tr>
+    </tbody></table></div>
+    <p class="sub small">السنة الدراسية من يونيو لمايو (الأكاديمية بدأت يونيو 2025). "التغيير" = السنة دي مقابل نفس الشهور السنة اللي فاتت. الأرقام بالجنيه.</p>`;
+}
 // رسم بياني شهري بسيط: الإيراد / التكلفة / صافي الربح
 function finChartHtml(range) {
   const rows = (state.fin.monthly || []).filter(m => m.month.slice(0, 7) <= monthKey(addMonths(range.toD, -1)));
