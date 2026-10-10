@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="أستاذ أونلاين">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css?v=ret1">
+<link rel="stylesheet" href="styles.css?v=lead1">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -131,6 +131,8 @@
 
     <!-- الأسر -->
     <section id="view-families" class="hidden">
+      <div class="chips fin-tabs" id="fam-switch"></div>
+      <div id="fam-main">
       <div class="toolbar">
         <input class="input search" id="family-search" placeholder="بحث باسم الأسرة أو الطالب أو الرقم…" oninput="renderFamilies()">
         <button class="btn btn-brand" onclick="openFamilyForm()">+ أسرة جديدة</button>
@@ -138,6 +140,8 @@
       <div class="sstats" id="families-stats"></div>
       <div class="chips" id="family-chips"></div>
       <div id="families-list" class="list grid2"></div>
+      </div>
+      <div id="leads-view" class="hidden"></div>
     </section>
 
     <!-- المعلمون -->
@@ -227,6 +231,6 @@
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
 <script src="tutor.js?v=swap1"></script>
-<script src="app.js?v=pre1"></script>
+<script src="app.js?v=lead1"></script>
 </body>
 </html>

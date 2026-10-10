@@ -350,6 +350,7 @@ function switchTab(t) {
   if (t === 'fin') loadFinance();
   if (t === 'admin') loadSupervisorsList();
   if (t === 'reports') loadReports();
+  if (t === 'families' && !state.leads && !state._leadsLoading) { state._leadsLoading = true; loadLeads().finally(() => state._leadsLoading = false); }
   window.scrollTo(0, 0);
 }
 
@@ -1138,6 +1139,7 @@ function famBalance(f) {
   return { paid: Number(b.paid), consumed: Number(b.consumed), balance: Number(b.paid) - Number(b.consumed), count: Number(b.done_count) };
 }
 function renderFamilies() {
+  renderFamSwitch();
   const term = (document.getElementById('family-search').value || '').trim().toLowerCase();
   const el = document.getElementById('families-list');
   if (!state.families.length) {
@@ -1201,8 +1203,9 @@ function renderFamilies() {
     </div>`;
   }).join('') || `<div class="card empty">لا توجد نتائج.</div>`;
 }
-function openFamilyForm(id) {
-  const f = id ? byId(state.families, id) : null;
+function openFamilyForm(id, pre) {
+  const f = id ? byId(state.families, id) : (pre || null);
+  const isNew = !id;
   const fields = [
     { name: 'name', label: 'اسم الأسرة', required: true, value: f?.name, placeholder: 'مثال: أسرة أحمد الشهري' },
     { name: 'parent_name', label: 'اسم ولي الأمر', value: f?.parent_name },
@@ -1219,22 +1222,23 @@ function openFamilyForm(id) {
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: f?.notes },
   ];
   let extra = '';
-  if (!f) extra = `<h3 class="mt">أول طالب (اختياري)</h3>` + [
+  if (isNew) extra = `<h3 class="mt">أول طالب (اختياري)</h3>` + [
     { name: 'st_name', label: 'اسم الطالب' },
     [{ name: 'st_grade', label: 'الصف', list: GRADES }, { name: 'st_curr', label: 'المنهج', type: 'select', value: 'arabic', options: Object.entries(CURRICULA).map(([v, l]) => ({ v, l })) }],
     { name: 'st_price', label: 'سعر الساعة (بعملة الأسرة)', type: 'number' },
   ].map(x => Array.isArray(x) ? `<div class="field-row">${x.map(fieldHtml).join('')}</div>` : fieldHtml(x)).join('');
-  openModal(f ? 'تعديل الأسرة' : 'أسرة جديدة', formHtml(fields, 'حفظ', extra));
+  openModal(!isNew ? 'تعديل الأسرة' : 'أسرة جديدة', formHtml(fields, 'حفظ', extra));
   document.getElementById('f_country').addEventListener('change', e => {
     document.getElementById('f_currency').value = COUNTRIES[e.target.value].cur;
   });
   window._formSubmit = () => runSubmit(async () => {
     const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), acquisition: fv('acquisition') || null, billing_cycle: fv('billing_cycle'), cycle_start: fv('cycle_start') || null, package_size: fnum('package_size') || null, notes: fv('notes') || null };
-    if (!f && fv('st_name') && !fv('st_grade')) return formError('اكتب صف الطالب أو امسح اسمه');
-    if (f) {
+    if (isNew && fv('st_name') && !fv('st_grade')) return formError('اكتب صف الطالب أو امسح اسمه');
+    if (!isNew) {
       await q(sb.from('families').update(row).eq('id', f.id));
     } else {
       const [nf] = await q(sb.from('families').insert(row).select());
+      if (pre?._leadId) { await q(sb.from('leads').update({ family_id: nf.id, status: 'won', stage: 4, status_at: new Date().toISOString() }).eq('id', pre._leadId)); state.leads = null; }
       if (fv('st_name')) {
         await q(sb.from('students').insert({ family_id: nf.id, name: fv('st_name'), grade_level: fv('st_grade'), curriculum: fv('st_curr'), default_price: fnum('st_price') }));
       }
@@ -4483,6 +4487,154 @@ function renderRetention() {
     ${z.fresh.length ? `<div class="section-title"><h2>✨ جداد السنة دي (${z.fresh.length})</h2></div><div class="card item">${z.fresh.map(x => `<div class="dist-row"><span class="dist-k">${esc(x.name)}</span><span class="sub small">${esc(x.src || '')}</span><span class="sub small">من ${ml(x.firstMonth)}</span></div>`).join('')}</div>` : ''}
     ${z.never.length ? `<div class="section-title"><h2>🫥 متسجلين ومحضروش ولا حصة (${z.never.length})</h2></div><div class="card item">${z.never.map(f => `<div class="dist-row"><span class="dist-k">${esc(f.name)}</span></div>`).join('')}</div>` : ''}
     <p class="sub small mt">الأسر القديمة اللي قبل السيستم جاية من الحسابات القديمة (من غير أرقام تليفونات) — الرسالة بتتنسخ وتبعتها إنت من الواتساب.</p>`;
+}
+
+/* ============================================================
+   الاستفسارات (Leads): كل حد سأل → تجريبية → اشترك أو لأ
+   ============================================================ */
+const LEAD_ST = { new: { l: 'جديد', c: 'b-sched' }, talking: { l: 'بنتكلم', c: 'b-pending' }, trial_booked: { l: 'تجريبية محجوزة', c: 'b-trial' },
+  trial_done: { l: 'حضر التجريبية', c: 'b-rev' }, won: { l: '✅ اشترك', c: 'b-done' }, lost: { l: 'ماشتركش', c: 'b-cancel' }, later: { l: '⏳ بعدين', c: 'b-pending' } };
+const LEAD_STAGE = { new: 0, talking: 1, trial_booked: 2, trial_done: 3, won: 4 };
+const LEAD_SRC = { instagram: '📸 إنستجرام', whatsapp: '💬 واتساب', referral: '🤝 ترشيح', facebook: '📘 فيسبوك', tiktok: '🎵 تيك توك', other: 'تاني' };
+const LEAD_LOST = ['السعر غالي', 'المواعيد مش مناسبة', 'مردّش بعد التجريبية', 'مردّش خالص', 'مش مقتنع بالأونلاين', 'لقى مدرّس تاني', 'كان بيسأل بس', 'تاني'];
+function renderFamSwitch() {
+  const el = document.getElementById('fam-switch'); if (!el) return;
+  const v = state.famView || 'fams', due = (state.leads || []).filter(leadDue).length;
+  el.innerHTML = `<button class="chip ${v === 'fams' ? 'active' : ''}" onclick="setFamView('fams')">👨‍👩‍👧 الأسر</button>
+    <button class="chip ${v === 'leads' ? 'active' : ''}" onclick="setFamView('leads')">📥 الاستفسارات${due ? ` <span class="badge b-cancel">${due}</span>` : ''}</button>`;
+}
+function setFamView(v) {
+  state.famView = v; renderFamSwitch();
+  document.getElementById('fam-main').classList.toggle('hidden', v !== 'fams');
+  document.getElementById('leads-view').classList.toggle('hidden', v !== 'leads');
+  if (v === 'leads') { if (!state.leads) loadLeads(); else renderLeads(); }
+}
+async function loadLeads() {
+  const el = document.getElementById('leads-view'); if (!state.leads) el.innerHTML = '<div class="card empty">بيحمّل…</div>';
+  try { state.leads = await fetchAll(() => sb.from('leads').select('*').order('created_at', { ascending: false })); }
+  catch (e) { showToast(dbError(e), true); state.leads = []; }
+  renderFamSwitch(); renderLeads();
+}
+const leadOpen = l => !['won', 'lost'].includes(l.status);
+const leadDue = l => leadOpen(l) && (l.next_followup ? l.next_followup <= todayStr() : l.status === 'new');
+function leadRange() {
+  const p = state.leadPeriod || 'all', n = new Date();
+  if (p === 'month') return new Date(n.getFullYear(), n.getMonth(), 1);
+  if (p === '30') return new Date(n.getTime() - 30 * 864e5);
+  if (p === '90') return new Date(n.getTime() - 90 * 864e5);
+  return null;
+}
+function leadFunnel(list) {
+  const n = list.length, talk = list.filter(l => l.stage >= 1 || l.status === 'lost' || l.status === 'later').length;
+  const booked = list.filter(l => l.stage >= 2).length, came = list.filter(l => l.stage >= 3).length, won = list.filter(l => l.status === 'won').length;
+  return { n, talk, booked, came, won };
+}
+const pctOf = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
+function renderLeads() {
+  const el = document.getElementById('leads-view'); if (!el) return;
+  const all = state.leads || [], from = leadRange();
+  const inP = from ? all.filter(l => new Date(l.created_at) >= from) : all;
+  const F = state.leadFilter || 'open', Q = normAr(state.leadQ || '');
+  const tests = { open: leadOpen, due: leadDue, new: l => l.status === 'new', talking: l => l.status === 'talking', trial_booked: l => l.status === 'trial_booked', trial_done: l => l.status === 'trial_done', won: l => l.status === 'won', lost: l => l.status === 'lost', later: l => l.status === 'later', all: () => true };
+  const chips = [['due', '🔔 محتاج متابعة'], ['open', 'مفتوح'], ['new', 'جديد'], ['talking', 'بنتكلم'], ['trial_booked', 'تجريبية محجوزة'], ['trial_done', 'حضر التجريبية'], ['won', 'اشترك'], ['lost', 'ماشتركش'], ['later', 'بعدين'], ['all', 'الكل']];
+  const rows = inP.filter(tests[F] || tests.open).filter(l => !Q || normAr(`${l.name} ${l.phone || ''} ${l.kids || ''} ${l.notes || ''} ${l.campaign || ''} ${l.referred_by || ''}`).includes(Q))
+    .sort((a, b) => (leadDue(b) - leadDue(a)) || (b.created_at > a.created_at ? 1 : -1));
+  const f = leadFunnel(inP);
+  const bySrc = {}; inP.forEach(l => { (bySrc[l.source] ||= []).push(l); });
+  const lostR = {}; inP.filter(l => l.status === 'lost').forEach(l => { const k = l.lost_reason || 'من غير سبب'; lostR[k] = (lostR[k] || 0) + 1; });
+  const step = (lbl, v, base, sub) => `<div class="card kpi"><div class="l">${lbl}</div><div class="v num">${v}</div><div class="s">${sub || ''}${base != null ? ` <b>${pctOf(v, base)}</b>` : ''}</div></div>`;
+  el.innerHTML = `
+    <div class="toolbar"><input class="input search" placeholder="🔎 ابحث بالاسم أو الرقم أو الأولاد…" value="${esc(state.leadQ || '')}" oninput="state.leadQ=this.value; renderLeads(); this.focus(); this.setSelectionRange(this.value.length, this.value.length)">
+      <select class="input" style="max-width:180px" onchange="state.leadPeriod=this.value; renderLeads()">${[['all', 'من الأول'], ['month', 'الشهر ده'], ['30', 'آخر 30 يوم'], ['90', 'آخر 3 شهور']].map(([v, l]) => `<option value="${v}" ${(state.leadPeriod || 'all') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <button class="btn btn-brand" onclick="openLeadForm()">+ استفسار جديد</button></div>
+    <div class="kpis">
+      ${step('📥 استفسروا', f.n, null, 'في الفترة')}
+      ${step('🧪 حجزوا تجريبية', f.booked, f.n, 'من اللي استفسروا')}
+      ${step('🎒 حضروا التجريبية', f.came, f.booked, 'من اللي حجزوا')}
+      ${step('✅ اشتركوا', f.won, f.came, 'من اللي حضروا')}
+    </div>
+    ${f.n ? `<p class="sub small mb">من كل 10 بيستفسروا، حوالي <b>${f.n ? Math.round(f.won / f.n * 10) : 0}</b> بيشتركوا (${pctOf(f.won, f.n)}).</p>` : ''}
+    ${Object.keys(bySrc).length ? `<div class="grid2 biz-grid"><div class="card item"><h3>حسب المصدر</h3>${Object.entries(bySrc).sort((a, b) => b[1].length - a[1].length).map(([k, ls]) => { const z = leadFunnel(ls); return `<div class="dist-row"><span class="dist-k">${LEAD_SRC[k] || esc(k)}</span><span class="sub small">${z.n} استفسار · ${z.booked} تجريبية</span><span class="num"><b>${z.won}</b> اشترك</span><span class="num small sub">${pctOf(z.won, z.n)}</span></div>`; }).join('')}</div>
+      <div class="card item"><h3>ليه ماشتركوش؟</h3>${Object.entries(lostR).sort((a, b) => b[1] - a[1]).map(([k, c]) => `<div class="dist-row"><span class="dist-k">${esc(k)}</span><span class="num"><b>${c}</b></span></div>`).join('') || '<div class="sub small">لسه مفيش</div>'}</div></div>` : ''}
+    <div class="chips mt">${chips.map(([k, l]) => { const c = inP.filter(tests[k]).length; return (c || k === F || ['due', 'open', 'all'].includes(k)) ? `<button class="chip ${F === k ? 'active' : ''}" onclick="state.leadFilter='${k}'; renderLeads()">${l} <span class="sub">${c}</span></button>` : ''; }).join('')}</div>
+    <div class="list">${rows.map(leadCard).join('') || `<div class="card empty">${all.length ? 'مفيش استفسارات بالفلتر ده' : 'سجّل أول استفسار — كل حد يسأل على إنستجرام أو واتساب'}<br><button class="btn btn-brand mt" onclick="openLeadForm()">+ استفسار جديد</button></div>`}</div>`;
+}
+function leadCard(l) {
+  const st = LEAD_ST[l.status] || LEAD_ST.new, id = jsq(l.id), due = leadDue(l);
+  const next = { new: ['talking', '💬 كلّمته'], talking: ['trial_booked', '🧪 حجز تجريبية'], trial_booked: ['trial_done', '🎒 حضر التجريبية'], trial_done: ['won', '✅ اشترك'], later: ['talking', '💬 رجعنا نتكلم'] }[l.status];
+  const fam = l.family_id ? byId(state.families, l.family_id) : null;
+  const wa = l.phone ? l.phone.replace(/[^0-9]/g, '') : '';
+  return `<div class="card item fin-row${due ? ' lead-due' : ''}">
+    <div class="item-head"><div><div class="item-title">${COUNTRIES[l.country]?.flag || ''} ${esc(l.name)}</div>
+      <div class="sub small">${LEAD_SRC[l.source] || esc(l.source)}${l.referred_by ? ' · من ' + esc(l.referred_by) : ''}${l.campaign ? ' · ' + esc(l.campaign) : ''} · ${fmtShortDate(l.created_at)}</div></div>
+      <span class="badge ${st.c}">${st.l}</span></div>
+    ${l.kids ? `<div class="small">🎒 ${esc(l.kids)}</div>` : ''}
+    ${l.status === 'lost' && l.lost_reason ? `<div class="small neg">السبب: ${esc(l.lost_reason)}</div>` : ''}
+    ${l.next_followup && leadOpen(l) ? `<div class="small ${due ? 'neg' : 'sub'}">🔔 متابعة: ${fmtShortDate(l.next_followup + 'T12:00')}${due ? ' — النهارده أو فات' : ''}</div>` : (l.status === 'new' ? '<div class="small neg">🔔 لسه محدش رد عليه</div>' : '')}
+    ${l.notes ? `<div class="sub small">${esc(l.notes)}</div>` : ''}
+    ${fam ? `<div class="small pos">✓ بقت أسرة: ${esc(fam.name)}</div>` : ''}
+    <div class="actions">
+      ${next ? `<button class="btn btn-brand sm" onclick="leadStatus(${id}, '${next[0]}')">${next[1]}</button>` : ''}
+      ${l.status === 'won' && !fam ? `<button class="btn btn-brand sm" onclick="leadToFamily(${id})">➕ سجّلها أسرة</button>` : ''}
+      ${leadOpen(l) ? `<button class="btn btn-ghost sm" onclick="leadLost(${id})">✖ ماشتركش</button>` : ''}
+      ${wa ? `<a class="btn btn-wa sm" href="https://wa.me/${wa}" target="_blank" rel="noopener">📲 واتساب</a>` : ''}
+      <button class="btn btn-ghost sm" onclick="openLeadForm(${id})">✎ تعديل</button></div></div>`;
+}
+async function leadStatus(id, status, extra = {}) {
+  const l = (state.leads || []).find(x => x.id === id); if (!l) return;
+  const row = { status, status_at: new Date().toISOString(), ...extra };
+  if (LEAD_STAGE[status] != null) row.stage = Math.max(l.stage || 0, LEAD_STAGE[status]);
+  if (status === 'won' || status === 'lost') row.next_followup = null;
+  try { await q(sb.from('leads').update(row).eq('id', id)); Object.assign(l, row); showToast(`${LEAD_ST[status].l} ✓`); renderFamSwitch(); renderLeads();
+    if (status === 'won' && !l.family_id) leadToFamily(id); }
+  catch (e) { showToast(dbError(e), true); }
+}
+function leadLost(id) {
+  const l = state.leads.find(x => x.id === id);
+  openModal(`ماشتركش — ${l.name}`, formHtml([
+    { name: 'lost_reason', label: 'السبب', type: 'select', required: true, options: LEAD_LOST.map(x => ({ v: x, l: x })), placeholder: 'اختار…' },
+    { name: 'notes', label: 'ملاحظات', type: 'textarea', value: l.notes },
+    { name: 'later', label: 'ممكن نرجعله تاني؟ (تاريخ متابعة)', type: 'date', hint: 'لو حطيت تاريخ هيتسجّل "بعدين" بدل "ماشتركش"' },
+  ], 'حفظ'));
+  window._formSubmit = () => runSubmit(async () => {
+    const later = fv('later');
+    closeModal(); await leadStatus(id, later ? 'later' : 'lost', { lost_reason: fv('lost_reason'), notes: fv('notes') || null, next_followup: later || null });
+  });
+}
+function leadToFamily(id) {
+  const l = state.leads.find(x => x.id === id); if (!l) return;
+  const c = COUNTRIES[l.country] ? l.country : 'الإمارات';
+  const acq = l.source === 'referral' ? `إحالة${l.referred_by ? ' من ' + l.referred_by : ''}` : `${(LEAD_SRC[l.source] || l.source).replace(/^\S+\s/, '')}${l.campaign ? ' — ' + l.campaign : ''}`;
+  openFamilyForm(null, { _leadId: l.id, name: /^(أسرة|عائلة)/.test(l.name) ? l.name : 'أسرة ' + l.name, country: c, currency: COUNTRIES[c].cur, whatsapp: (l.phone || '').replace(/[^0-9]/g, ''), acquisition: acq, notes: l.kids || '' });
+}
+function openLeadForm(id) {
+  const l = id ? state.leads.find(x => x.id === id) : null;
+  const fields = [
+    { name: 'name', label: 'الاسم (ولي الأمر / الأسرة)', required: true, value: l?.name, placeholder: 'مثال: أم محمد' },
+    [{ name: 'phone', label: 'رقم الواتساب', type: 'tel', value: l?.phone, placeholder: '9715xxxxxxxx' },
+     { name: 'country', label: 'الدولة', type: 'select', value: l?.country || 'الإمارات', options: Object.keys(COUNTRIES).map(k => ({ v: k, l: `${COUNTRIES[k].flag} ${k}` })) }],
+    [{ name: 'source', label: 'جه منين؟', type: 'select', required: true, value: l?.source || 'instagram', options: Object.entries(LEAD_SRC).map(([v, x]) => ({ v, l: x })) },
+     { name: 'campaign', label: 'الحملة / الإعلان', value: l?.campaign, placeholder: 'مثال: إعلان الإمارات أكتوبر' }],
+    { name: 'referred_by', label: 'لو ترشيح: مين رشّحه؟', value: l?.referred_by, list: state.families.map(f => f.name) },
+    { name: 'kids', label: 'الأولاد والصفوف والمواد', type: 'textarea', value: l?.kids, placeholder: 'مثال: بنت الصف الخامس رياضيات وإنجليزي · منهج إماراتي' },
+    [{ name: 'status', label: 'الحالة', type: 'select', value: l?.status || 'new', options: Object.entries(LEAD_ST).map(([v, x]) => ({ v, l: x.l })) },
+     { name: 'next_followup', label: 'أكلمه تاني يوم', type: 'date', value: l?.next_followup || '' }],
+    { name: 'lost_reason', label: 'لو ماشتركش: ليه؟', type: 'select', value: l?.lost_reason || '', options: LEAD_LOST.map(x => ({ v: x, l: x })), placeholder: '—' },
+    { name: 'notes', label: 'ملاحظات', type: 'textarea', value: l?.notes },
+  ];
+  const del = l ? `<button type="button" class="btn btn-danger" style="margin-top:6px" onclick="closeModal(); confirmDelete(${jsq('الاستفسار ' + l.name)}, async () => { await q(sb.from('leads').delete().eq('id', ${jsq(l.id)})); state.leads = state.leads.filter(x => x.id !== ${jsq(l.id)}); renderLeads(); })">حذف</button>` : '';
+  openModal(l ? 'تعديل استفسار' : 'استفسار جديد', formHtml(fields, 'حفظ', del));
+  window._formSubmit = () => runSubmit(async () => {
+    const status = fv('status');
+    const row = { name: fv('name'), phone: fv('phone') || null, country: fv('country') || null, source: fv('source'), campaign: fv('campaign') || null, referred_by: fv('referred_by') || null,
+      kids: fv('kids') || null, status, next_followup: fv('next_followup') || null, lost_reason: status === 'lost' || status === 'later' ? (fv('lost_reason') || null) : null, notes: fv('notes') || null };
+    if (LEAD_STAGE[status] != null) row.stage = Math.max(l?.stage || 0, LEAD_STAGE[status]);
+    if (!l || l.status !== status) row.status_at = new Date().toISOString();
+    if (l) { await q(sb.from('leads').update(row).eq('id', l.id)); Object.assign(l, row); }
+    else { const [n] = await q(sb.from('leads').insert(row).select()); (state.leads ||= []).unshift(n); }
+    closeModal(); showToast('تم الحفظ ✓'); renderFamSwitch(); renderLeads();
+    if (status === 'won' && !(l && l.family_id)) leadToFamily((l || state.leads[0]).id);
+  });
 }
 
 /* ============================================================
