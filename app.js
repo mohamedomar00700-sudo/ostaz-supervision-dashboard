@@ -4409,9 +4409,11 @@ function finCollectHtml() {
       <div class="meta"><span>عليها: <b class="num"><bdi>${fmt(x.b, 2)} ${x.cur}</bdi></b></span><span>اتحصّل: <b class="num pos"><bdi>${fmt(x.c, 2)} ${x.cur}</bdi></b></span>${x.rem > 0.01 ? `<span>لسه: <b class="num neg"><bdi>${fmt(x.rem, 2)} ${x.cur}</bdi></b></span>` : ''}${x.adv > 0.01 ? `<span class="sub">رصيد مقدّم: <bdi>${fmt(x.adv, 2)} ${x.cur}</bdi></span>` : ''}</div>
       ${x.rem > 0.01 ? `<div class="actions"><button class="btn btn-wa sm" onclick="openFamilyInvoice(${jsq(x.f.id)}, 'fin')">📄 فاتورة</button><button class="btn btn-brand sm" onclick="openPaymentForm(${jsq(x.f.id)})">+ دفعة</button></div>` : ''}</div>`).join('') || '<div class="card empty">مفيش حصص في الفترة دي</div>'}</div>`;
 }
-function openHistoryDetail(id) {
+async function openHistoryDetail(id) {
   const h = (state.fin.history || []).find(x => x.id === id); if (!h) return;
-  const d = h.details || {}, fx = +h.fx_aed || 13;
+  const d = { ...(h.details || {}) }, fx = +h.fx_aed || 13;
+  if (!d.families) { const rows = await sb.from('family_history').select('*').eq('month', h.period_start).order('amount', { ascending: false }).then(x => x.data || []);
+    if (rows.length) d.families = rows.map(r => ({ name: r.family_name, sessions: +r.hours, aed: +r.amount })); }
   openModal(`📚 ${new Date(h.period_start + 'T12:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })} — سجلات قديمة`, `
     <div class="kpis mb">${kpiCard('الإيراد', fmt(+h.revenue_egp), `ج${h.revenue_aed ? ` · ${fmt(+h.revenue_aed, 2)} درهم` : ''}`)}${kpiCard('المعلمين', fmt(+h.tutor_cost_egp), 'ج')}${kpiCard('المصاريف', fmt(+h.opex_egp), 'ج')}
       ${kpiCard('صافي الربح', fmt(+h.revenue_egp - +h.tutor_cost_egp - +h.opex_egp), `ج · ${Math.round((+h.revenue_egp - +h.tutor_cost_egp - +h.opex_egp) / +h.revenue_egp * 100)}%`, '', { vcls: 'pos' })}</div>
