@@ -1153,7 +1153,7 @@ function renderFamilies() {
   const fams = state.families.filter(f => state.students.some(s => s.family_id === f.id)), act = state.act || { stu: new Set() };
   const actFam = new Set(state.students.filter(s => act.stu.has(s.id)).map(s => s.family_id));
   const byC = {}; fams.forEach(f => byC[f.country || '—'] = (byC[f.country || '—'] || 0) + 1);
-  document.getElementById('families-stats').innerHTML = `<div class="sstat"><b class="num">${fams.length}</b><span>أسرة</span></div><div class="sstat"><b class="num">${state.students.length}</b><span>طالب</span></div>
+  document.getElementById('families-stats').innerHTML = `<div class="sstat"><b class="num">${fams.length}</b><span>أسرة متسجلة</span></div><div class="sstat"><b class="num">${state.students.length}</b><span>طالب</span></div>
     <div class="sstat"><b class="num pos">${act.stu.size}</b><span>طالب حضر آخر 30 يوم</span></div><div class="sstat"><b class="num pos">${actFam.size}</b><span>أسرة نشطة</span></div>
     ${Object.entries(byC).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<div class="sstat"><b class="num">${n}</b><span>${(COUNTRIES[c]?.flag || '') + ' ' + esc(c)}</span></div>`).join('')}`;
   const list = state.families.filter(FF[state.famFilter || 'all'] || FF.all).filter(f => {
@@ -4220,12 +4220,13 @@ async function loadBusiness() {
   setLoading(true);
   try {
     const cols = 'id,student_id,tutor_id,status,scheduled_at,duration_minutes,actual_minutes,subject,kind,group_key,revenue_egp,tutor_charge_egp,student_charge,student_currency,cancel_reason,trial_outcome,trial_switched_to,created_at';
-    const [ss, reps, monthly] = await Promise.all([
+    const [ss, reps, monthly, fh] = await Promise.all([
       fetchAll(() => sb.from('sessions').select(cols).gte('scheduled_at', from.toISOString()).lte('scheduled_at', new Date(now.getTime() + 864e5).toISOString()).order('scheduled_at')),
       q(sb.from('session_reports').select('session_id,group_key,created_at').gte('created_at', new Date(now.getTime() - 40 * 864e5).toISOString())),
       isAdmin ? sb.rpc('finance_monthly', { p_from: dateStr(from), p_to: dateStr(now) }).then(x => x.data || []) : [],
+      sb.from('family_history').select('family_name,family_id').then(x => x.data || []),
     ]);
-    state.biz = { ss, reps, monthly, at: Date.now() };
+    state.biz = { ss, reps, monthly, fh, at: Date.now() };
     renderReports();
   } catch (e) { showToast(dbError(e), true); } finally { setLoading(false); }
 }
@@ -4271,8 +4272,9 @@ function bizCompute() {
   const recv = owing.reduce((a, x) => a + -x.b.balance * fxRate(x.f.currency), 0);
   const tutDue = state.tutors.reduce((a, t) => a + Math.max(0, tutBalance(t).due), 0);
   const famWithStu = state.families.filter(f => state.students.some(s => s.family_id === f.id));
+  const everFam = famWithStu.length + new Set((state.biz.fh || []).filter(h => !h.family_id || !byId(state.families, h.family_id)).map(h => h.family_name)).size;
   return { A, P, MM, lastFull, byCountry, byCurr, byStage, bySubj, topFam, topTut, commit, cS, cT, repBase: repBase.length, repDone, trials: trials.length, trialWon, trialDecided, owing, recv, tutDue,
-    totals: { fam: famWithStu.length, stu: state.students.length, tut: state.tutors.length, linked: linked.size } };
+    totals: { fam: famWithStu.length, ever: everFam, stu: state.students.length, tut: state.tutors.length, linked: linked.size } };
 }
 function normSubj(s) { s = (s || '').trim(); if (!s) return 'غير محدد'; if (/رياض|math/i.test(s)) return 'رياضيات'; if (/إنج|انج|english/i.test(s)) return 'إنجليزي'; if (/عربي|لغة عربية|arabic/i.test(s)) return 'عربي';
   if (/علوم|science/i.test(s)) return 'علوم'; if (/قرآن|قران|إسلام|اسلام|دين/.test(s)) return 'قرآن وتربية إسلامية'; return s; }
@@ -4315,7 +4317,7 @@ function renderBusiness() {
     <div class="biz-hero card">
       <div class="biz-hero-t"><img src="logo.png" alt="" onerror="this.remove()"><div><h2>أكاديمية أستاذ أونلاين</h2><div class="sub">دروس خصوصية 1-on-1 أونلاين · طلاب في الإمارات والسعودية ومصر · معلمين من مصر</div></div></div>
       <div class="biz-hero-n">
-        <div><b class="num">${z.totals.fam}</b><span>أسرة</span></div><div><b class="num">${z.totals.stu}</b><span>طالب</span></div>
+        <div title="الأسر اللي ليها ملف وطلاب على السيستم دلوقتي"><b class="num">${z.totals.fam}</b><span>أسرة متسجلة</span></div>${z.totals.ever > z.totals.fam ? `<div title="كل الأسر اللي اتعاملنا معاها — شامل أسر الحسابات القديمة"><b class="num">${z.totals.ever}</b><span>أسرة من أول الأكاديمية</span></div>` : ''}<div><b class="num">${z.totals.stu}</b><span>طالب متسجل</span></div>
         <div><b class="num">${z.totals.tut}</b><span>معلم/ة</span></div><div><b class="num">${fmt(Math.round(A.h))}</b><span>ساعة آخر 30 يوم</span></div>
         ${isAdmin ? `<div><b class="num">${fmtK(runRev)}</b><span>إيراد سنوي متوقع (ج)</span></div>` : ''}
       </div>
