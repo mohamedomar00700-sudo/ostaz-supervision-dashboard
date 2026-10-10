@@ -1214,6 +1214,7 @@ function openFamilyForm(id) {
     [{ name: 'cycle_start', label: 'بداية الباقة الحالية', type: 'date', value: f?.cycle_start || '', hint: 'للباقة بس — عدّ الحصص في التقرير بيبدأ من هنا' },
      { name: 'package_size', label: 'عدد حصص الباقة', type: 'number', value: f?.package_size ?? '', hint: 'مثال: 16' }],
     { name: 'whatsapp_group', label: 'لينك جروب واتساب الأسرة', type: 'url', value: f?.whatsapp_group, placeholder: 'https://chat.whatsapp.com/…' },
+    { name: 'acquisition', label: 'جت لنا منين؟', value: f?.acquisition, placeholder: 'إحالة من أسرة … / حملة إعلانية / سوشيال ميديا', hint: 'بيظهر في لوحة الأعمال (مصادر العملاء)' },
     { name: 'whatsapp', label: 'رقم واتساب ولي الأمر', type: 'tel', value: f?.whatsapp, placeholder: '9665xxxxxxxx', hint: 'بكود الدولة — للاستخدام الداخلي فقط ولا يظهر للمعلم' },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: f?.notes },
   ];
@@ -1228,7 +1229,7 @@ function openFamilyForm(id) {
     document.getElementById('f_currency').value = COUNTRIES[e.target.value].cur;
   });
   window._formSubmit = () => runSubmit(async () => {
-    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), billing_cycle: fv('billing_cycle'), cycle_start: fv('cycle_start') || null, package_size: fnum('package_size') || null, notes: fv('notes') || null };
+    const row = { name: fv('name'), parent_name: fv('parent_name') || null, country: fv('country'), currency: fv('currency'), whatsapp: fv('whatsapp') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), acquisition: fv('acquisition') || null, billing_cycle: fv('billing_cycle'), cycle_start: fv('cycle_start') || null, package_size: fnum('package_size') || null, notes: fv('notes') || null };
     if (!f && fv('st_name') && !fv('st_grade')) return formError('اكتب صف الطالب أو امسح اسمه');
     if (f) {
       await q(sb.from('families').update(row).eq('id', f.id));
