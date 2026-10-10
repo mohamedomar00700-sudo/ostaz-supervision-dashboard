@@ -2083,7 +2083,8 @@ function finFxHtml(done) {
 async function openFamilyStatement(familyId) {
   const f = byId(state.families, familyId), cur = f.currency, ids = state.students.filter(s => s.family_id === familyId).map(s => s.id);
   try {
-    const [ss, tx] = await Promise.all([ids.length ? q(sb.from('sessions').select('*').in('student_id', ids).eq('status', 'done').order('scheduled_at')) : [], q(sb.from('family_transactions').select('*').eq('family_id', familyId).order('created_at'))]);
+    const [ss, tx, old] = await Promise.all([ids.length ? q(sb.from('sessions').select('*').in('student_id', ids).eq('status', 'done').order('scheduled_at')) : [], q(sb.from('family_transactions').select('*').eq('family_id', familyId).order('created_at')),
+      sb.from('family_history').select('*').eq('family_id', familyId).order('month').then(x => x.data || [])]);
     const byM = {};
     ss.forEach(s => { const k = monthKey(new Date(s.scheduled_at)); const x = byM[k] ||= { charge: 0, mins: 0, paid: 0 }; const c = charges(s).fam; x.charge += c; if (c > 0) x.mins += sMins(s); });
     tx.forEach(t => { const k = monthKey(new Date(t.created_at)); (byM[k] ||= { charge: 0, mins: 0, paid: 0 }).paid += (t.type === 'refund' ? -1 : 1) * Number(t.amount); });
@@ -2094,6 +2095,11 @@ async function openFamilyStatement(familyId) {
         <td class="num">${fmt(r.charge, 2)}</td><td class="num pos">${r.paid ? fmt(r.paid, 2) : '—'}</td><td class="num ${r.bal < -0.01 ? 'neg' : 'pos'}"><b>${r.bal < -0.01 ? 'عليها ' : 'ليها '}${fmt(Math.abs(r.bal), 2)}</b></td></tr>`).join('') || '<tr><td colspan="5" class="empty">مفيش حركة</td></tr>'}
       </tbody></table></div><p class="sub small">المبالغ بالـ ${cur}. الرصيد تراكمي من أول تعامل.</p>
       ${tx.length ? `<details class="mt"><summary class="sub">الدفعات (${tx.length})</summary><div class="list mt">${tx.slice().reverse().map(t => `<div class="card item"><div class="item-head"><span>${fmtShortDate(t.created_at)} · ${esc(t.method || '')}</span><b class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'discount' ? '🎁 خصم ' : t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</b></div>${t.note ? `<div class="sub small">${esc(t.note)}</div>` : ''}</div>`).join('')}</div></details>` : ''}
+      ${old.length ? `<details class="mt" ${ss.length ? '' : 'open'}><summary class="sub">📚 الحسابات القديمة قبل السيستم (${old.length} شهر · ${fmt(old.reduce((a, h) => a + Number(h.amount), 0), 2)} ${esc(old[0].currency)})</summary>
+        <div class="list mt">${old.map(h => `<div class="card item"><div class="item-head"><b>${new Date(h.month + 'T12:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}</b>
+          <b class="num">${fmt(h.amount, 2)} ${esc(h.currency)}</b></div><div class="sub small">${h.hours ? fmtU(+h.hours) + ' حصة' : ''}${h.price ? ` × ${fmt(h.price)}` : ''}${h.details ? ' · ' + esc(h.details) : ''}</div>
+          ${h.flag ? `<div class="small warn-txt mt">⚠️ ${esc(h.flag)}</div>` : ''}</div>`).join('')}</div>
+        <p class="sub small">الحسابات دي من الرسايل القديمة، ومش داخلة في رصيد الأسرة الحالي.</p></details>` : ''}
       <div class="modal-foot"><button class="btn btn-wa" onclick="openFamilyInvoice(${jsq(familyId)})">📄 فاتورة</button><button class="btn btn-brand" onclick="openPaymentForm(${jsq(familyId)})">+ دفعة</button></div>`);
   } catch (e) { showToast(dbError(e), true); }
 }
@@ -4413,5 +4419,6 @@ function openHistoryDetail(id) {
       ${d.families.map(f => `<tr><td>${esc(f.name)}</td><td class="num">${f.students || '—'}</td><td class="num">${f.sessions ?? '—'}</td><td class="num">${fmt(f.aed, 2)}</td><td class="num">${fmt(f.aed * fx, 2)}</td></tr>`).join('')}</tbody></table></div>` : ''}
     ${d.tutors ? `<h3 class="mt">المعلمين (${d.tutors.length})</h3><div class="scrollx"><table><thead><tr><th>المعلمة</th><th>المادة</th><th>حصص</th><th>جنيه</th></tr></thead><tbody>
       ${d.tutors.map(t => `<tr><td>${esc(t.name)}</td><td class="small">${esc(t.subject || '')}</td><td class="num">${t.sessions ?? '—'}</td><td class="num">${fmt(t.egp)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${d.gaps?.length ? `<h3 class="mt">⚠️ فجوات لسه مفتوحة (${d.gaps.length})</h3><div class="card item">${d.gaps.map(g => `<div class="small" style="padding:3px 0">• ${esc(typeof g === 'string' ? g : `${g.student}: ${g.subject} — الأسرة ${g.family_h} / المعلمات ${g.tutors_h}`)}</div>`).join('')}</div>` : ''}
     <p class="sub small mt">${esc(h.source || '')}${h.note ? ' · ' + esc(h.note) : ''}</p>`);
 }
