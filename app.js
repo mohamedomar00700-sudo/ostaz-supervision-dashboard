@@ -1753,7 +1753,7 @@ function openPayoutForm(tutorId) {
    المالية
    ============================================================ */
 const ACADEMY_START = new Date(2025, 5, 1); // أول شهر في الأكاديمية (يونيو 2025)
-const acadStart = d => new Date(d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1, 5, 1); // السنة الدراسية بتبدأ يونيو
+const acadStart = d => new Date(d.getMonth() >= 8 ? d.getFullYear() : d.getFullYear() - 1, 8, 1); // السنة الدراسية بتبدأ سبتمبر (يوليو وأغسطس إجازة الصيف في آخرها)
 const FIN_LBL = { this: 'الشهر ده', last: 'الشهر اللي فات', q: 'آخر 3 شهور', year: 'السنة دي', lastyear: 'السنة اللي فاتت', ayear: 'السنة الدراسية دي', lastayear: 'السنة الدراسية اللي فاتت', all: 'كل الفترة من أول الأكاديمية' };
 function finRange() {
   const sel = document.getElementById('fin-period').value;
@@ -2045,7 +2045,7 @@ function finYearsHtml() {
       ${rows.map(([l, k, inv]) => `<tr${k === 'net' ? ' class="fin-total"' : ''}><td><b>${l}</b></td><td class="num">${f(full, k)}</td><td class="num">${f(same, k)}</td><td class="num"><b>${f(cur, k)}</b></td><td class="num">${deltaHtml(cur[k], same[k], same.any, inv)}</td></tr>`).join('')}
       <tr><td><b>هامش الربح</b></td><td class="num">${full.rev ? Math.round(full.net / full.rev * 100) + '%' : '—'}</td><td class="num">${same.rev ? Math.round(same.net / same.rev * 100) + '%' : '—'}</td><td class="num"><b>${cur.rev ? Math.round(cur.net / cur.rev * 100) + '%' : '—'}</b></td><td></td></tr>
     </tbody></table></div>
-    <p class="sub small">السنة الدراسية من يونيو لمايو (الأكاديمية بدأت يونيو 2025). "التغيير" = السنة دي مقابل نفس الشهور السنة اللي فاتت. الأرقام بالجنيه.</p>`;
+    <p class="sub small">السنة الدراسية من سبتمبر لأغسطس — الدراسة سبتمبر لحد يونيو، ويوليو وأغسطس إجازة الصيف (فيه أسر بتكمل فيهم أو بتبدأ تأسيس من أغسطس). الأكاديمية بدأت يونيو 2025. "التغيير" = السنة دي مقابل نفس الشهور السنة اللي فاتت. الأرقام بالجنيه.</p>`;
 }
 // رسم بياني شهري بسيط: الإيراد / التكلفة / صافي الربح
 function finChartHtml(range) {
