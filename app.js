@@ -2033,6 +2033,7 @@ function histInRange(r) {
 function finYearsHtml() {
   const now = new Date(), st = acadStart(now), nextM = addMonths(new Date(now.getFullYear(), now.getMonth(), 1), 1);
   const cur = monthlySum(st, nextM), same = monthlySum(addMonths(st, -12), addMonths(nextM, -12)), full = monthlySum(addMonths(st, -12), st);
+  const pre = addMonths(st, -12) > ACADEMY_START ? monthlySum(ACADEMY_START, addMonths(st, -12)) : { any: false };
   if (!full.any && !same.any) return '';
   const ml = d => d.toLocaleDateString('ar-EG-u-nu-latn', { month: 'short', year: 'numeric' }), lastM = addMonths(nextM, -1);
   const rows = [['الإيراد', 'rev'], ['أجور المعلمين', 'tc', true], ['رواتب ومصروفات وإعلانات', 'ex', true], ['صافي الربح', 'net'], ['الساعات', 'h']];
@@ -2045,6 +2046,7 @@ function finYearsHtml() {
       ${rows.map(([l, k, inv]) => `<tr${k === 'net' ? ' class="fin-total"' : ''}><td><b>${l}</b></td><td class="num">${f(full, k)}</td><td class="num">${f(same, k)}</td><td class="num"><b>${f(cur, k)}</b></td><td class="num">${deltaHtml(cur[k], same[k], same.any, inv)}</td></tr>`).join('')}
       <tr><td><b>هامش الربح</b></td><td class="num">${full.rev ? Math.round(full.net / full.rev * 100) + '%' : '—'}</td><td class="num">${same.rev ? Math.round(same.net / same.rev * 100) + '%' : '—'}</td><td class="num"><b>${cur.rev ? Math.round(cur.net / cur.rev * 100) + '%' : '—'}</b></td><td></td></tr>
     </tbody></table></div>
+    ${pre.any ? `<p class="sub small">📚 قبل السنة اللي فاتت (${ml(ACADEMY_START)} – ${ml(addMonths(st, -13))}، بداية الأكاديمية): إيراد ${fmt(Math.round(pre.rev))} ج · صافي ${fmt(Math.round(pre.net))} ج — مش داخلين في الجدول، لكن داخلين في "من أول الأكاديمية".</p>` : ''}
     <p class="sub small">السنة الدراسية من سبتمبر لأغسطس — الدراسة سبتمبر لحد يونيو، ويوليو وأغسطس إجازة الصيف (فيه أسر بتكمل فيهم أو بتبدأ تأسيس من أغسطس). الأكاديمية بدأت يونيو 2025. "التغيير" = السنة دي مقابل نفس الشهور السنة اللي فاتت. الأرقام بالجنيه.</p>`;
 }
 // رسم بياني شهري بسيط: الإيراد / التكلفة / صافي الربح
