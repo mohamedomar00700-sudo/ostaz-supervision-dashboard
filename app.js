@@ -1781,14 +1781,16 @@ async function loadFinance(silent) {
   try {
     const mFrom = addMonths(new Date(r.fromD.getFullYear(), r.fromD.getMonth(), 1), -24); // لمقارنة الفترة اللي قبلها والسنة اللي فاتت
     const mTo = addMonths(r.toD, -1);
-    const [sessions, tx, payouts, expenses, monthly] = await Promise.all([
+    const [sessions, tx, payouts, expenses, monthly, history] = await Promise.all([
       q(sb.from('sessions').select('*').gte('scheduled_at', r.fromD.toISOString()).lt('scheduled_at', r.toD.toISOString())),
       q(sb.from('family_transactions').select('*').gte('created_at', r.fromD.toISOString()).lt('created_at', r.toD.toISOString()).order('created_at', { ascending: false })),
       q(sb.from('tutor_payouts').select('*').gte('created_at', r.fromD.toISOString()).lt('created_at', r.toD.toISOString()).order('created_at', { ascending: false })),
       isAdmin ? q(sb.from('expenses').select('*').gte('period_month', dateStr(new Date(r.fromD.getFullYear(), r.fromD.getMonth(), 1))).lt('period_month', dateStr(r.toD)).order('period_month', { ascending: false }).order('paid_at', { ascending: false })) : [],
       isAdmin ? sb.rpc('finance_monthly', { p_from: dateStr(mFrom), p_to: dateStr(mTo) }).then(x => x.data || []) : [],
+      isAdmin ? sb.from('finance_history').select('*').order('period_start').then(x => x.data || []) : [],
     ]);
-    state.fin = { sessions, tx, payouts, expenses, monthly, range: r };
+    state.fin = { sessions, tx, payouts, expenses, monthly, history, range: r };
+    state.collect = null;
     if (!state.finTab || (!isAdmin && ['expenses', 'monthly'].includes(state.finTab))) state.finTab = 'overview';
     renderFinance();
   } catch (e) { showToast(dbError(e), true); }
@@ -1845,7 +1847,7 @@ function renderFinance() {
   const activeStu = new Set(done.map(s => s.student_id)).size;
 
   const tab = state.finTab || 'overview';
-  const tabs = [['overview', '📊 الملخص'], ['families', '👨‍👩‍👧 الأسر'], ['tutors', '👩‍🏫 المعلمين'], ['payments', '💳 الدفعات والحصص'],
+  const tabs = [['overview', '📊 الملخص'], ['families', '👨‍👩‍👧 الأسر'], ['tutors', '👩‍🏫 المعلمين'], ['collect', '📥 التحصيل'], ['payments', '💳 الدفعات والحصص'],
     ...(isAdmin ? [['expenses', '🧾 الرواتب والمصروفات'], ['monthly', '📈 شهر بشهر']] : [])];
   const tabBar = `<div class="chips fin-tabs">${tabs.map(([k, l]) => `<button class="chip ${tab === k ? 'active' : ''}" onclick="setFinTab('${k}')">${l}</button>`).join('')}</div>`;
   const periodLbl = finPeriod().label;
@@ -1966,9 +1968,10 @@ function renderFinance() {
   }
 
   if (tab === 'monthly' && isAdmin) body = finMonthlyHtml();
+  if (tab === 'collect') body = finCollectHtml();
 
   document.getElementById('fin-content').innerHTML = tabBar + body;
-  ['families', 'tutors'].forEach(k => { if (state['finQ_' + k] && document.getElementById(`fin-${k}-list`)) finSearch(k, state['finQ_' + k]); });
+  ['families', 'tutors', 'coll'].forEach(k => { if (state['finQ_' + k] && document.getElementById(`fin-${k}-list`)) finSearch(k, state['finQ_' + k]); });
 }
 
 const EXP_CAT = { salary: '👤 راتب', marketing: '📣 إعلانات وتسويق', tools: '💻 اشتراكات وأدوات', rent: '🏢 إيجار', fees: '🏦 رسوم تحويل', other: '📦 أخرى' };
@@ -2028,15 +2031,21 @@ const fmtK = v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(Math.abs(v) >= 10000 
 
 function finMonthlyHtml() {
   const all = state.fin.monthly || [];
-  const years = [...new Set(all.filter(m => +m.sessions || +m.cash_in_egp || +m.expenses_egp).map(m => +m.month.slice(0, 4)).concat(new Date().getFullYear()))].sort((a, b) => b - a);
+  const hist = state.fin.history || [];
+  const years = [...new Set(all.filter(m => +m.sessions || +m.cash_in_egp || +m.expenses_egp).map(m => +m.month.slice(0, 4)).concat(hist.map(h => +h.period_start.slice(0, 4))).concat(new Date().getFullYear()))].sort((a, b) => b - a);
   const Y = state.finYear && years.includes(state.finYear) ? state.finYear : (years[0] || new Date().getFullYear());
   const get = (y, mo) => all.find(m => m.month.slice(0, 7) === `${y}-${String(mo).padStart(2, '0')}`);
   const nowKey = monthKey(new Date());
   const rows = []; for (let mo = 1; mo <= 12; mo++) { const k = `${Y}-${String(mo).padStart(2, '0')}`; if (k > nowKey) break; const a = get(Y, mo), b = get(Y - 1, mo); rows.push({ mo, a, b }); }
+  const aggs = hist.filter(h => +h.period_start.slice(0, 4) === Y && h.period_start.slice(0, 7) !== h.period_end.slice(0, 7));
+  const inAgg = mo => aggs.some(h => { const k = `${Y}-${String(mo).padStart(2, '0')}`; return k >= h.period_start.slice(0, 7) && k <= h.period_end.slice(0, 7); });
+  for (let i = rows.length - 1; i >= 0; i--) if (inAgg(rows[i].mo)) rows.splice(i, 1);
+  const histOf = mo => hist.find(h => h.period_start.slice(0, 7) === `${Y}-${String(mo).padStart(2, '0')}` && h.period_start.slice(0, 7) === h.period_end.slice(0, 7));
   while (rows.length > 1 && !(rows[0].a && (+rows[0].a.sessions || +rows[0].a.cash_in_egp || +rows[0].a.expenses_egp)) && !(rows[0].b && +rows[0].b.sessions)) rows.shift(); // من أول شهر فيه حركة
   const v = m => m ? { rev: +m.revenue_egp, tc: +m.tutor_cost_egp, ex: +m.expenses_egp, cin: +m.cash_in_egp, h: +m.hours, net: +m.revenue_egp - +m.tutor_cost_egp - +m.expenses_egp } : null;
   const tot = rs => rs.reduce((t, x) => { if (x) { t.rev += x.rev; t.tc += x.tc; t.ex += x.ex; t.cin += x.cin; t.h += x.h; t.net += x.net; } return t; }, { rev: 0, tc: 0, ex: 0, cin: 0, h: 0, net: 0 });
-  const A = tot(rows.map(r => v(r.a))), B = tot(rows.map(r => v(r.b))), hasB = rows.some(r => r.b && (+r.b.sessions || +r.b.cash_in_egp));
+  const aggV = h => ({ rev: +h.revenue_egp, tc: +h.tutor_cost_egp, ex: +h.opex_egp, cin: +h.revenue_egp, h: +(h.hours || 0), net: +h.revenue_egp - +h.tutor_cost_egp - +h.opex_egp });
+  const A = tot(rows.map(r => v(r.a)).concat(aggs.map(aggV))), B = tot(rows.map(r => v(r.b))), hasB = rows.some(r => r.b && (+r.b.sessions || +r.b.cash_in_egp));
   const mName = mo => new Date(Y, mo - 1, 15).toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' });
   return `<div class="chips">${years.map(y => `<button class="chip ${y === Y ? 'active' : ''}" onclick="state.finYear=${y}; renderFinance()">${y}</button>`).join('')}</div>
     <div class="kpis mb">
@@ -2045,10 +2054,13 @@ function finMonthlyHtml() {
       ${kpiCard('رواتب ومصروفات', fmt(Math.round(A.ex)), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.ex, B.ex, hasB, true)}`)}
       ${kpiCard(`صافي ربح ${Y}`, fmt(Math.round(A.net)), `ج · ${A.rev ? Math.round(A.net / A.rev * 100) : 0}%`, `مقابل ${Y - 1}: ${deltaHtml(A.net, B.net, hasB)}`, { vcls: A.net >= 0 ? 'pos' : 'neg', cls: 'kpi-hero' })}
       ${kpiCard(`الفلوس اللي دخلت ${Y}`, fmt(Math.round(A.cin)), 'ج', `مقابل ${Y - 1}: ${deltaHtml(A.cin, B.cin, hasB)}`)}
-    </div>
+    </div>${aggs.length || rows.some(r => histOf(r.mo)) ? '<p class="sub small mb">📚 الشهور اللي قبل سبتمبر جاية من التقفيل القديم (Gemini) بسعر ثابت 1 درهم = 13 ج، ومحسوبة على إنها اتحصّلت واتصرفت للمعلمين.</p>' : ''}
     <div class="card scrollx"><table class="fin-month"><thead><tr><th>الشهر</th><th>ساعات</th><th>الإيراد</th><th>المعلمين</th><th>المصروفات</th><th>صافي الربح</th><th>الهامش</th><th>اللي دخل</th><th>مقابل ${Y - 1}</th></tr></thead><tbody>
+      ${aggs.map(h => { const x = aggV(h); return `<tr class="fin-hist"><td><b>${new Date(h.period_start + 'T12:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' })} – ${new Date(h.period_end + 'T12:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' })}</b><div class="sub small">📚 إجمالي من السجلات القديمة</div></td>
+        <td class="num">${x.h ? fmt(x.h, 1) : '—'}</td><td class="num">${fmt(x.rev)}</td><td class="num">${fmt(x.tc)}</td><td class="num">${fmt(x.ex)}</td><td class="num ${x.net >= 0 ? 'pos' : 'neg'}"><b>${fmt(x.net)}</b></td><td class="num">${x.rev ? Math.round(x.net / x.rev * 100) + '%' : '—'}</td><td class="num">${fmt(x.cin)}</td><td class="num small sub">—</td></tr>`; }).join('')}
       ${rows.map(({ mo, a, b }) => { const x = v(a), y = v(b); if (!x || !(x.h || x.cin || x.ex)) return `<tr class="sub"><td>${mName(mo)}</td><td colspan="8">—</td></tr>`;
-        return `<tr><td><b>${mName(mo)}</b></td><td class="num">${fmt(x.h, 1)}</td><td class="num">${fmt(x.rev)}</td><td class="num">${fmt(x.tc)}</td><td class="num">${fmt(x.ex)}</td>
+        const hm = histOf(mo);
+        return `<tr${hm ? ' class="fin-hist clickable" onclick="openHistoryDetail(' + jsq(hm.id) + ')"' : ''}><td><b>${mName(mo)}</b>${hm ? '<div class="sub small">📚 سجلات قديمة · التفاصيل ←</div>' : ''}</td><td class="num">${fmt(x.h, 1)}</td><td class="num">${fmt(x.rev)}</td><td class="num">${fmt(x.tc)}</td><td class="num">${fmt(x.ex)}</td>
           <td class="num ${x.net >= 0 ? 'pos' : 'neg'}"><b>${fmt(x.net)}</b></td><td class="num">${x.rev ? Math.round(x.net / x.rev * 100) + '%' : '—'}</td><td class="num">${fmt(x.cin)}</td>
           <td class="num small">${y && (y.h || y.cin) ? `${fmt(y.net)} ${deltaHtml(x.net, y.net, true)}` : '<span class="sub">مفيش بيانات</span>'}</td></tr>`; }).join('')}
       <tr class="fin-total"><td><b>الإجمالي</b></td><td class="num">${fmt(A.h, 1)}</td><td class="num">${fmt(A.rev)}</td><td class="num">${fmt(A.tc)}</td><td class="num">${fmt(A.ex)}</td>
@@ -4334,3 +4346,72 @@ ${isAdmin ? `💰 إيراد آخر 30 يوم: ${fmt(A.rev)} ج · هامش بع
   copyText(t, 'اتنسخ الملخص ✓');
 }
 function bizPrint() { document.body.classList.add('print-biz'); setTimeout(() => { window.print(); setTimeout(() => document.body.classList.remove('print-biz'), 500); }, 50); }
+
+/* ============================================================
+   التحصيل: فلوس كل شهر اتحصّلت ولا لأ (بغض النظر عن يوم الدفع)
+   الدفعات بتتوزع على أقدم شهر لسه عليه فلوس الأول
+   ============================================================ */
+async function loadCollect() {
+  try {
+    const [ss, tx] = await Promise.all([
+      fetchAll(() => sb.from('sessions').select('student_id,scheduled_at,student_charge,revenue_egp,student_currency').eq('status', 'done').order('scheduled_at')),
+      fetchAll(() => sb.from('family_transactions').select('family_id,amount,type,created_at').order('created_at')),
+    ]);
+    const byFam = {};
+    ss.forEach(s => { const st = byId(state.students, s.student_id); if (!st) return; const c = Number(s.student_charge || 0); if (!c) return;
+      const k = monthKey(new Date(s.scheduled_at)); const f = byFam[st.family_id] ||= { months: {}, credit: 0 };
+      const m = f.months[k] ||= { billed: 0, egp: 0 }; m.billed += c; m.egp += Number(s.revenue_egp || 0); });
+    tx.forEach(t => { const f = byFam[t.family_id] ||= { months: {}, credit: 0 }; f.credit += (t.type === 'refund' ? -1 : 1) * Number(t.amount); });
+    Object.values(byFam).forEach(f => { let left = f.credit;
+      Object.keys(f.months).sort().forEach(k => { const m = f.months[k]; const take = Math.max(0, Math.min(m.billed, left)); m.coll = take; m.rem = m.billed - take; left -= take; });
+      f.advance = Math.max(0, left); });
+    state.collect = { byFam, at: Date.now() };
+    if (currentTab === 'fin' && state.finTab === 'collect') renderFinance();
+  } catch (e) { showToast(dbError(e), true); }
+}
+function finCollectHtml() {
+  if (!state.collect) { loadCollect(); return '<div class="card empty">بيحسب التحصيل…</div>'; }
+  const r = state.fin.range, from = monthKey(r.fromD), to = monthKey(addMonths(r.toD, -1));
+  const { byFam } = state.collect;
+  const rows = [], byCur = {}; let bE = 0, cE = 0;
+  state.families.forEach(f => { const x = byFam[f.id]; if (!x) return; let b = 0, c = 0, e = 0;
+    Object.entries(x.months).forEach(([k, m]) => { if (k >= from && k <= to) { b += m.billed; c += m.coll; e += m.egp; } });
+    if (!b) return; const cur = f.currency; const z = byCur[cur] ||= { b: 0, c: 0 }; z.b += b; z.c += c;
+    bE += e; cE += b ? e * c / b : 0; rows.push({ f, b, c, rem: b - c, cur, adv: x.advance }); });
+  rows.sort((a, b) => b.rem * fxRate(b.cur) - a.rem * fxRate(a.cur) || a.f.name.localeCompare(b.f.name, 'ar'));
+  const rate = bE ? cE / bE : 0, open = rows.filter(x => x.rem > 0.01);
+  // آخر 6 شهور
+  const months = []; for (let i = 5; i >= 0; i--) months.push(monthKey(addMonths(new Date(), -i)));
+  const mrows = months.map(k => { let b = 0, c = 0, n = 0, paidN = 0; Object.values(byFam).forEach(x => { const m = x.months[k]; if (!m) return; b += m.egp; c += m.billed ? m.egp * m.coll / m.billed : 0; n++; if (m.rem <= 0.01) paidN++; }); return { k, b, c, n, paidN }; }).filter(m => m.n);
+  const curTxt = o => Object.entries(byCur).map(([cu, z]) => `<bdi>${fmt(o(z), 2)} ${cu}</bdi>`).join(' + ') || '—';
+  return `<div class="card item mb fin-sum">📥 <b>فلوس ${esc(finPeriod().label)}</b>: كل أسرة كان عليها كام عن حصص الفترة دي، واتحصّل منها قد إيه لحد النهارده، حتى لو الدفع جه بعدها. الدفعات بتتحسب على أقدم شهر لسه عليه فلوس.</div>
+    <div class="kpis">
+      ${kpiCard('المفروض يتحصّل', isAdmin ? fmt(Math.round(bE)) + ' ج' : String(rows.length) + ' أسرة', curTxt(z => z.b))}
+      ${kpiCard('اتحصّل', isAdmin ? fmt(Math.round(cE)) + ' ج' : String(rows.length - open.length) + ' أسرة', curTxt(z => z.c), '', { vcls: 'pos' })}
+      ${kpiCard('لسه', isAdmin ? fmt(Math.round(bE - cE)) + ' ج' : String(open.length) + ' أسرة', curTxt(z => z.b - z.c), '', { vcls: open.length ? 'neg' : 'pos' })}
+      ${kpiCard('نسبة التحصيل', Math.round(rate * 100) + '%', `${rows.length - open.length} من ${rows.length} أسرة خلّصت`, '', { vcls: rate >= .9 ? 'pos' : rate >= .6 ? 'warn-txt' : 'neg', cls: 'kpi-hero' })}
+    </div>
+    ${mrows.length > 1 ? `<div class="section-title"><h2>التحصيل شهر بشهر</h2></div>
+    <div class="card item">${mrows.map(m => { const p = m.b ? m.c / m.b : 0; return `<div class="bar-row"><span class="bar-label">${new Date(m.k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'short', year: '2-digit' })}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${Math.max(3, p * 100)}%;background:${p >= .9 ? 'var(--ok)' : p >= .6 ? 'var(--warn)' : 'var(--danger)'}"></span></span>
+      <span class="num bar-val">${Math.round(p * 100)}%${isAdmin ? ` <span class="sub small">${fmtK(m.c)}/${fmtK(m.b)}</span>` : ''} <span class="sub small">· ${m.paidN}/${m.n} أسرة</span></span></div>`; }).join('')}</div>` : ''}
+    <div class="section-title"><h2>الأسر (${rows.length})</h2></div>
+    <input class="input search mb" placeholder="🔎 ابحث باسم الأسرة…" oninput="finSearch('coll', this.value)">
+    <div class="list" id="fin-coll-list">${rows.map(x => `<div class="card item fin-row" data-q="${esc(normAr(x.f.name))}">
+      <div class="item-head"><div class="item-title">${esc(x.f.name)}</div>
+        <span class="badge ${x.rem > 0.01 ? (x.c > 0.01 ? 'b-pending' : 'b-cancel') : 'b-done'}">${x.rem > 0.01 ? (x.c > 0.01 ? 'دفعت جزء' : 'لسه مادفعتش') : 'اتحصّل ✓'}</span></div>
+      <div class="meta"><span>عليها: <b class="num"><bdi>${fmt(x.b, 2)} ${x.cur}</bdi></b></span><span>اتحصّل: <b class="num pos"><bdi>${fmt(x.c, 2)} ${x.cur}</bdi></b></span>${x.rem > 0.01 ? `<span>لسه: <b class="num neg"><bdi>${fmt(x.rem, 2)} ${x.cur}</bdi></b></span>` : ''}${x.adv > 0.01 ? `<span class="sub">رصيد مقدّم: <bdi>${fmt(x.adv, 2)} ${x.cur}</bdi></span>` : ''}</div>
+      ${x.rem > 0.01 ? `<div class="actions"><button class="btn btn-wa sm" onclick="openFamilyInvoice(${jsq(x.f.id)}, 'fin')">📄 فاتورة</button><button class="btn btn-brand sm" onclick="openPaymentForm(${jsq(x.f.id)})">+ دفعة</button></div>` : ''}</div>`).join('') || '<div class="card empty">مفيش حصص في الفترة دي</div>'}</div>`;
+}
+function openHistoryDetail(id) {
+  const h = (state.fin.history || []).find(x => x.id === id); if (!h) return;
+  const d = h.details || {}, fx = +h.fx_aed || 13;
+  openModal(`📚 ${new Date(h.period_start + 'T12:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })} — سجلات قديمة`, `
+    <div class="kpis mb">${kpiCard('الإيراد', fmt(+h.revenue_egp), `ج${h.revenue_aed ? ` · ${fmt(+h.revenue_aed, 2)} درهم` : ''}`)}${kpiCard('المعلمين', fmt(+h.tutor_cost_egp), 'ج')}${kpiCard('المصاريف', fmt(+h.opex_egp), 'ج')}
+      ${kpiCard('صافي الربح', fmt(+h.revenue_egp - +h.tutor_cost_egp - +h.opex_egp), `ج · ${Math.round((+h.revenue_egp - +h.tutor_cost_egp - +h.opex_egp) / +h.revenue_egp * 100)}%`, '', { vcls: 'pos' })}</div>
+    ${d.families ? `<h3>الأسر (${d.families.length})</h3><div class="scrollx"><table><thead><tr><th>الأسرة</th><th>طلاب</th><th>حصص</th><th>درهم</th><th>جنيه</th></tr></thead><tbody>
+      ${d.families.map(f => `<tr><td>${esc(f.name)}</td><td class="num">${f.students || '—'}</td><td class="num">${f.sessions ?? '—'}</td><td class="num">${fmt(f.aed, 2)}</td><td class="num">${fmt(f.aed * fx, 2)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${d.tutors ? `<h3 class="mt">المعلمين (${d.tutors.length})</h3><div class="scrollx"><table><thead><tr><th>المعلمة</th><th>المادة</th><th>حصص</th><th>جنيه</th></tr></thead><tbody>
+      ${d.tutors.map(t => `<tr><td>${esc(t.name)}</td><td class="small">${esc(t.subject || '')}</td><td class="num">${t.sessions ?? '—'}</td><td class="num">${fmt(t.egp)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <p class="sub small mt">${esc(h.source || '')}${h.note ? ' · ' + esc(h.note) : ''}</p>`);
+}
