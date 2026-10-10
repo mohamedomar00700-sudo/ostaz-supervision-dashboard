@@ -2685,8 +2685,10 @@ function renderReports() {
   const el = document.getElementById('reports-content'); if (!el) return;
   const view = state.repView || 'biz';
   const sw = `<div class="chips fin-tabs no-print"><button class="chip ${view === 'biz' ? 'active' : ''}" onclick="state.repView='biz'; renderReports()">🏢 لوحة الأعمال</button>
+    <button class="chip ${view === 'ret' ? 'active' : ''}" onclick="state.repView='ret'; renderReports()">🔁 متابعة الأسر</button>
     <button class="chip ${view === 'ops' ? 'active' : ''}" onclick="state.repView='ops'; renderReports()">📋 الالتزام والتشغيل</button></div>`;
   if (view === 'biz') { el.innerHTML = sw + renderBusiness(); return; }
+  if (view === 'ret') { el.innerHTML = sw + renderRetention(); return; }
   if (!state.rep) { el.innerHTML = sw + '<div class="card empty">بيحمّل…</div>'; return; }
   const { rows, r } = state.rep;
   const past = rows.filter(s => s.status !== 'scheduled' || sStart(s) < Date.now());
@@ -4389,6 +4391,95 @@ ${isAdmin ? `💰 إيراد آخر 30 يوم: ${fmt(A.rev)} ج · هامش بع
   copyText(t, 'اتنسخ الملخص ✓');
 }
 function bizPrint() { document.body.classList.add('print-biz'); setTimeout(() => { window.print(); setTimeout(() => document.body.classList.remove('print-biz'), 500); }, 50); }
+
+/* ============================================================
+   متابعة الأسر: مين كان معانا السنة اللي فاتت ومجاش السنة دي، ومين بعد عننا
+   السنة الدراسية من سبتمبر لأغسطس
+   ============================================================ */
+async function loadRetention() {
+  const now = new Date(), from = addMonths(acadStart(now), -12);
+  try {
+    const [hist, ss, up] = await Promise.all([
+      q(sb.from('family_history').select('family_name,family_id,month,amount,hours,details,acquisition').order('month')),
+      fetchAll(() => sb.from('sessions').select('id,student_id,scheduled_at,student_charge').eq('status', 'done').gte('scheduled_at', from.toISOString()).order('scheduled_at')),
+      fetchAll(() => sb.from('sessions').select('id,student_id,scheduled_at').eq('status', 'scheduled').gte('scheduled_at', now.toISOString()).lte('scheduled_at', new Date(now.getTime() + 30 * 864e5).toISOString()).order('scheduled_at')),
+    ]);
+    state.ret = { hist, ss, up, at: Date.now() };
+  } catch (e) { showToast(dbError(e), true); state.ret = { hist: [], ss: [], up: [], at: Date.now(), err: true }; }
+  if (state.repView === 'ret') renderReports();
+}
+function retCompute() {
+  const { hist, ss, up } = state.ret, now = new Date(), st = acadStart(now), lst = addMonths(st, -12);
+  const stK = monthKey(st), lstK = monthKey(lst), F = {};
+  const get = (key, name, f) => F[key] ||= { key, name, f, months: new Set(), last: 0, ly: 0, ty: 0, src: '', kids: new Set(), up: 0, det: '' };
+  hist.forEach(h => { const f = h.family_id ? byId(state.families, h.family_id) : null; const x = get(f ? f.id : 'h:' + h.family_name, f ? f.name : h.family_name, f);
+    const k = h.month.slice(0, 7); x.months.add(k); x.last = Math.max(x.last, addMonths(new Date(h.month + 'T12:00'), 1).getTime() - 864e5);
+    if (k >= lstK && k < stK) x.ly += +h.amount || 0; if (k >= stK) x.ty += +h.amount || 0; if (h.acquisition) x.src = h.acquisition; if (h.details) x.det = h.details; });
+  ss.forEach(s => { const stu = byId(state.students, s.student_id), f = stu && byId(state.families, stu.family_id); if (!f) return; const x = get(f.id, f.name, f);
+    const t = new Date(s.scheduled_at), k = monthKey(t); x.months.add(k); x.last = Math.max(x.last, t.getTime()); x.kids.add(stu.name);
+    const c = Number(s.student_charge || 0); if (k >= lstK && k < stK) x.ly += c; if (k >= stK) x.ty += c; });
+  up.forEach(s => { const stu = byId(state.students, s.student_id), f = stu && byId(state.families, stu.family_id); if (f) get(f.id, f.name, f).up++; });
+  const all = Object.values(F);
+  all.forEach(x => { if (x.f) { x.src = x.f.acquisition || x.src; x.cur = x.f.currency; } else x.cur = 'AED';
+    const ms = [...x.months].sort(); x.lastMonth = ms[ms.length - 1]; x.firstMonth = ms[0];
+    const lyM = ms.filter(k => k >= lstK && k < stK); x.inLY = lyM.length > 0; x.inTY = ms.some(k => k >= stK); x.lyMonths = lyM.length;
+    x.exams = x.inLY && lyM.every(k => ['05', '06'].includes(k.slice(5))); // جم في الامتحانات بس
+    x.days = x.last ? Math.floor((Date.now() - x.last) / 864e5) : null; });
+  const lost = all.filter(x => x.inLY && !x.inTY).sort((a, b) => b.ly - a.ly);
+  const kept = all.filter(x => x.inLY && x.inTY);
+  const fresh = all.filter(x => !x.inLY && x.inTY && x.firstMonth >= stK).sort((a, b) => b.ty - a.ty);
+  const quiet = all.filter(x => x.inTY && x.days != null && x.days >= 10 && !x.up).sort((a, b) => b.days - a.days);
+  const never = state.families.filter(f => state.students.some(s => s.family_id === f.id) && !F[f.id]);
+  return { lost, kept, fresh, quiet, never, lyN: lost.length + kept.length, st, lst };
+}
+const retMarks = () => { try { return JSON.parse(localStorage.getItem('ret_marks') || '{}'); } catch (e) { return {}; } };
+function retMark(key) { const m = retMarks(); if (m[key]) delete m[key]; else m[key] = new Date().toISOString(); try { localStorage.setItem('ret_marks', JSON.stringify(m)); } catch (e) {} renderReports(); }
+const retParent = n => (n || '').replace(/^(أسرة|عائلة)\s+/, '').replace(/\s*\(.*\)\s*/g, '').trim();
+function retMsg(key, kind) {
+  const z = retCompute(), x = [...z.lost, ...z.quiet].find(y => y.key === key); if (!x) return;
+  const p = retParent(x.name), hi = `السلام عليكم ورحمة الله يا ${p} 🌷\nإزيكم وإزي الولاد؟`;
+  const t = kind === 'quiet'
+    ? `${hi}\nلاحظنا إن الحصص وقفت من حوالي ${x.days} يوم، وحابين نطمن إن كل حاجة تمام 🙏\nلو محتاجين نرجّع المواعيد، أو نغيّر الوقت أو المعلمة، أو فيه أي حاجة مش مريحاكم — قولولنا وإحنا نظبطها على طول.\nأكاديمية أستاذ أونلاين 💙`
+    : x.exams
+    ? `${hi} وحشتونا في أكاديمية أستاذ أونلاين 💙\nالسنة الدراسية الجديدة بدأت، وحابين نطمن على الولاد ونعرف لو محتاجين متابعة أسبوعية أو مراجعات قبل امتحانات نص السنة — والمعلمات اللي كانوا معاهم موجودين.\nلو حابين نرتب مواعيد، قولولنا الأيام والأوقات اللي تناسبكم 🙏`
+    : `${hi} وحشتونا في أكاديمية أستاذ أونلاين 💙\nالسنة الدراسية الجديدة بدأت، وحابين نعرف لو تحبوا تكملوا معانا السنة دي.\nولو كان فيه أي حاجة مكانتش مريحاكم في الحصص اللي فاتت، يهمنا جداً نسمعها ونحسّنها 🙏`;
+  copyText(t, 'اتنسخت رسالة المتابعة ✓ — ابعتها على الواتساب');
+}
+function renderRetention() {
+  if (!state.ret || Date.now() - state.ret.at > 5 * 60e3) { if (!state._retLoading) { state._retLoading = true; loadRetention().finally(() => state._retLoading = false); } if (!state.ret) return '<div class="card empty">بيحمّل…</div>'; }
+  const z = retCompute(), marks = retMarks();
+  const ml = k => k ? new Date(k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' }) : '—';
+  const yl = d => `${d.getFullYear()}/${d.getFullYear() + 1}`;
+  const pct = z.lyN ? Math.round(z.kept.length / z.lyN * 100) : null;
+  const markBtn = x => `<button class="btn ${marks[x.key] ? 'btn-brand' : 'btn-ghost'} sm" onclick="retMark(${jsq(x.key)})">${marks[x.key] ? `✓ اتواصلنا ${fmtShortDate(marks[x.key])}` : '☐ اتواصلنا'}</button>`;
+  const card = (x, kind) => `<div class="card item fin-row${marks[x.key] ? ' ret-done' : ''}">
+    <div class="item-head"><div><div class="item-title">${esc(x.name)}</div><div class="sub small">${x.src ? '📍 ' + esc(x.src) : 'المصدر مش متسجّل'}</div></div>
+      ${kind === 'quiet' ? `<span class="badge b-cancel num">من ${x.days} يوم</span>` : x.exams ? '<span class="badge b-pending">📝 مراجعات امتحانات</span>' : `<span class="badge b-sched">${x.lyMonths} ${x.lyMonths === 1 ? 'شهر' : 'شهور'}</span>`}</div>
+    <div class="meta"><span>آخر نشاط: <b>${kind === 'quiet' ? fmtShortDate(new Date(x.last).toISOString()) : ml(x.lastMonth)}</b></span>
+      ${isAdmin && x.ly ? `<span>حسابهم السنة اللي فاتت: <b class="num"><bdi>${fmt(x.ly, 2)} ${x.cur}</bdi></b></span>` : ''}
+      ${x.kids.size ? `<span>${[...x.kids].map(esc).join('، ')}</span>` : ''}</div>
+    ${!x.kids.size && x.det ? `<div class="sub small">${esc(x.det)}</div>` : ''}
+    <div class="actions"><button class="btn btn-wa sm" onclick="retMsg(${jsq(x.key)}, '${kind}')">📲 رسالة متابعة</button>${markBtn(x)}
+      ${x.f ? `<button class="btn btn-ghost sm" onclick="openFamilyStatement(${jsq(x.f.id)})">📒 كشف حساب</button>` : ''}</div></div>`;
+  return `<div class="section-title"><h2>🔁 الأسر بين السنة دي واللي فاتت</h2></div>
+    <p class="sub small mb">السنة الدراسية من سبتمبر لأغسطس · السنة اللي فاتت ${yl(z.lst)} · السنة دي ${yl(z.st)}</p>
+    <div class="kpis">
+      ${bizKpi('أسر السنة اللي فاتت', z.lyN, `من سبتمبر ${z.lst.getFullYear()} لأغسطس ${z.st.getFullYear()}`, '', { icon: '📅' })}
+      ${bizKpi('كمّلوا معانا', z.kept.length, pct == null ? '' : `نسبة الاستمرار ${pct}%`, '', { icon: '🤝', vcls: 'pos' })}
+      ${bizKpi('لسه ماجوش السنة دي', z.lost.length, `${z.lost.filter(x => x.exams).length} منهم كانوا مراجعات امتحانات بس`, '', { icon: '📞', vcls: z.lost.length ? 'neg' : '' })}
+      ${bizKpi('أسر جديدة السنة دي', z.fresh.length, z.fresh.length ? z.fresh.slice(0, 3).map(x => retParent(x.name)).join('، ') + (z.fresh.length > 3 ? '…' : '') : '', '', { icon: '✨' })}
+    </div>
+    <div class="section-title"><h2>📞 كانوا معانا السنة اللي فاتت ولسه ماجوش (${z.lost.length})</h2></div>
+    <p class="sub small mb">ابعتلهم رسالة متابعة: هل محتاجين مراجعات؟ هيكملوا؟ ولو مش هيكملوا نعرف ليه. علّم "اتواصلنا" بعد ما تبعت.</p>
+    <div class="list">${z.lost.map(x => card(x, 'lost')).join('') || '<div class="card empty">كل أسر السنة اللي فاتت كمّلوا 🎉</div>'}</div>
+    <div class="section-title"><h2>⏸️ بعدوا عننا السنة دي (${z.quiet.length})</h2></div>
+    <p class="sub small mb">أسر حضرت السنة دي، بس آخر حصة من 10 أيام أو أكتر ومفيش حصص جاية متسجلة في الـ30 يوم الجايين.</p>
+    <div class="list">${z.quiet.map(x => card(x, 'quiet')).join('') || '<div class="card empty">مفيش أسر واقفة 👌</div>'}</div>
+    ${z.kept.length ? `<div class="section-title"><h2>🤝 كمّلوا معانا (${z.kept.length})</h2></div><div class="card item">${z.kept.map(x => `<div class="dist-row"><span class="dist-k">${esc(x.name)}</span><span class="sub small">من ${ml(x.firstMonth)}</span></div>`).join('')}</div>` : ''}
+    ${z.fresh.length ? `<div class="section-title"><h2>✨ جداد السنة دي (${z.fresh.length})</h2></div><div class="card item">${z.fresh.map(x => `<div class="dist-row"><span class="dist-k">${esc(x.name)}</span><span class="sub small">${esc(x.src || '')}</span><span class="sub small">من ${ml(x.firstMonth)}</span></div>`).join('')}</div>` : ''}
+    ${z.never.length ? `<div class="section-title"><h2>🫥 متسجلين ومحضروش ولا حصة (${z.never.length})</h2></div><div class="card item">${z.never.map(f => `<div class="dist-row"><span class="dist-k">${esc(f.name)}</span></div>`).join('')}</div>` : ''}
+    <p class="sub small mt">الأسر القديمة اللي قبل السيستم جاية من الحسابات القديمة (من غير أرقام تليفونات) — الرسالة بتتنسخ وتبعتها إنت من الواتساب.</p>`;
+}
 
 /* ============================================================
    التحصيل: فلوس كل شهر اتحصّلت ولا لأ (بغض النظر عن يوم الدفع)
