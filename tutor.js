@@ -195,6 +195,7 @@ function tutorRender() {
         <div class="card kpi"><div class="l">مستحقك عن الشهر</div><div class="v num">${fmt(total)}</div><div class="s">جنيه${pAmt ? `<br><span class="warn-txt">⏳ + حوالي ${fmt(pAmt)} ج أول ما تتأكد</span>` : ''}</div></div>
         <div class="card kpi"><div class="l">اتحوّل عن الشهر</div><div class="v num ${paidM >= total && total ? 'pos' : ''}">${fmt(paidM)}</div><div class="s">${total - paidM > 0.5 ? `باقي ${fmt(total - paidM)} ج` : paidM - total > 0.5 ? `💚 منهم ${fmt(paidM - total)} ج مقدّم للحصص الجاية` : total ? 'اتحوّل بالكامل ✅' : '—'}</div></div>
       </div>
+      ${tPerfCard()}
       <div class="section-title"><h2>حصصك لكل طالب</h2></div>
       <div class="card scrollx"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>المستحق</th></tr></thead><tbody>
         ${list.map(x => `<tr><td><b>${esc(x.who)}</b></td><td class="num"><b>${fmtU(x.mins / 60)}</b><div class="sub small">${durLabel(x.mins)}</div>${x.pmins ? `<div class="small warn-txt">⏳ + ${fmtU(x.pmins / 60)} مستنية تأكيد</div>` : ''}</td><td class="small">${esc([...x.subj].join('، '))}</td><td class="num">${fmt(x.amt, 2)} ج${x.pamt ? `<div class="small warn-txt">+ ≈ ${fmt(x.pamt)}</div>` : ''}</td></tr>`).join('')
@@ -501,4 +502,24 @@ async function tutorBadge() {
   let off = false;
   try { off = typeof Notification === 'undefined' || Notification.permission !== 'granted' || !(await currentPushSub()); } catch (e) { off = true; }
   if (off !== !!T.pushOff) { T.pushOff = off; if (T.tab === 'today') tutorRender(); }
+}
+
+/* ----- 📊 أدائي (المعلمة بتشوف أرقامها هي بس) ----- */
+function tPerfCard() {
+  if (T.preview) return '';
+  if (!T.perf || T.perf.k !== T.month) { if (!T.perfLoading) { T.perfLoading = true; const mr = tMonthRange(T.month), k = T.month;
+      sb.rpc('tutor_perf', { p_from: mr.from.toISOString(), p_to: mr.to.toISOString() }).then(({ data }) => { T.perf = { k, r: (data || [])[0] || null }; T.perfLoading = false; if (T.tab === 'money') tutorRender(); }).catch(() => { T.perfLoading = false; }); }
+    return ''; }
+  const r = T.perf.r; if (!r || !r.done_n) return '';
+  const p = (a, b) => b ? Math.round(a / b * 100) : null, rep = p(r.rep_n, r.done_n), ont = p(r.rep_ontime, r.rep_n), ack = p(r.ack_n, r.ack_base), hw = p(r.hw_n, r.done_n);
+  const cell = (l, v, ok, sub) => `<div><small>${l}</small><b class="${v == null ? '' : ok ? 'pos' : 'warn-txt'}">${v == null ? '—' : v + '%'}</b>${sub ? `<span class="sub small">${sub}</span>` : ''}</div>`;
+  const tips = [rep != null && rep < 90 && 'اكتبي تقرير كل حصة — ده اللي بيوصل لولي الأمر', ont != null && ont < 80 && 'حاولي تكتبي التقرير بعد الحصة على طول', ack != null && ack < 80 && 'دوسي «تمام» على تذكير الحصة', hw != null && hw < 70 && 'علّمي على واجب الحصة اللي فاتت في التقرير'].filter(Boolean);
+  return `<div class="section-title"><h2>📊 أداءك الشهر ده</h2></div>
+    <div class="card item"><div class="tp-grid">
+      ${cell('تقارير اتكتبت', rep, rep >= 90, `${r.rep_n} من ${r.done_n}`)}${cell('التقرير في ميعاده', ont, ont >= 80, 'خلال ساعتين')}
+      ${cell('أكدتي التذكير', ack, ack >= 80, r.ack_base ? `${r.ack_n} من ${r.ack_base}` : '')}${cell('متابعة الواجب', hw, hw >= 70, '')}
+      <div><small>اعتذارات</small><b class="${r.t_cancel ? 'warn-txt' : 'pos'}">${r.t_cancel}</b><span class="sub small">${r.t_cancel ? '' : 'ممتاز 👏'}</span></div>
+      <div><small>طلابك</small><b>${r.students}</b><span class="sub small">${fmtU(r.done_min / 60)} حصة</span></div></div>
+      ${tips.length ? `<div class="small mt">💡 ${tips.join(' · ')}</div>` : '<div class="small mt pos">🌟 شغل ممتاز — كملي كده</div>'}
+      <p class="sub small" style="margin:6px 0 0">الأرقام دي ليكي انتي بس، ومحدش من زمايلك بيشوفها.</p></div>`;
 }

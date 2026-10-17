@@ -2713,8 +2713,10 @@ function renderReports() {
   const view = state.repView || 'biz';
   const sw = `<div class="chips fin-tabs no-print"><button class="chip ${view === 'biz' ? 'active' : ''}" onclick="state.repView='biz'; renderReports()">🏢 لوحة الأعمال</button>
     <button class="chip ${view === 'ret' ? 'active' : ''}" onclick="state.repView='ret'; renderReports()">🔁 متابعة الأسر</button>
-    <button class="chip ${view === 'ops' ? 'active' : ''}" onclick="state.repView='ops'; renderReports()">📋 الالتزام والتشغيل</button></div>`;
+    <button class="chip ${view === 'ops' ? 'active' : ''}" onclick="state.repView='ops'; renderReports()">📋 الالتزام والتشغيل</button>
+    <button class="chip ${view === 'tut' ? 'active' : ''}" onclick="state.repView='tut'; renderReports()">👩‍🏫 أداء المعلمات</button></div>`;
   if (view === 'biz') { el.innerHTML = sw + renderBusiness(); return; }
+  if (view === 'tut') { el.innerHTML = sw + renderTutorPerf(); return; }
   if (view === 'ret') { el.innerHTML = sw + renderRetention(); return; }
   if (!state.rep) { el.innerHTML = sw + '<div class="card empty">بيحمّل…</div>'; return; }
   const { rows, r } = state.rep;
@@ -4781,4 +4783,60 @@ async function openHistoryDetail(id) {
       ${d.tutors.map(t => `<tr><td>${esc(t.name)}</td><td class="small">${esc(t.subject || '')}</td><td class="num">${t.sessions ?? '—'}</td><td class="num">${fmt(t.egp)}</td></tr>`).join('')}</tbody></table></div>` : ''}
     ${d.gaps?.length ? `<h3 class="mt">⚠️ فجوات لسه مفتوحة (${d.gaps.length})</h3><div class="card item">${d.gaps.map(g => `<div class="small" style="padding:3px 0">• ${esc(typeof g === 'string' ? g : `${g.student}: ${g.subject} — الأسرة ${g.family_h} / المعلمات ${g.tutors_h}`)}</div>`).join('')}</div>` : ''}
     <p class="sub small mt">${esc(h.source || '')}${h.note ? ' · ' + esc(h.note) : ''}</p>`);
+}
+
+
+/* ============================================================
+   👩‍🏫 أداء المعلمات — داخلي للإشراف (المعلمة بتشوف أرقامها هي بس من بوابتها)
+   المؤشر بيتحسب بالنسب مش بالأعداد، وللي على البوابة بس (التقارير والتأكيد بيتسجلوا منها).
+   ============================================================ */
+const TOTM_ENABLED = false; // «معلمة الشهر» متجهزة بس مقفولة لحد ما كل المعلمات يبقوا على التطبيق
+const pctTxt = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
+function tpScore(t) {
+  if (!t.on_portal || t.done_n < 4) return null;
+  const parts = [[t.rep_n / t.done_n, 30], [t.rep_n ? t.rep_ontime / t.rep_n : 0, 20], [1 - t.t_cancel / (t.done_n + t.t_cancel), 25]];
+  if (t.ack_base >= 3) parts.push([t.ack_n / t.ack_base, 15]);
+  if (t.prev_students >= 2) parts.push([t.kept / t.prev_students, 10]);
+  const w = parts.reduce((a, p) => a + p[1], 0);
+  return Math.round(parts.reduce((a, p) => a + p[0] * p[1], 0) / w * 100);
+}
+async function loadTutorPerf(k) {
+  state.tpMonth = k ?? state.tpMonth ?? 0;
+  const now = new Date(), from = addMonths(now, state.tpMonth), to = addMonths(now, state.tpMonth + 1);
+  state.tp = null; state.tpLoading = true; if (state.repView === 'tut') renderReports();
+  try { const { data, error } = await sb.rpc('tutor_perf', { p_from: from.toISOString(), p_to: to.toISOString() }); if (error) throw error;
+    state.tp = { rows: data || [], from, to, k: state.tpMonth }; }
+  catch (e) { showToast(dbError(e), true); state.tp = { rows: [], from, to, k: state.tpMonth, err: true }; }
+  state.tpLoading = false; if (state.repView === 'tut') renderReports();
+}
+function renderTutorPerf() {
+  if (!state.tp || state.tp.k !== (state.tpMonth ?? 0)) { if (!state.tpLoading) loadTutorPerf(); return '<div class="card empty">بيحمّل…</div>'; }
+  const { rows, from } = state.tp, now = new Date();
+  const chips = [0, -1, -2].map(k => `<button class="chip ${state.tpMonth === k ? 'active' : ''}" onclick="loadTutorPerf(${k})">${addMonths(now, k).toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' })}${k === 0 ? ' (لحد النهارده)' : ''}</button>`).join('');
+  const onP = rows.filter(t => t.on_portal).length;
+  const card = t => {
+    const sc = tpScore(t), cr = t.done_n + t.t_cancel ? t.t_cancel / (t.done_n + t.t_cancel) : 0;
+    return `<div class="card item">
+      <div class="item-head"><div><div class="item-title">${esc(t.name)}</div>
+        <div class="sub small">${t.on_portal ? '<span class="pos">✓ على البوابة</span>' : '<span class="warn-txt">لسه مش على البوابة</span>'} · ${fmtU(t.done_min / 60)} حصة · ${t.students} طالب${t.trials ? ` · ${t.trials} تجريبية` : ''}</div></div>
+        ${sc != null ? `<div class="tp-score ${sc >= 85 ? 'pos' : sc >= 65 ? 'warn-txt' : 'neg'}">${sc}<small>مؤشر</small></div>` : ''}</div>
+      <div class="tp-grid mt">
+        <div><small>اعتذارات المعلمة</small><b class="${t.t_cancel ? (cr > 0.1 ? 'neg' : 'warn-txt') : 'pos'}">${t.t_cancel}</b><span class="sub small">${t.t_cancel ? Math.round(cr * 100) + '%' : 'ممتاز'}</span></div>
+        <div><small>تقارير اتكتبت</small><b>${t.on_portal ? pctTxt(t.rep_n, t.done_n) : '—'}</b><span class="sub small">${t.on_portal ? `${t.rep_n} من ${t.done_n}` : 'بتتسجل من البوابة'}</span></div>
+        <div><small>التقرير في ميعاده</small><b>${t.on_portal && t.rep_n ? pctTxt(t.rep_ontime, t.rep_n) : '—'}</b><span class="sub small">خلال ساعتين</span></div>
+        <div><small>أكدت التذكير</small><b>${t.ack_base ? pctTxt(t.ack_n, t.ack_base) : '—'}</b><span class="sub small">${t.ack_base ? `${t.ack_n} من ${t.ack_base}` : 'من 17 أكتوبر'}</span></div>
+        <div><small>متابعة الواجب</small><b>${t.on_portal && t.done_n ? pctTxt(t.hw_n, t.done_n) : '—'}</b><span class="sub small">في التقرير</span></div>
+        <div><small>طلبة كمّلوا معاها</small><b>${t.prev_students >= 2 ? pctTxt(t.kept, t.prev_students) : '—'}</b><span class="sub small">${t.prev_students >= 2 ? `${t.kept} من ${t.prev_students}` : 'محتاج شهر قبله'}</span></div>
+      </div>
+      ${t.s_cancel ? `<div class="sub small mt">إلغاءات من الأسر: ${t.s_cancel} (مش محسوبة عليها)</div>` : ''}</div>`;
+  };
+  const elig = rows.filter(t => tpScore(t) != null).sort((a, b) => tpScore(b) - tpScore(a) || b.done_min - a.done_min);
+  const totm = isAdmin ? `<div class="card item mt"><div class="item-head"><div><b>🏅 معلمة الشهر</b>
+      <div class="sub small">${TOTM_ENABLED ? 'شغالة' : `مقفولة لحد ما كل المعلمات يبقوا على التطبيق (دلوقتي ${onP} من ${rows.length}). الاختيار هيبقى آخر الشهر مع تقرير الحصص.`}</div></div>
+      ${elig.length ? `<button class="btn btn-ghost sm" onclick="this.closest('.card').querySelector('.tp-prev').classList.toggle('hidden')">معاينة (للأدمن بس)</button>` : ''}</div>
+      <div class="tp-prev hidden mt">${elig.slice(0, 3).map((t, i) => `<div>${['🥇', '🥈', '🥉'][i]} <b>${esc(t.name)}</b> — مؤشر ${tpScore(t)}</div>`).join('')}
+        <p class="sub small mt">⚠️ دي بس من المعلمات اللي على البوابة — مش معبّرة عن الكل لسه.</p></div></div>` : '';
+  return `<div class="chips">${chips}</div>
+    <div class="card item"><div class="sub small">أرقام داخلية للإشراف. كل معلمة بتشوف أرقامها هي بس من بوابتها، ومحدش بيشوف ترتيب. <b>المؤشر</b> (من 100) بيظهر للمعلمات اللي على البوابة وعندهم 4 حصص على الأقل: التقارير 30 · التقرير في ميعاده 20 · الالتزام 25 · تأكيد التذكير 15 · الطلبة اللي كمّلوا 10.</div></div>
+    <div class="list mt">${rows.length ? rows.map(card).join('') : '<div class="card empty">مفيش حصص في الشهر ده</div>'}</div>${totm}`;
 }

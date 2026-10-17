@@ -414,3 +414,8 @@ body.hide-profit .owner-only{display:none!important}
 .g-mini{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:8px 12px;cursor:pointer;}
 .g-lv{font-size:12px;background:#fff1de;color:#a5520f;border-radius:999px;padding:1px 8px;} .g-fire{color:#d9480f;font-weight:700;}
 .g-certwrap{margin:10px 0;text-align:center;} .g-certwrap canvas{width:100%;max-width:420px;height:auto;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.15);}
+/* 👩‍🏫 أداء المعلمات */
+.tp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.tp-grid>div{display:flex;flex-direction:column;align-items:center;text-align:center;background:var(--bg);border-radius:10px;padding:8px 4px;}
+.tp-grid small{font-size:11.5px;color:var(--sub);} .tp-grid b{font-size:18px;}
+.tp-score{display:flex;flex-direction:column;align-items:center;font-size:24px;font-weight:800;line-height:1.1;} .tp-score small{font-size:11px;font-weight:500;color:var(--sub);}
