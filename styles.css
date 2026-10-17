@@ -396,3 +396,21 @@ body.hide-profit .owner-only{display:none!important}
 .p-owe{border:2px solid var(--danger);}
 .p-bar{height:10px;border-radius:999px;background:var(--bg);overflow:hidden;} .p-bar span{display:block;height:100%;background:var(--brand);border-radius:999px;}
 #view-parent .tabs .tab{flex:1;}
+/* 🏆 الإنجازات */
+.g-card{margin-top:10px;padding:12px;border-radius:14px;background:linear-gradient(135deg,#fff7ec,#eef4ff);border:1px solid #f5d6b0;}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .g-card{background:linear-gradient(135deg,#2d2416,#1b2438);border-color:#5a4426;} }
+:root[data-theme="dark"] .g-card{background:linear-gradient(135deg,#2d2416,#1b2438);border-color:#5a4426;}
+.g-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+.g-level{display:flex;align-items:center;gap:10px;} .g-lvicon{font-size:34px;line-height:1;}
+.g-pills{display:flex;gap:6px;} .g-pill{display:flex;flex-direction:column;align-items:center;background:var(--card);border-radius:12px;padding:4px 10px;font-weight:800;font-size:16px;min-width:56px;}
+.g-pill small{font-weight:500;font-size:11px;color:var(--sub);}
+.g-badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px;}
+.g-badge{display:flex;flex-direction:column;align-items:center;text-align:center;background:var(--card);border-radius:12px;padding:8px 4px;}
+.g-badge span{font-size:26px;line-height:1.2;} .g-badge small{font-size:11px;line-height:1.3;}
+.g-next{display:flex;align-items:center;gap:8px;margin-top:6px;opacity:.85;} .g-next>span{font-size:20px;filter:grayscale(.6);}
+.p-bar.thin{height:6px;margin-top:3px;}
+.p-bar span{background:linear-gradient(90deg,#F28C28,#1d4ed8);}
+.g-strip{display:flex;flex-direction:column;gap:6px;margin:12px 0;}
+.g-mini{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:8px 12px;cursor:pointer;}
+.g-lv{font-size:12px;background:#fff1de;color:#a5520f;border-radius:999px;padding:1px 8px;} .g-fire{color:#d9480f;font-weight:700;}
+.g-certwrap{margin:10px 0;text-align:center;} .g-certwrap canvas{width:100%;max-width:420px;height:auto;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.15);}

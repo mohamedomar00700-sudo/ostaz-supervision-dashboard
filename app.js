@@ -3620,6 +3620,7 @@ ${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }))
 /* ============================================================
    تقارير الحصص: المعلمة بتكتب بعد الحصة ← الإشراف بيبعته للأسرة
    ============================================================ */
+const REP_HW = { done: '📘 واجب الحصة اللي فاتت: اتعمل ✅', partial: '📘 واجب الحصة اللي فاتت: اتعمل جزء منه 🟡', not: '📘 واجب الحصة اللي فاتت: ماتعملش ❌' };
 const REP_LEVEL = { excellent: 'ممتاز 🌟', good: 'كويس 👍', needs: 'محتاج متابعة ⚠️' };
 const repFor = s => (state.reports || []).find(r => r.session_id === s.id || (s.group_key && r.group_key === s.group_key));
 function reportLine(s) {
@@ -3662,7 +3663,7 @@ ${SIGN_F}`;
   return `السلام عليكم ورحمة الله 🌷
 📝 تقرير حصة ${st?.name || ''}${subj}
 📅 ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}
-⏱ مدة الحصة: ${durLabel(r.minutes)}${q && q.seq ? `\n${seqLine(q)}` : ''}${r.topics ? `\n📚 اللي اتشرح: ${r.topics}` : ''}${r.homework ? `\n✍️ الواجب: ${r.homework}` : ''}${r.level ? `\n⭐ المشاركة: ${REP_LEVEL[r.level]}` : ''}
+⏱ مدة الحصة: ${durLabel(r.minutes)}${q && q.seq ? `\n${seqLine(q)}` : ''}${r.topics ? `\n📚 اللي اتشرح: ${r.topics}` : ''}${r.homework ? `\n✍️ الواجب: ${r.homework}` : ''}${r.level ? `\n⭐ المشاركة: ${REP_LEVEL[r.level]}` : ''}${r.hw_done && REP_HW[r.hw_done] ? `\n${REP_HW[r.hw_done]}` : ''}
 لو عندكم أي ملاحظة على الحصة بلّغونا 🙏
 ${SIGN_F}`;
 }

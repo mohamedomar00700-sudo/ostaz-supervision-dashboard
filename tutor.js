@@ -393,6 +393,7 @@ function tutorPaymentRequest() {
 }
 
 /* ----- تقرير الحصة (المعلمة بتكتبه بعد الحصة ← الإشراف ← ولي الأمر) ----- */
+const T_HW = { done: '✅ عمله كله', partial: '🟡 جزء منه', not: '❌ ماعملهوش', none: '— مكانش فيه واجب' };
 const T_LEVEL = { excellent: 'ممتاز 🌟', good: 'كويس 👍', needs: 'محتاج متابعة ⚠️' };
 const tStarted = s => Date.now() >= new Date(s.scheduled_at).getTime() - 5 * 60e3;
 const tRepFor = s => (T.reports || []).find(r => r.session_id === s.id || (s.group_key && r.group_key === s.group_key) || (s.rows || []).some(x => x.id === r.session_id));
@@ -415,7 +416,7 @@ function tutorReport(sessionId) {
   const members = s.group_key ? (s.rows || [s]).map(r => ({ id: r.student_id, name: r.student_name })) : [];
   const planned = s.duration_minutes || 60;
   const R = window._tr = { attended: old ? old.attended : true, absent: new Set(old?.absent_ids || []), mins: old?.minutes || tMins(s) || planned, durChanged: !!(old?.minutes && old.minutes !== planned),
-    topics: old?.topics || '', homework: old?.homework || '', level: old?.level || '', note: old?.tutor_note || '' };
+    topics: old?.topics || '', homework: old?.homework || '', level: old?.level || '', note: old?.tutor_note || '', hw: old?.hw_done || '' };
   const render = () => {
     const opts = [...new Set([planned, planned + 15, planned + 30, planned + 60, Math.max(15, planned - 15)])].sort((a, b) => a - b);
     document.getElementById('modal-body').innerHTML = `
@@ -429,6 +430,8 @@ function tutorReport(sessionId) {
         ${hmHtml('tr_hm', R.mins)}` : ''}
         <div class="field"><label>اتشرح إيه في الحصة؟</label><textarea id="tr-topics" class="input" rows="3" placeholder="مثال: الدرس التاني في الوحدة الأولى — حل تمارين صفحة 20" oninput="_tr.topics=this.value">${esc(R.topics)}</textarea></div>
         <div class="field"><label>الواجب (اختياري)</label><textarea id="tr-hw" class="input" rows="2" placeholder="مثال: تمارين 1 لـ 5 صفحة 22" oninput="_tr.homework=this.value">${esc(R.homework)}</textarea></div>
+        <div class="field"><label>الطالب عمل واجب الحصة اللي فاتت؟</label><div class="seg-wrap">${Object.entries(T_HW).map(([k, l]) => `<button type="button" class="chip ${R.hw === k ? 'active' : ''}" onclick="_tr.hw=_tr.hw==='${k}'?'':'${k}'; _trRender()">${l}</button>`).join('')}</div>
+          <div class="hint">بيظهر لولي الأمر وبيدي الطالب ⭐ في صفحة إنجازاته</div></div>
         <div class="field"><label>مشاركة الطالب (اختياري)</label><div class="seg-wrap">${Object.entries(T_LEVEL).map(([k, l]) => `<button type="button" class="chip ${R.level === k ? 'active' : ''}" onclick="_tr.level=_tr.level==='${k}'?'':'${k}'; _trRender()">${l}</button>`).join('')}</div></div>` : ''}
       <div class="field"><label>🔒 ملاحظة للإشراف بس (مش هتوصل لولي الأمر)</label><textarea id="tr-note" class="input" rows="2" oninput="_tr.note=this.value">${esc(R.note)}</textarea></div>
       <div id="form-error" class="err hidden"></div>
@@ -448,12 +451,13 @@ function tutorReport(sessionId) {
     if (error && /not started/.test(error.message)) return formError('الحصة لسه مابدأتش');
     if (error && /too old/.test(error.message)) return formError('الحصة دي قديمة — ابعتي التفاصيل للإشراف على الجروب');
     if (error) throw error;
+    if (attended && (R.hw || old?.hw_done)) await sb.rpc('tutor_report_hw', { p_session: s.id, p_hw: R.hw || null }).catch(() => null);
     const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : s.student_name;
     const q = attended && !s.group_key ? await sessionSeq(s.id) : null;
     const absentNames = members.filter(m => R.absent.has(m.id)).map(m => m.name);
     window._trText = `📝 تقرير حصة ${who}${s.subject ? ' — ' + s.subject : ''} (${T.me.name})
 📅 ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}
-${attended ? `⏱ ${durLabel(R.mins)}${R.mins !== planned ? ` ⚠️ (المعاد ${durLabel(planned)})` : ''}${q && q.seq ? `\n${seqLine(q)}` : ''}${absentNames.length ? `\n🚫 غاب: ${absentNames.join('، ')}` : ''}\n📚 ${R.topics.trim()}${R.homework.trim() ? `\n✍️ الواجب: ${R.homework.trim()}` : ''}` : '🚫 الطالب ماحضرش'}`;
+${attended ? `⏱ ${durLabel(R.mins)}${R.mins !== planned ? ` ⚠️ (المعاد ${durLabel(planned)})` : ''}${q && q.seq ? `\n${seqLine(q)}` : ''}${absentNames.length ? `\n🚫 غاب: ${absentNames.join('، ')}` : ''}\n📚 ${R.topics.trim()}${R.homework.trim() ? `\n✍️ الواجب: ${R.homework.trim()}` : ''}${R.hw && R.hw !== 'none' ? `\n📘 واجب اللي فات: ${T_HW[R.hw]}` : ''}` : '🚫 الطالب ماحضرش'}`;
     openModal(old ? '✅ اتعدل التقرير' : '✅ التقرير وصل للإشراف', `<p>شكراً 🌷 الإشراف هيراجعه ويبعته لولي الأمر.</p>
       <div class="msg-preview mt">${esc(window._trText)}</div>
       <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._trText, ${jsq(T.me.group)}); closeModal()">💬 انسخيه وابعتيه على جروب الإشراف</button>` : ''}

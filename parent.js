@@ -86,7 +86,7 @@ function parentTab(t) { P.tab = t; window.scrollTo(0, 0); parentRender(); }
 
 function parentRender() {
   const el = document.getElementById('parent-content'); if (!P.data) return;
-  const tabs = [['home', '🏠', 'الرئيسية'], ['sess', '📅', 'الحصص'], ['kids', '🎒', 'الأبناء'], ...(pShowFin() ? [['money', '💳', 'الحساب']] : []), ['req', '✉️', 'الطلبات']];
+  const tabs = [['home', '🏠', 'الرئيسية'], ['sess', '📅', 'الحصص'], ['kids', '🏆', 'الأبناء'], ...(pShowFin() ? [['money', '💳', 'الحساب']] : []), ['req', '✉️', 'الطلبات']];
   if (!tabs.some(t => t[0] === P.tab)) P.tab = 'home';
   const nav = document.getElementById('parent-tabs');
   const openReq = (P.data.requests || []).filter(r => r.status !== 'done').length;
@@ -129,7 +129,7 @@ function pPkg() {
 function pReportHtml(r) {
   if (!r) return '';
   if (r.attended === false) return '<div class="small mt neg">لم يحضر الطالب هذه الحصة.</div>';
-  return `${r.topics ? `<div class="small mt">📚 <b>تم شرح:</b> ${esc(r.topics)}</div>` : ''}${r.homework ? `<div class="small">✏️ <b>الواجب:</b> ${esc(r.homework)}</div>` : ''}${r.level ? `<div class="small">⭐ <b>المستوى:</b> ${esc(r.level)}</div>` : ''}`;
+  return `${r.topics ? `<div class="small mt">📚 <b>تم شرح:</b> ${esc(r.topics)}</div>` : ''}${r.homework ? `<div class="small">✏️ <b>الواجب:</b> ${esc(r.homework)}</div>` : ''}${r.level ? `<div class="small">⭐ <b>المشاركة:</b> ${esc(P_LEVEL[r.level] || r.level)}</div>` : ''}${r.hw_done && P_HW[r.hw_done] ? `<div class="small">${P_HW[r.hw_done]}</div>` : ''}`;
 }
 function pPastCard(s) {
   const cancelled = s.status !== 'done';
@@ -159,6 +159,7 @@ function pHome() {
     <div class="p-hello"><h2>أهلاً بكم 🌷</h2><div class="sub small">${esc((d.kids || []).map(k => k.name).join(' · '))}</div></div>
     ${next ? pSessCard(next, { hero: true }) : '<div class="card empty">لا توجد حصص قادمة مسجلة حالياً.</div>'}
     ${today.length ? `<h3 class="p-day">باقي حصص اليوم</h3><div class="list">${today.map(s => pSessCard(s)).join('')}</div>` : ''}
+    ${(d.kids || []).map(k => pGameCard(k, true)).filter(Boolean).length ? `<div class="g-strip">${(d.kids || []).map(k => pGameCard(k, true)).join('')}</div>` : ''}
     <div class="p-stats">
       <div class="card p-stat" onclick="parentTab('sess')"><div class="p-num">${weekN}</div><div class="sub small">حصص في الأيام السبعة القادمة</div></div>
       <div class="card p-stat" onclick="P.sessView='past'; parentTab('sess')"><div class="p-num">${fmt(minsM / 60, 2)}</div><div class="sub small">حصة تمت هذا الشهر</div></div>
@@ -204,6 +205,7 @@ function pKids() {
     const open = P.openKid === k.id;
     return `<div class="card item p-kid">
       <div class="item-head"><div><div class="item-title">🎒 ${esc(k.name)}</div><div class="sub small">${esc(k.grade || '')}${k.curriculum && typeof CURRICULA !== 'undefined' ? ' · ' + esc(CURRICULA[k.curriculum] || '') : ''}</div></div></div>
+      ${pGameCard(k)}
       ${(k.subjects || []).length ? `<div class="p-subj">${k.subjects.map(x => `<div><b>${esc(x.subject || '')}</b><span class="sub small"> · ${esc(x.tutor_name || '')}${x.weekly ? ` · ${x.weekly === 1 ? 'حصة واحدة' : x.weekly === 2 ? 'حصتان' : x.weekly + ' حصص'} أسبوعياً` : ''}</span></div>`).join('')}</div>` : ''}
       <div class="meta mt"><span>هذا الشهر: <b>${pUnits(doneM.reduce((a, s) => a + (Number(s.minutes) || 0), 0))}</b></span>${withRep.length ? `<span>الحضور: <b>${att} من ${withRep.length}</b></span>` : ''}${next ? `<span>القادمة: <b>${esc(pDayLabel(next.scheduled_at))} ${esc(fmtTime(next.scheduled_at, P.tz))}</b></span>` : ''}</div>
       ${reps[0] ? `<div class="p-lastrep mt"><div class="small sub">آخر تقرير · ${esc(reps[0].subject || '')} · ${esc(pDate(reps[0].scheduled_at, { day: 'numeric', month: 'long' }))}</div>${pReportHtml(reps[0].report)}</div>` : ''}
@@ -355,4 +357,129 @@ function parentExit() {
   if (!confirm('الخروج من البوابة على هذا الجوال؟')) return;
   try { localStorage.removeItem('ostaz_parent_token'); } catch (e) {}
   location.href = location.pathname;
+}
+
+/* ============================================================
+   🏆 الإنجازات: مستوى ونقاط، سلسلة حضور، نجوم الواجب، شارات، وشهادة شهرية
+   كل طالب بينافس نفسه بس — مفيش ترتيب بين الطلبة، ومحدش بيشوف غير ولاده.
+   ============================================================ */
+const P_LEVEL = { excellent: 'ممتاز 🌟', good: 'جيد 👍', needs: 'يحتاج متابعة' };
+const P_HW = { done: '✅ أنجز الواجب السابق', partial: '🟡 أنجز جزءاً من الواجب', not: '❌ لم يُنجز الواجب السابق' };
+const G_LEVELS = [[0, 'مبتدئ', '🌱'], [100, 'مجتهد', '📘'], [300, 'متميز', '⭐'], [600, 'نجم', '🌟'], [1000, 'بطل', '🏆'], [1600, 'أسطورة', '👑'], [2500, 'عبقري', '💎']];
+const G_BADGES = [
+  { id: 's1', icon: '🌱', name: 'أول خطوة', desc: 'أول حصة مع الأكاديمية', test: g => g.units >= 0.5 },
+  { id: 's10', icon: '🔟', name: '10 حصص', desc: 'أكمل 10 حصص', test: g => g.units >= 10, prog: g => [g.units, 10] },
+  { id: 's25', icon: '🥉', name: '25 حصة', desc: 'أكمل 25 حصة', test: g => g.units >= 25, prog: g => [g.units, 25] },
+  { id: 's50', icon: '🥈', name: '50 حصة', desc: 'أكمل 50 حصة', test: g => g.units >= 50, prog: g => [g.units, 50] },
+  { id: 's100', icon: '🥇', name: '100 حصة', desc: 'أكمل 100 حصة', test: g => g.units >= 100, prog: g => [g.units, 100] },
+  { id: 's200', icon: '💎', name: '200 حصة', desc: 'أكمل 200 حصة', test: g => g.units >= 200, prog: g => [g.units, 200] },
+  { id: 'k5', icon: '🔥', name: 'التزام', desc: '5 حصص متتالية بدون غياب', test: g => g.streak >= 5, prog: g => [g.streak, 5] },
+  { id: 'k10', icon: '⚡', name: 'بلا توقف', desc: '10 حصص متتالية بدون غياب', test: g => g.streak >= 10, prog: g => [g.streak, 10] },
+  { id: 'k25', icon: '🚀', name: 'صاروخ', desc: '25 حصة متتالية بدون غياب', test: g => g.streak >= 25, prog: g => [g.streak, 25] },
+  { id: 'h5', icon: '✏️', name: 'بطل الواجبات', desc: 'أنجز 5 واجبات', test: g => g.stars >= 5, prog: g => [g.stars, 5] },
+  { id: 'h20', icon: '📒', name: 'الواجب دائماً جاهز', desc: 'أنجز 20 واجباً', test: g => g.stars >= 20, prog: g => [g.stars, 20] },
+  { id: 'm1', icon: '📅', name: 'شهر ذهبي', desc: 'شهر كامل (6 حصص أو أكثر) بدون أي غياب', test: g => g.goldMonths >= 1 },
+  { id: 'sub', icon: '🎯', name: 'تركيز', desc: '15 حصة في مادة واحدة', test: g => g.topSubj >= 15, prog: g => [g.topSubj, 15] },
+];
+function pGame(kidId, until) {
+  const H = (P.data.history || []).filter(h => h[1] === kidId && (!until || h[0] < until));
+  const g = { units: 0, n: 0, streak: 0, best: 0, stars: 0, xp: 0, subj: {}, months: {}, goldMonths: 0, topSubj: 0, earned: {} };
+  const curK = pMonthKey(new Date().toISOString());
+  for (const [at, , subj, min, att, hw] of H) {
+    const u = (Number(min) || 60) / 60, mk = pMonthKey(at), m = g.months[mk] ||= { units: 0, n: 0, abs: 0, stars: 0 };
+    if (att === false) { g.streak = 0; m.abs++; m.n++; continue; }
+    g.units += u; g.n++; g.streak++; g.best = Math.max(g.best, g.streak); m.units += u; m.n++;
+    g.subj[subj || 'حصة'] = (g.subj[subj || 'حصة'] || 0) + u;
+    const st = hw === 'done' ? 1 : hw === 'partial' ? 0.5 : 0; g.stars += st; m.stars += st;
+    g.xp += Math.round(u * 10) + st * 5;
+    g.topSubj = Math.max(...Object.values(g.subj));
+    g.goldMonths = Object.entries(g.months).filter(([k, x]) => k < curK && x.n >= 6 && !x.abs).length;
+    for (const b of G_BADGES) if (!g.earned[b.id] && b.test(g)) { g.earned[b.id] = at; g.xp += 20; }
+  }
+  g.units = Math.round(g.units * 100) / 100;
+  let li = 0; G_LEVELS.forEach((L, i) => { if (g.xp >= L[0]) li = i; });
+  g.level = { i: li, name: G_LEVELS[li][1], icon: G_LEVELS[li][2], from: G_LEVELS[li][0], to: G_LEVELS[li + 1]?.[0] || null };
+  return g;
+}
+function pGameCard(k, compact) {
+  const g = pGame(k.id); if (!g.n && !Object.keys(g.months).length) return '';
+  const L = g.level, pct = L.to ? Math.min(100, Math.round((g.xp - L.from) / (L.to - L.from) * 100)) : 100;
+  const earned = G_BADGES.filter(b => g.earned[b.id]), next = G_BADGES.filter(b => !g.earned[b.id] && b.prog).map(b => ({ b, p: b.prog(g) })).sort((a, b) => b.p[0] / b.p[1] - a.p[0] / a.p[1]).slice(0, 2);
+  if (compact) return `<div class="g-mini" onclick="parentTab('kids')"><span class="g-lv">${L.icon} ${esc(L.name)}</span> <b>${esc(k.name)}</b>${g.streak >= 2 ? ` <span class="g-fire">🔥 ${g.streak}</span>` : ''}${g.stars ? ` <span>⭐ ${fmt(g.stars, 1)}</span>` : ''} <span class="sub small">· ${earned.length} شارة</span></div>`;
+  return `<div class="g-card">
+    <div class="g-top"><div class="g-level"><div class="g-lvicon">${L.icon}</div><div><div class="small sub">المستوى ${L.i + 1}</div><b>${esc(L.name)}</b></div></div>
+      <div class="g-pills"><span class="g-pill" title="سلسلة الحضور">🔥 ${g.streak}<small>متتالية</small></span><span class="g-pill" title="نجوم الواجب">⭐ ${fmt(g.stars, 1)}<small>واجب</small></span><span class="g-pill">🏅 ${earned.length}<small>شارة</small></span></div></div>
+    <div class="p-bar mt"><span style="width:${pct}%"></span></div>
+    <div class="small sub mt">${fmt(g.xp)} نقطة${L.to ? ` · باقي ${fmt(L.to - g.xp)} للوصول إلى «${esc(G_LEVELS[L.i + 1][1])}» ${G_LEVELS[L.i + 1][2]}` : ' · أعلى مستوى 👏'}${g.best > g.streak && g.best >= 5 ? ` · أفضل سلسلة: ${g.best}` : ''}</div>
+    ${earned.length ? `<div class="g-badges mt">${earned.map(b => `<div class="g-badge" title="${esc(b.desc)}"><span>${b.icon}</span><small>${esc(b.name)}</small></div>`).join('')}</div>` : ''}
+    ${next.length ? `<div class="mt">${next.map(({ b, p }) => `<div class="g-next"><span>${b.icon}</span><div style="flex:1"><div class="small"><b>${esc(b.name)}</b> <span class="sub">— ${esc(b.desc)}</span></div><div class="p-bar thin"><span style="width:${Math.round(Math.min(1, p[0] / p[1]) * 100)}%"></span></div></div><small class="sub">${fmt(Math.min(p[0], p[1]), 1)}/${p[1]}</small></div>`).join('')}</div>` : ''}
+    <button class="btn btn-brand sm mt" onclick="parentCertificate(${jsq(k.id)})">📜 شهادة الشهر</button>
+  </div>`;
+}
+
+/* ---------- الشهادة الشهرية (صورة يقدر ولي الأمر يحفظها أو يشاركها) ---------- */
+function pCertMonths(kidId) {
+  const ms = {}; (P.data.history || []).filter(h => h[1] === kidId && h[4] !== false).forEach(h => { const k = pMonthKey(h[0]); ms[k] = (ms[k] || 0) + (Number(h[3]) || 60) / 60; });
+  return Object.entries(ms).filter(([, u]) => u >= 1).map(([k]) => k).sort().reverse().slice(0, 4);
+}
+async function parentCertificate(kidId, month) {
+  const k = (P.data.kids || []).find(x => x.id === kidId); if (!k) return;
+  const months = pCertMonths(kidId);
+  if (!months.length) return showToast('لا توجد حصص كافية لإصدار شهادة بعد', true);
+  const curK = pMonthKey(new Date().toISOString());
+  if (!month) month = months[0] === curK && months[1] && new Date().getDate() <= 10 ? months[1] : months[0];
+  openModal(`📜 شهادة ${k.name}`, `<div class="chips">${months.map(m => `<button class="chip ${m === month ? 'active' : ''}" onclick="parentCertificate(${jsq(kidId)}, '${m}')">${esc(pMonthLbl(m))}${m === curK ? ' (حتى الآن)' : ''}</button>`).join('')}</div>
+    <div class="g-certwrap"><canvas id="g-cert" width="1080" height="1350"></canvas></div>
+    <div class="modal-foot"><button class="btn btn-brand" onclick="parentCertShare(${jsq(k.name)}, '${month}')">📤 حفظ / مشاركة</button><button class="btn btn-ghost" onclick="closeModal()">إغلاق</button></div>`);
+  await pDrawCert(document.getElementById('g-cert'), k, month);
+}
+async function pDrawCert(cv, k, month) {
+  try { await Promise.race([Promise.all([document.fonts.load('800 80px Cairo'), document.fonts.load('600 40px Cairo')]), new Promise(r => setTimeout(r, 1500))]); } catch (e) {}
+  const F = (w, s) => `${w} ${s}px Cairo, Tahoma, Arial, sans-serif`;
+  const x = cv.getContext('2d'), W = cv.width, H = cv.height, cx = W / 2;
+  const [y, mo] = month.split('-').map(Number), endIso = new Date(Date.UTC(y, mo, 1)).toISOString();
+  const all = pGame(k.id, endIso), before = pGame(k.id, new Date(Date.UTC(y, mo - 1, 1)).toISOString());
+  const M = all.months[month] || { units: 0, n: 0, abs: 0, stars: 0 };
+  const subs = {}; (P.data.history || []).filter(h => h[1] === k.id && pMonthKey(h[0]) === month && h[4] !== false).forEach(h => { subs[h[2] || 'حصة'] = (subs[h[2] || 'حصة'] || 0) + (Number(h[3]) || 60) / 60; });
+  const newBadges = G_BADGES.filter(b => all.earned[b.id] && !before.earned[b.id]);
+  // الخلفية والإطار
+  const bg = x.createLinearGradient(0, 0, W, H); bg.addColorStop(0, '#FFFDF7'); bg.addColorStop(1, '#F3F7FF');
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  x.strokeStyle = '#16325C'; x.lineWidth = 14; x.strokeRect(36, 36, W - 72, H - 72);
+  x.strokeStyle = '#F28C28'; x.lineWidth = 4; x.strokeRect(64, 64, W - 128, H - 128);
+  for (const [px, py] of [[64, 64], [W - 64, 64], [64, H - 64], [W - 64, H - 64]]) { x.fillStyle = '#F28C28'; x.beginPath(); x.arc(px, py, 14, 0, 7); x.fill(); }
+  x.direction = 'rtl'; x.textAlign = 'center'; x.textBaseline = 'alphabetic';
+  // اللوجو
+  await new Promise(res => { const im = new Image(); im.onload = () => { x.save(); x.beginPath(); x.arc(cx, 205, 95, 0, 7); x.fillStyle = '#fff'; x.fill(); x.clip(); x.drawImage(im, cx - 85, 120, 170, 170); x.restore(); res(); }; im.onerror = res; im.src = 'logo.png'; });
+  x.fillStyle = '#16325C'; x.font = F(700, 34); x.fillText('أكاديمية أستاذ أونلاين', cx, 345);
+  x.fillStyle = '#C9671A'; x.font = F(800, 92); x.fillText('شهادة إنجاز', cx, 470);
+  x.fillStyle = '#4A5568'; x.font = F(600, 36); x.fillText(`تُمنح بكل فخر إلى`, cx, 545);
+  x.fillStyle = '#142238'; x.font = F(800, 104); x.fillText(k.name, cx, 670);
+  x.strokeStyle = '#F28C28'; x.lineWidth = 4; x.beginPath(); x.moveTo(cx - 240, 700); x.lineTo(cx + 240, 700); x.stroke();
+  x.fillStyle = '#4A5568'; x.font = F(600, 36);
+  const isCur = month === pMonthKey(new Date().toISOString());
+  x.fillText(`تقديراً للاجتهاد والالتزام في شهر ${pMonthLbl(month)}${isCur ? ' (حتى الآن)' : ''}`, cx, 765);
+  // الأرقام
+  const att = M.n ? Math.round((M.n - M.abs) / M.n * 100) : 0;
+  const stats = [[fmt(Math.round(M.units * 10) / 10, 1), 'حصة'], [att + '%', 'حضور'], ...(M.stars ? [[fmt(M.stars, 1), 'واجب ⭐']] : [[all.streak, 'سلسلة 🔥']])];
+  const bw = 250, gap = 30, sx = cx + (stats.length * bw + (stats.length - 1) * gap) / 2 - bw / 2;
+  stats.forEach(([v, l], i) => { const bx = sx - i * (bw + gap);
+    x.fillStyle = '#EEF2F8'; pRound(x, bx - bw / 2, 820, bw, 170, 26); x.fill();
+    x.fillStyle = '#16325C'; x.font = F(800, 68); x.fillText(String(v), bx, 915); x.fillStyle = '#4A5568'; x.font = F(600, 30); x.fillText(l, bx, 962); });
+  x.fillStyle = '#142238'; x.font = F(600, 32);
+  const sl = Object.entries(subs).sort((a, b) => b[1] - a[1]).map(([s]) => s).slice(0, 5).join(' · ');
+  if (sl) x.fillText('المواد: ' + sl, cx, 1055);
+  x.font = F(600, 30);
+  x.fillText(newBadges.length ? 'شارات جديدة: ' + newBadges.map(b => b.icon + ' ' + b.name).slice(0, 3).join('   ') : `${all.level.icon} المستوى ${all.level.i + 1}: ${all.level.name}`, cx, 1115);
+  x.fillStyle = '#6A7179'; x.font = F(600, 28); x.fillText('فريق الإشراف — أكاديمية أستاذ أونلاين', cx, 1225);
+  x.fillStyle = '#16325C'; x.font = F(700, 30); x.fillText('عمل رائع.. نفخر بك 🌟', cx, 1270);
+}
+function pRound(x, a, b, w, h, r) { x.beginPath(); x.moveTo(a + r, b); x.arcTo(a + w, b, a + w, b + h, r); x.arcTo(a + w, b + h, a, b + h, r); x.arcTo(a, b + h, a, b, r); x.arcTo(a, b, a + w, b, r); x.closePath(); }
+async function parentCertShare(name, month) {
+  const cv = document.getElementById('g-cert'); if (!cv) return;
+  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+  const file = new File([blob], `شهادة-${name}-${month}.png`, { type: 'image/png' });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) return await navigator.share({ files: [file], title: `شهادة ${name}` }); } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+  showToast('تم حفظ الشهادة ✓');
 }
