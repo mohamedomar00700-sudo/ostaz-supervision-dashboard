@@ -4129,6 +4129,7 @@ async function enterApp() {
   if (openReq) setTimeout(() => openTutorRequests(), 1500);
   if (new URLSearchParams(location.search).get('reports')) setTimeout(() => openReports(), 1500);
   if (new URLSearchParams(location.search).get('missing')) setTimeout(() => openMissingReports(), 1500);
+  if (new URLSearchParams(location.search).get('relay')) setTimeout(() => switchTab('relay'), 800);
   const qDay = new URLSearchParams(location.search).get('day');
   if (qDay && /^\d{4}-\d{2}-\d{2}$/.test(qDay)) state.day = qDay;
   // مسح بقايا رابط جوجل (?code=… / #…) من شريط العنوان
@@ -4515,6 +4516,11 @@ function renderRetention() {
 
 /* ----- لينك بوابة ولي الأمر (من ملف الأسرة) ----- */
 const parentUrl = token => new URL('./', location.href).href + '?p=' + token;
+async function toggleParentFinance(fid) {
+  const f = byId(state.families, fid); const v = f.portal_finance === false;
+  try { await q(sb.from('families').update({ portal_finance: v }).eq('id', fid)); f.portal_finance = v; showToast(v ? 'الحساب ظاهر للأسرة ✓' : 'الحساب اتخفى من البوابة'); openParentLink(fid); }
+  catch (e) { showToast(dbError(e), true); }
+}
 async function openParentLink(fid, regen) {
   const f = byId(state.families, fid); if (!f) return;
   try {
@@ -4523,11 +4529,14 @@ async function openParentLink(fid, regen) {
     if (!links.length) { const [n] = await q(sb.from('parent_links').insert({ family_id: fid, label: f.name }).select()); links = [n]; }
     const l = links[0], url = parentUrl(l.token);
     const devs = await q(sb.from('parent_push').select('id').eq('link_id', l.id));
-    window._parentMsg = parentInviteText(url);
+    window._parentMsg = parentInviteText(url, f.portal_finance !== false);
     openModal(`📱 بوابة ولي الأمر — ${f.name}`, `
       <p class="small">صفحة خاصة بالأسرة فيها مواعيد الحصص بتوقيتهم، ولينك الحصة، وتقارير المعلمين بعد ما تتبعت. لما يفعّلوا التنبيهات بيوصلهم تذكير قبل الحصة بساعة وبربع ساعة، ولو ماأكدوش التذكير بيتكرر كل 3 دقايق، وإنتوا بيوصلكم تنبيه لو لسه ماأكدوش قبل الحصة بحوالي 7 دقايق عشان ترنّوا على الجروب.</p>
       <div class="card item mt"><div class="small sub">اللينك الخاص بالأسرة</div><div dir="ltr" class="small" style="word-break:break-all">${esc(url)}</div>
         <div class="meta mt"><span>📱 موبايلات مفعّل عليها التنبيهات: <b>${devs.length}</b></span><span>آخر فتح: <b>${l.last_seen ? ago(l.last_seen) : 'لسه مافتحوش'}</b></span></div></div>
+      <div class="card item mt"><div class="item-head"><div><b>💳 الحساب في البوابة</b><div class="sub small">${f.portal_finance === false ? 'مخفي — الأسرة مش شايفة الرصيد ولا الكشف ولا المدفوعات.' : 'ظاهر — الأسرة شايفة رصيدها، كشف كل شهر، المدفوعات، والباقة.'}</div></div>
+        <button class="btn btn-ghost sm" onclick="toggleParentFinance(${jsq(fid)})">${f.portal_finance === false ? 'إظهار' : 'إخفاء'}</button></div>
+        ${f.portal_finance === false ? '' : '<div class="sub small mt">⚠️ الرصيد بيتحسب من الحصص اللي اتسجلت "تمت" — خلي الحصص تتقفل أول بأول عشان الكشف يبقى مظبوط.</div>'}</div>
       <div class="modal-foot">
         <button class="btn btn-wa" onclick="copyText(window._parentMsg, 'اتنسخت الرسالة ✓ — ابعتها على جروب الأسرة')">📋 نسخ رسالة للجروب</button>
         <a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener">👁 افتح البوابة</a>
@@ -4535,13 +4544,14 @@ async function openParentLink(fid, regen) {
       </div>`);
   } catch (e) { showToast(dbError(e), true); }
 }
-function parentInviteText(url) {
+function parentInviteText(url, fin) {
   return `السلام عليكم ورحمة الله 🌷
 يسعدنا إبلاغكم بأنه أصبح لأسرتكم صفحة خاصة في أكاديمية أستاذ أونلاين، فيها:
 📅 مواعيد حصص الأبناء بتوقيتكم
 🔔 تذكير قبل كل حصة — اضغطوا «✅ تم» ليطمئن الإشراف أنكم رأيتم التذكير
 🎥 رابط دخول الحصة
-📝 تقارير المعلمين بعد كل حصة
+📝 تقارير المعلمين بعد كل حصة ومتابعة مستوى كل ابن
+${fin ? '💳 كشف الحساب الشهري والمدفوعات ورصيد الباقة\n' : ''}✉️ إرسال طلبات التأجيل والرسائل للمعلمين عن طريق الإشراف
 
 الرابط الخاص بأسرتكم (يُرجى عدم مشاركته):
 ${url}
