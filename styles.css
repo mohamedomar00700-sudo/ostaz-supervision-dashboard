@@ -368,3 +368,18 @@ body.hide-profit .owner-only{display:none!important}
 .ret-done{opacity:.6}
 
 .lead-due{border-right:4px solid var(--danger, #dc2626)}
+
+/* ===== بوابة ولي الأمر + تأكيد التذكيرات ===== */
+#view-parent .wrap { max-width: 640px; }
+.p-day { margin: 18px 4px 8px; font-weight: 700; color: var(--muted, #667); font-size: 14px; }
+.p-sess { display: flex; flex-direction: column; gap: 8px; }
+.p-sess .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.p-sess .actions .btn { flex: 1 1 140px; justify-content: center; font-size: 15px; padding: 10px 12px; }
+.p-time { font-size: 20px; font-weight: 800; }
+.p-soon { border-inline-start: 4px solid #F28C28; }
+.p-banner { background: #FFF6EC; border: 1px solid #F5C99A; }
+@media (prefers-color-scheme: dark) { .p-banner { background: #3a2a18; border-color: #7a5328; } }
+.ack-line { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12px; }
+.ack-line .chip { padding: 2px 8px; border-radius: 999px; background: rgba(127,127,127,.12); }
+.ack-line .chip.ok { background: rgba(34,160,90,.15); color: #1b7a45; }
+.ack-line .chip.wait { background: rgba(242,140,40,.15); color: #b05f12; }

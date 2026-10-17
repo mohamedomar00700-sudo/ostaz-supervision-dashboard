@@ -298,6 +298,25 @@ async function loadDay() {
   state.daySessions = await q(sb.from('sessions').select('*')
     .gte('scheduled_at', start.toISOString()).lt('scheduled_at', end.toISOString())
     .order('scheduled_at'));
+  loadAcks().then(() => { if (currentTab === 'daily') renderDaily(); }).catch(() => {});
+}
+// تأكيد التذكير من ولي الأمر والمعلم/ة + مين على البوابة
+async function loadAcks() {
+  const open = state.daySessions.filter(s => s.status === 'scheduled' || s.status === 'in_progress'), ids = open.map(s => s.id);
+  if (!ids.length) { state.acks = new Set(); return; }
+  const fams = [...new Set(open.map(s => byId(state.students, s.student_id)?.family_id).filter(Boolean))];
+  const [acks, links] = await Promise.all([q(sb.from('session_acks').select('session_id,party').in('session_id', ids)),
+    fams.length ? q(sb.from('parent_links').select('id,family_id').eq('revoked', false).in('family_id', fams)) : []]);
+  const devs = links.length ? await q(sb.from('parent_push').select('link_id').in('link_id', links.map(l => l.id))) : [];
+  state.acks = new Set(acks.map(a => a.session_id + '|' + a.party));
+  state.parentDevices = {}; links.forEach(l => { state.parentDevices[l.family_id] = (state.parentDevices[l.family_id] || 0) + devs.filter(d => d.link_id === l.id).length; });
+}
+function ackLine(s, fam, tu) {
+  if (!state.acks || !(s.status === 'scheduled' || s.status === 'in_progress') || sEnd(s) < Date.now()) return '';
+  const pa = state.acks.has(s.id + '|parent'), ta = state.acks.has(s.id + '|tutor'), pd = fam ? state.parentDevices?.[fam.id] : 0;
+  const p = pa ? '<span class="pos">✓ ولي الأمر أكّد</span>' : pd ? '<span class="warn-txt">⏳ ولي الأمر لسه ماأكدش</span>' : '<span class="sub">ولي الأمر مش على البوابة</span>';
+  const t = ta ? '<span class="pos">✓ المعلم/ة أكّد</span>' : tu?.user_id ? '<span class="warn-txt">⏳ المعلم/ة لسه</span>' : '<span class="sub">المعلم/ة مش على البوابة</span>';
+  return `<div class="small mt ack-line">🔔 ${p} · ${t}</div>`;
 }
 async function loadRelay() {
   state.relay = await q(sb.from('relay_tasks').select('*').order('created_at', { ascending: false }).limit(300));
@@ -497,6 +516,7 @@ function sessionCard(s) {
         ${s.meeting_link ? `<span><a href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">رابط الحصة ↗</a></span>` : (open ? '<span class="neg">لا يوجد رابط</span>' : '')}
       </div>
       ${s.notes ? `<div class="sub small mt">📝 ${esc(s.notes)}</div>` : ''}
+      ${ackLine(s, fam, tu)}
       ${reportLine(s)}
       ${trialOutcomeLine(s)}
       ${cancelled ? `<div class="cancel-info mt">✖ ${cancelInfo(s)}</div>` : `<div class="money">
@@ -1195,6 +1215,7 @@ function renderFamilies() {
         <button class="btn btn-brand sm" onclick="openPaymentForm(${fid})">+ دفعة</button>
         <button class="btn btn-ghost sm" onclick="openSchedule('family', ${fid})">📋 الجدول</button>
         <button class="btn btn-wa sm" onclick="openFamilyInvoice(${fid})">📄 ${f.billing_cycle === 'prepaid' ? 'كشف رصيد' : 'فاتورة'}</button>
+        <button class="btn btn-ghost sm" onclick="openParentLink(${fid})">📱 بوابة ولي الأمر</button>
         ${b.balance < 0 ? `<button class="btn btn-ghost sm" onclick="openPaymentReminder(${fid})">📲 مطالبة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openFamilyStatement(${fid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openFamilyForm(${fid})">تعديل</button>
@@ -4077,7 +4098,7 @@ async function signOut() {
   showView('auth');
 }
 function showView(name) {
-  ['auth', 'pending', 'app', 'tutor'].forEach(v => document.getElementById('view-' + v)?.classList.toggle('hidden', v !== name));
+  ['auth', 'pending', 'app', 'tutor', 'parent'].forEach(v => document.getElementById('view-' + v)?.classList.toggle('hidden', v !== name));
 }
 async function handlePostAuth(attempt = 0) {
   const { data: { user } } = await sb.auth.getUser();
@@ -4183,6 +4204,7 @@ async function updateSupervisor(id, patch) {
 /* ----- بدء التشغيل ----- */
 let _postAuthHandled = false;
 sb.auth.onAuthStateChange((event, session) => {
+  if (PARENT_URL_TOKEN || window._parentMode) return; // لينك ولي الأمر بيفتح البوابة بتاعته دايماً
   if (session && !_postAuthHandled && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
     _postAuthHandled = true;
     setTimeout(() => handlePostAuth(), 0);
@@ -4196,9 +4218,11 @@ sb.auth.onAuthStateChange((event, session) => {
     history.replaceState(null, '', location.pathname);
     return;
   }
+  if (PARENT_URL_TOKEN) return enterParent(PARENT_URL_TOKEN);
   try {
     const { data: { session } } = await sb.auth.getSession();
     if (session) { if (!_postAuthHandled) { _postAuthHandled = true; await handlePostAuth(); } }
+    else if (PARENT_TOKEN) enterParent(PARENT_TOKEN);
     else showView('auth');
   } catch (err) {
     showAuthError('حصل خطأ أثناء تحميل الصفحة: ' + err.message);
@@ -4487,6 +4511,45 @@ function renderRetention() {
     ${z.fresh.length ? `<div class="section-title"><h2>✨ جداد السنة دي (${z.fresh.length})</h2></div><div class="card item">${z.fresh.map(x => `<div class="dist-row"><span class="dist-k">${esc(x.name)}</span><span class="sub small">${esc(x.src || '')}</span><span class="sub small">من ${ml(x.firstMonth)}</span></div>`).join('')}</div>` : ''}
     ${z.never.length ? `<div class="section-title"><h2>🫥 متسجلين ومحضروش ولا حصة (${z.never.length})</h2></div><div class="card item">${z.never.map(f => `<div class="dist-row"><span class="dist-k">${esc(f.name)}</span></div>`).join('')}</div>` : ''}
     <p class="sub small mt">الأسر القديمة اللي قبل السيستم جاية من الحسابات القديمة (من غير أرقام تليفونات) — الرسالة بتتنسخ وتبعتها إنت من الواتساب.</p>`;
+}
+
+/* ----- لينك بوابة ولي الأمر (من ملف الأسرة) ----- */
+const parentUrl = token => new URL('./', location.href).href + '?p=' + token;
+async function openParentLink(fid, regen) {
+  const f = byId(state.families, fid); if (!f) return;
+  try {
+    let links = await q(sb.from('parent_links').select('*').eq('family_id', fid).eq('revoked', false).order('created_at', { ascending: false }));
+    if (regen && links.length) { await q(sb.from('parent_links').update({ revoked: true }).in('id', links.map(l => l.id))); links = []; }
+    if (!links.length) { const [n] = await q(sb.from('parent_links').insert({ family_id: fid, label: f.name }).select()); links = [n]; }
+    const l = links[0], url = parentUrl(l.token);
+    const devs = await q(sb.from('parent_push').select('id').eq('link_id', l.id));
+    window._parentMsg = parentInviteText(url);
+    openModal(`📱 بوابة ولي الأمر — ${f.name}`, `
+      <p class="small">صفحة خاصة بالأسرة فيها مواعيد الحصص بتوقيتهم، ولينك الحصة، وتقارير المعلمين بعد ما تتبعت. لما يفعّلوا التنبيهات بيوصلهم تذكير قبل الحصة بساعة وبربع ساعة، ولو ماأكدوش التذكير بيتكرر كل 3 دقايق، وإنتوا بيوصلكم تنبيه لو لسه ماأكدوش قبل الحصة بحوالي 7 دقايق عشان ترنّوا على الجروب.</p>
+      <div class="card item mt"><div class="small sub">اللينك الخاص بالأسرة</div><div dir="ltr" class="small" style="word-break:break-all">${esc(url)}</div>
+        <div class="meta mt"><span>📱 موبايلات مفعّل عليها التنبيهات: <b>${devs.length}</b></span><span>آخر فتح: <b>${l.last_seen ? ago(l.last_seen) : 'لسه مافتحوش'}</b></span></div></div>
+      <div class="modal-foot">
+        <button class="btn btn-wa" onclick="copyText(window._parentMsg, 'اتنسخت الرسالة ✓ — ابعتها على جروب الأسرة')">📋 نسخ رسالة للجروب</button>
+        <a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener">👁 افتح البوابة</a>
+        <button class="btn btn-ghost" onclick="if(confirm('اللينك القديم هيبطل يشتغل والأسرة محتاجة اللينك الجديد. متأكد؟')) openParentLink(${jsq(fid)}, true)">🔄 لينك جديد</button>
+      </div>`);
+  } catch (e) { showToast(dbError(e), true); }
+}
+function parentInviteText(url) {
+  return `السلام عليكم ورحمة الله 🌷
+يسعدنا إبلاغكم بأنه أصبح لأسرتكم صفحة خاصة في أكاديمية أستاذ أونلاين، فيها:
+📅 مواعيد حصص الأبناء بتوقيتكم
+🔔 تذكير قبل كل حصة — اضغطوا «✅ تم» ليطمئن الإشراف أنكم رأيتم التذكير
+🎥 رابط دخول الحصة
+📝 تقارير المعلمين بعد كل حصة
+
+الرابط الخاص بأسرتكم (يُرجى عدم مشاركته):
+${url}
+
+📱 الآيفون: افتحوا الرابط في Safari ← زر المشاركة ⬆︎ ← «إضافة إلى الشاشة الرئيسية» ← افتحوها من الأيقونة واضغطوا 🔕 لتفعيل التنبيهات.
+📱 الأندرويد: افتحوا الرابط في Chrome ← اضغطوا «تفعيل» للتنبيهات ← ومن القائمة ⋮ اختاروا «إضافة إلى الشاشة الرئيسية».
+
+أكاديمية أستاذ أونلاين 💙`;
 }
 
 /* ============================================================

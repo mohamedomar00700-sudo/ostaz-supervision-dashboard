@@ -15,14 +15,20 @@ self.addEventListener('push', (e) => {
     vibrate: [400, 150, 400, 150, 800],
     dir: 'rtl',
     lang: 'ar',
-    data: { url: d.url || './' },
+    actions: Array.isArray(d.actions) ? d.actions.slice(0, 2) : undefined,
+    data: { url: d.url || './', ack: d.ack || null },
   }));
 });
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = new URL((e.notification.data && e.notification.data.url) || './', self.registration.scope).href;
+  const d = e.notification.data || {};
+  const url = new URL(d.url || './', self.registration.scope).href;
+  // أي ضغطة على الإشعار (أو زر «تم») = تأكيد إن الشخص شاف التذكير
+  const ack = d.ack && d.ack.url ? fetch(d.ack.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d.ack.body) }).catch(() => {}) : Promise.resolve();
+  if (e.action === 'ack') return e.waitUntil(ack);
   e.waitUntil((async () => {
+    await ack;
     if (!url.startsWith(self.registration.scope)) return self.clients.openWindow(url); // لينك الحصة (زوم / ميت)
     const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of list) {

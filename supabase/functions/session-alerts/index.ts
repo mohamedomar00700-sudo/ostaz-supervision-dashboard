@@ -23,13 +23,13 @@ const cairoTime = (iso: string) =>
 
 type Sub = { id: string; user_id: string; endpoint: string; p256dh: string; auth: string };
 
-async function pushToSubs(subs: Sub[], payload: object, vapid: any) {
+async function pushToSubs(subs: Sub[], payload: object, vapid: any, table = 'push_subscriptions') {
   const results = await Promise.all(subs.map(async (s) => {
     try {
       const r = await sendWebPush({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
         JSON.stringify(payload), vapid, { ttl: 900, urgency: 'high' });
-      if (r.status === 404 || r.status === 410) await admin.from('push_subscriptions').delete().eq('id', s.id);
-      else if (r.ok) await admin.from('push_subscriptions').update({ last_ok_at: new Date().toISOString() }).eq('id', s.id);
+      if (r.status === 404 || r.status === 410) await admin.from(table).delete().eq('id', s.id);
+      else if (r.ok) await admin.from(table).update({ last_ok_at: new Date().toISOString() }).eq('id', s.id);
       return { id: s.id, status: r.status, err: r.ok ? undefined : r.text?.slice(0, 200) };
     } catch (e) {
       return { id: s.id, status: 0, err: String(e).slice(0, 200) };
@@ -52,6 +52,16 @@ async function ntfySend(chans: Alarm[], msg: { title: string; message: string; p
     } catch (e) { return { user: c.user_id, status: 0, err: String(e).slice(0, 120) }; }
   }));
 }
+
+// ---------- تأكيد التذكير من الإشعار نفسه (زر «تم») ----------
+const FN_URL = Deno.env.get('SUPABASE_URL')! + '/functions/v1/session-alerts';
+async function ackSig(secret: string, msg: string) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const b = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(msg)));
+  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+const TZ: Record<string, string> = { 'الإمارات': 'Asia/Dubai', 'السعودية': 'Asia/Riyadh', 'مصر': 'Africa/Cairo' };
+const tzTime = (iso: string, tz: string) => new Date(iso).toLocaleTimeString('ar-EG-u-nu-latn', { hour: 'numeric', minute: '2-digit', timeZone: tz });
 
 // ---------- تحديثات جدول المعلمة اللي الإشراف عملها من عنده ----------
 const durL = (min: number) => {
@@ -148,6 +158,23 @@ Deno.serve(async (req) => {
     const delay = Math.min(Math.max(Number(body.delay) || 0, 0), 25);
     if (delay) await new Promise((r) => setTimeout(r, delay * 1000));
     const r = await ntfySend([ch as Alarm], { title: '⏰ تجربة منبه أستاذ أونلاين', message: 'لو سامع/ة الصوت ده والموبايل مقفول يبقى المنبه شغال ✅', priority: 5, tags: ['alarm_clock'], click: APP_URL });
+    return json({ sent: r });
+  }
+
+  // ---------- ولي الأمر/المعلمة ضغط «تم» على الإشعار ----------
+  if (body.action === 'ack') {
+    const { s: sid, p, id, sig } = body;
+    if (!sid || !['parent', 'tutor'].includes(p) || !id || sig !== await ackSig(S.cron_secret, `${sid}|${p}|${id}`)) return json({ ok: false }, 403);
+    await admin.from('session_acks').upsert([{ session_id: sid, party: p, party_id: id, via: 'push' }], { onConflict: 'session_id,party,party_id', ignoreDuplicates: true });
+    return json({ ok: true });
+  }
+
+  // ---------- تجربة الإشعار من بوابة ولي الأمر ----------
+  if (body.action === 'parent_test') {
+    const { data: link } = await admin.from('parent_links').select('id').eq('token', String(body.token || '')).eq('revoked', false).maybeSingle();
+    if (!link) return json({ error: 'not found' }, 404);
+    const { data: ps } = await admin.from('parent_push').select('*').eq('link_id', link.id);
+    const r = await pushToSubs((ps || []) as any, { title: '✅ التنبيهات تعمل', body: 'سيصلكم تذكير قبل كل حصة، ويتكرر حتى تضغطوا «تم».', tag: 'ptest', url: `./?p=${body.token}` }, vapid, 'parent_push');
     return json({ sent: r });
   }
 
@@ -317,6 +344,108 @@ Deno.serve(async (req) => {
     }
   }
 
+  // ---------- تذكير ولي الأمر والمعلمة يتكرر لحد ما يضغطوا «تم» ----------
+  // قبل الحصة بساعة (لولي الأمر)، وبعدين من قبلها بربع ساعة كل 3 دقايق لحد بعد بدايتها بـ 5 دقايق.
+  // لو حد لسه ماأكدش قبلها بـ 7 دقايق → منبه للمعلمة (ntfy) وتنبيه للإشراف يرنّوا على الجروب.
+  const ackReport: any[] = [];
+  try {
+    const n0 = Date.now();
+    const { data: up } = await admin.from('sessions')
+      .select('id, scheduled_at, duration_minutes, kind, subject, student_id, tutor_id, meeting_link, group_key, group_name, students(name,family_id,families(name,country)), tutors(name,user_id,meeting_link)')
+      .eq('status', 'scheduled')
+      .gte('scheduled_at', new Date(n0 - 6 * 60e3).toISOString())
+      .lte('scheduled_at', new Date(n0 + 63 * 60e3).toISOString());
+    const occ = new Map<string, any[]>();
+    for (const s of up || []) { const k = (s.group_key || s.id) + '@' + s.scheduled_at; (occ.get(k) || occ.set(k, []).get(k))!.push(s); }
+    const allIds = (up || []).map((s: any) => s.id);
+    const { data: acks } = allIds.length ? await admin.from('session_acks').select('session_id,party,party_id').in('session_id', allIds) : { data: [] as any[] };
+    const famIds = [...new Set((up || []).map((s: any) => s.students?.family_id).filter(Boolean))];
+    const { data: links } = famIds.length ? await admin.from('parent_links').select('id,family_id,token').eq('revoked', false).in('family_id', famIds) : { data: [] as any[] };
+    const linkIds = (links || []).map((l: any) => l.id);
+    const { data: ppush } = linkIds.length ? await admin.from('parent_push').select('*').in('link_id', linkIds) : { data: [] as any[] };
+    const claim = async (sid: string, kind: string) => { const { data } = await admin.from('session_alert_log').upsert([{ session_id: sid, kind }], { onConflict: 'session_id,kind', ignoreDuplicates: true }).select(); return !!data?.length; };
+    const linkOf = async (s: any) => {
+      if (s.meeting_link) return s.meeting_link;
+      const { data: pl } = await admin.from('student_subjects').select('meeting_link').eq('student_id', s.student_id).eq('tutor_id', s.tutor_id).not('meeting_link', 'is', null).limit(1);
+      return pl?.[0]?.meeting_link || s.tutors?.meeting_link || null;
+    };
+    const href = (l: string | null) => l ? (l.startsWith('http') ? l : 'https://' + l) : null;
+    let supSubs: any[] | null = null, supAlarms: any[] | null = null;
+    for (const rows of occ.values()) {
+      const s0 = rows.slice().sort((a: any, b: any) => a.id < b.id ? -1 : 1)[0];
+      const t = new Date(s0.scheduled_at).getTime(), m = (t - n0) / 60e3;
+      let stage = '';
+      if (m >= 50 && m < 62) stage = 'h1';
+      else if (m <= 16.5 && m > -5.5) stage = 'r' + Math.min(7, Math.floor((16.5 - m) / 3));
+      if (!stage) continue;
+      const rn = stage === 'h1' ? -1 : Number(stage.slice(1));
+      const mins = Math.max(0, Math.round(m));
+      const link = href(await linkOf(s0));
+      const tu: any = s0.tutors || {};
+      const tutorName = String(tu.name || '').split(' (')[0];
+      const pending: string[] = [];
+      // ولي الأمر: إشعار لكل أسرة في الحصة (المجموعة ممكن يبقى فيها أكتر من أسرة)
+      const fams = new Map<string, any>();
+      for (const r of rows) if (r.students?.family_id && !fams.has(r.students.family_id)) fams.set(r.students.family_id, r);
+      for (const [fid, r] of fams) {
+        const acked = (acks || []).some((a: any) => a.party === 'parent' && a.party_id === fid && rows.some((x: any) => x.id === a.session_id));
+        const fl = (links || []).filter((l: any) => l.family_id === fid);
+        const subs = (ppush || []).filter((x: any) => fl.some((l: any) => l.id === x.link_id));
+        if (!subs.length) continue;
+        if (!acked && rn >= 3) pending.push(`ولي أمر ${r.students?.name || ''}`);
+        if (acked && rn >= 1) continue;
+        if (!(await claim(r.id, `par:${stage}@${t}`))) continue;
+        const kids = rows.filter((x: any) => x.students?.family_id === fid).map((x: any) => x.students?.name).filter(Boolean).join(' و');
+        const tm = tzTime(s0.scheduled_at, TZ[r.students?.families?.country] || 'Asia/Dubai');
+        const title = rn === -1 ? `⏰ حصة ${kids} بعد ساعة تقريباً — ${tm}`
+          : rn === 0 ? `⏰ حصة ${kids} بعد ${mins} دقيقة — ${tm}`
+          : m > 0.5 ? `🔔 تذكير: حصة ${kids} بعد ${mins} ${mins <= 10 ? 'دقائق' : 'دقيقة'}` : `🔴 حصة ${kids} بدأت الآن — ادخلوا الحصة`;
+        const sig = await ackSig(S.cron_secret, `${r.id}|parent|${fid}`);
+        ackReport.push(await pushToSubs(subs, {
+          title, body: `${s0.subject ? s0.subject + ' ' : ''}مع أ/ ${tutorName}${s0.group_key ? ' (مجموعة)' : ''}
+${acked ? 'نتمنى لكم حصة موفقة 🌟' : 'اضغطوا «تم» للتأكيد حتى يتوقف التذكير.'}`,
+          tag: `p:${s0.id}`, url: m <= 3 && link ? link : `./?p=${fl[0].token}`, requireInteraction: !acked,
+          actions: acked ? undefined : [{ action: 'ack', title: '✅ تم، سنحضر' }],
+          ack: acked ? undefined : { url: FN_URL, body: { action: 'ack', s: r.id, p: 'parent', id: fid, sig } },
+        }, vapid, 'parent_push'));
+      }
+      // المعلمة (من غير أي بيانات للأسرة)
+      if (tu.user_id && rn >= 0) {
+        const acked = (acks || []).some((a: any) => a.party === 'tutor' && a.party_id === s0.tutor_id && rows.some((x: any) => x.id === a.session_id));
+        const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
+        if (tsubs?.length && !acked && rn >= 3) pending.push(`المعلمة ${tutorName}`);
+        if (tsubs?.length && !(acked && rn >= 1) && (await claim(s0.id, `tut:${stage}@${t}`))) {
+          const names = s0.group_key ? `👥 ${s0.group_name || 'مجموعة'}: ${rows.map((x: any) => x.students?.name).filter(Boolean).join('، ')}` : (s0.students?.name || 'الطالب');
+          const sig = await ackSig(S.cron_secret, `${s0.id}|tutor|${s0.tutor_id}`);
+          ackReport.push(await pushToSubs(tsubs as Sub[], {
+            title: rn === 0 ? `⏰ حصتك بعد ${mins} دقيقة — ${cairoTime(s0.scheduled_at)}` : m > 0.5 ? `🔔 تذكير: حصتك بعد ${mins} دقايق` : `🔴 حصتك بدأت — ${cairoTime(s0.scheduled_at)}`,
+            body: `${names}${s0.subject ? ' — ' + s0.subject : ''}${s0.kind === 'trial' ? '\n🧪 حصة تجريبية لطالب جديد' : ''}\n${acked ? (link ? 'دوسي هنا وادخلي الحصة 🎥' : '') : 'دوسي «تمام» علشان التذكير يقف'}`,
+            tag: `t:${s0.id}:rem`, url: link || './', requireInteraction: !acked,
+            actions: acked ? undefined : [{ action: 'ack', title: '✅ تمام' }],
+            ack: acked ? undefined : { url: FN_URL, body: { action: 'ack', s: s0.id, p: 'tutor', id: s0.tutor_id, sig } },
+          }, vapid));
+          if (!acked && rn === 3) {
+            const { data: ta } = await admin.from('alarm_channels').select('user_id,ntfy_topic').eq('enabled', true).eq('user_id', tu.user_id);
+            if (ta?.length) ackReport.push(await ntfySend(ta as Alarm[], { title: `⏰ حصتك بعد ${mins} دقايق`, message: `${names}\nافتحي البوابة وأكدي`, priority: 5, tags: ['alarm_clock'], click: link || APP_URL }));
+          }
+        }
+      }
+      // تنبيه الإشراف مرة واحدة لو حد لسه ماأكدش
+      if (rn >= 3 && pending.length && (await claim(s0.id, `esc@${t}`))) {
+        if (!supSubs) {
+          const { data: sups } = await admin.from('supervisors').select('id').eq('active', true);
+          const ids = (sups || []).map((x: any) => x.id);
+          supSubs = ids.length ? (await admin.from('push_subscriptions').select('*').in('user_id', ids)).data || [] : [];
+          supAlarms = ids.length ? (await admin.from('alarm_channels').select('user_id,ntfy_topic').eq('enabled', true).in('user_id', ids)).data || [] : [];
+        }
+        const who = s0.group_key ? `👥 ${s0.group_name || 'مجموعة'}` : `${s0.students?.name || ''}${s0.students?.families?.name ? ' (' + s0.students.families.name + ')' : ''}`;
+        const msg = { title: `⚠️ لسه ماأكدوش — حصة ${who} ${m > 0.5 ? `بعد ${mins} دقايق` : 'بدأت'}`, body: `${pending.join(' + ')} لسه ماضغطش «تم».\nرنّي على الجروب.` };
+        ackReport.push(await pushToSubs(supSubs as Sub[], { ...msg, tag: `esc:${s0.id}`, url: './', requireInteraction: true }, vapid));
+        if (supAlarms!.length) ackReport.push(await ntfySend(supAlarms as Alarm[], { title: msg.title, message: msg.body, priority: 5, tags: ['warning'], click: APP_URL }));
+      }
+    }
+  } catch (e) { ackReport.push({ err: String(e).slice(0, 200) }); }
+
   const now = Date.now();
   const { data: sessions, error } = await admin.from('sessions')
     .select('id, scheduled_at, duration_minutes, status, kind, subject, student_id, tutor_id, meeting_link, group_key, group_name')
@@ -338,7 +467,7 @@ Deno.serve(async (req) => {
     if (s.status === 'scheduled' && now >= t - 30e3 && now < t + 10 * 60e3) due.push({ session_id: s.id, kind: `start@${t}` });
     if (now >= end - 30e3 && now < end + 10 * 60e3) due.push({ session_id: s.id, kind: `end@${t}@${s.duration_minutes}` });
   }
-  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0, tests: testReport.length, tutorUpdates: tnReport.length, reportNags: nagReport.length });
+  if (!due.length) return json({ checked: sessions?.length || 0, sent: 0, acks: ackReport.length, tests: testReport.length, tutorUpdates: tnReport.length, reportNags: nagReport.length });
 
   // claim alerts atomically so a session is never announced twice
   const { data: claimed, error: claimErr } = await admin.from('session_alert_log')
@@ -388,7 +517,7 @@ Deno.serve(async (req) => {
       title: payload.title, message: payload.body, priority: c.kind.startsWith('end') ? 4 : 5,
       tags: [c.kind.startsWith('end') ? 'hourglass' : 'alarm_clock'], click: `${APP_URL}?day=${dayStr}`,
     }) : [];
-    // تذكير المعلمة نفسها (قبل الحصة بـ 15 دقيقة وعند بدايتها) — من غير أي بيانات للأسرة
+    // تذكير المعلمة بالتقرير بعد الحصة (تذكير ما قبل الحصة بقى في بلوك «لحد ما تأكد» فوق)
     let tutorPush: any[] = [];
     if (tu?.user_id && c.kind.startsWith('end')) {
       const { data: hasRep } = s.group_key ? await admin.from('session_reports').select('id').eq('group_key', s.group_key).limit(1) : await admin.from('session_reports').select('id').eq('session_id', s.id).limit(1);
@@ -402,20 +531,7 @@ Deno.serve(async (req) => {
         }, vapid);
       }
     }
-    if (tu?.user_id && !c.kind.startsWith('end')) {
-      const { data: tsubs } = await admin.from('push_subscriptions').select('*').eq('user_id', tu.user_id);
-      if (tsubs?.length) {
-        const names = s.group_key ? `👥 ${s.group_name || 'مجموعة'}: ${members[s.group_key].map((m: any) => students?.find((x: any) => x.id === m.student_id)?.name || '').filter(Boolean).join('، ')}` : (st?.name || 'الطالب');
-        let link = s.meeting_link;
-        if (!link) { const { data: pl } = await admin.from('student_subjects').select('meeting_link').eq('student_id', s.student_id).eq('tutor_id', s.tutor_id).not('meeting_link', 'is', null).limit(1); link = pl?.[0]?.meeting_link; }
-        tutorPush = await pushToSubs(tsubs as Sub[], {
-          title: c.kind.startsWith('before15') ? `⏰ حصتك بعد ${mins} دقيقة — ${cairoTime(s.scheduled_at)}` : `🔔 حصتك بدأت — ${cairoTime(s.scheduled_at)}`,
-          body: `${names}${s.subject ? ' — ' + s.subject : ''}${s.kind === 'trial' ? '\n🧪 حصة تجريبية لطالب جديد' : ''}\n${link ? 'دوسي هنا وادخلي الحصة 🎥' : 'افتحي البوابة'}`,
-          tag: `t:${s.id}:${c.kind}`, url: link ? (link.startsWith('http') ? link : 'https://' + link) : './', requireInteraction: true,
-        }, vapid);
-      }
-    }
     report.push({ session: s.id, kind: c.kind, results, alarm, tutorPush });
   }
-  return json({ checked: sessions!.length, sent: report.length, report, tests: testReport.length });
+  return json({ checked: sessions!.length, sent: report.length, report, acks: ackReport, tests: testReport.length });
 });

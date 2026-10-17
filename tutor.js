@@ -77,6 +77,8 @@ async function tutorRefresh() {
     const enfix = r => { const en = / · EN$/.test(r.grade || ''); return { ...r, en, grade: (r.grade || '').replace(/ · EN$/, '') }; };
     T.week = a.data.map(enfix); T.students = b.data.map(enfix); T.payouts = c.data; T.monthRows = d.data.map(enfix);
     try { const rr = await sb.rpc('tutor_reports_mine', { p_from: new Date(from.getTime() - 40 * 864e5).toISOString(), p_to: to.toISOString() }); T.reports = rr.data || []; } catch (e) { T.reports = []; }
+    try { const soonIds = T.week.filter(r => r.status === 'scheduled' && new Date(r.scheduled_at).getTime() > Date.now() - 3 * 3600e3).map(r => r.id);
+      T.acks = new Set(soonIds.length ? (await q(sb.from('session_acks').select('session_id').eq('party', 'tutor').in('session_id', soonIds))).map(a => a.session_id) : []); } catch (e) { T.acks = new Set(); }
     tutorRender();
     tutorReportPrompt();
     tutorBadge();
@@ -99,6 +101,11 @@ const tTime = iso => fmtTime(iso, CAIRO_TZ);
 const tDur = s => s.status === 'done' ? tMins(s) : Number(s.duration_minutes || 60); // اللي اتعمل فعلاً بعد التسجيل
 const tEnd = s => new Date(new Date(s.scheduled_at).getTime() + tDur(s) * 60e3).toISOString();
 
+const tAcked = s => (T.acks || new Set()).has(s.id) || (s.rows || []).some(r => (T.acks || new Set()).has(r.id));
+async function tutorAck(id, silent) {
+  try { const { error } = await sb.rpc('tutor_ack', { p_session: id }); if (error) throw error; (T.acks ||= new Set()).add(id); if (!silent) { showToast('تمام ✓'); tutorRender(); } }
+  catch (e) { if (!silent) showToast(dbError(e), true); }
+}
 function tutorSessionCard(s, compact) {
   const start = new Date(s.scheduled_at).getTime(), end = start + tDur(s) * 60e3, now = Date.now();
   const live = !tCancelled(s) && s.status !== 'done' && now >= start - 10 * 60e3 && now <= end;
@@ -117,7 +124,8 @@ function tutorSessionCard(s, compact) {
       ${!tCancelled(s) && s.status !== 'done' ? `<div class="actions">
         ${tRepBtn(s)}
         ${!tPendingFor(s) ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">✏️ طلب تغيير</button>` : ''}
-        ${s.meeting_link ? `<a class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener">🎥 دخول الحصة</a>`
+        ${!T.preview && start - now < 26 * 3600e3 && now < end ? (tAcked(s) ? '<span class="pos small">✓ أكدتي</span>' : `<button class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" onclick="tutorAck(${jsq(s.id)})">✅ تمام، شفت</button>`) : ''}
+        ${s.meeting_link ? `<a class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener" onclick="${T.preview ? '' : `tutorAck(${jsq(s.id)}, true)`}">🎥 دخول الحصة</a>`
           : `<button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(s.student_id)}, ${jsq(s.subject || null)}, '')">🔗 ضيفي لينك الحصة</button>`}
       </div>` : !tCancelled(s) && s.status === 'done' ? `<div class="actions">${tRepBtn(s)}${!s.group_key && !tPendingFor(s) && Date.now() - new Date(s.scheduled_at) < 14 * 864e5 ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">👥 حضر أخ/أخت بداله؟</button>` : ''}</div>` : ''}
     </div></div>`;

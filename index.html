@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="أستاذ أونلاين">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css?v=lead1">
+<link rel="stylesheet" href="styles.css?v=par2">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -216,6 +216,20 @@
   <main class="wrap"><div id="tutor-content"></div></main>
 </div>
 
+<!-- ===== بوابة ولي الأمر ===== -->
+<div id="view-parent" class="hidden">
+  <header class="topbar">
+    <div class="brand"><img src="logo.png" class="logo-sm" alt="">
+      <div><div class="b-title">أكاديمية أستاذ أونلاين</div><div class="sub small" id="parent-family"></div></div></div>
+    <div class="top-actions">
+      <button class="btn btn-ghost icon" id="p-btn-alerts" onclick="parentAlertsPanel()" title="التنبيهات">🔕</button>
+      <button class="btn btn-ghost icon" onclick="parentRefresh()" title="تحديث">↻</button>
+      <button class="btn btn-ghost icon" onclick="parentExit()" title="خروج">خروج</button>
+    </div>
+  </header>
+  <main class="wrap"><div id="parent-content"><div class="card empty">جاري التحميل…</div></div></main>
+</div>
+
 <!-- نافذة منبثقة عامة -->
 <div id="modal" class="modal hidden" onclick="if(event.target===this) closeModal()">
   <div class="modal-box card">
@@ -230,7 +244,8 @@
 <div class="toast" id="toast"></div>
 <div id="loading" class="loading hidden">جاري التحميل…</div>
 
-<script src="tutor.js?v=swap1"></script>
-<script src="app.js?v=lead1"></script>
+<script src="parent.js?v=par2"></script>
+<script src="tutor.js?v=par2"></script>
+<script src="app.js?v=par2"></script>
 </body>
 </html>
