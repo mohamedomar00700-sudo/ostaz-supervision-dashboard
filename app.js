@@ -1216,6 +1216,7 @@ function renderFamilies() {
         <button class="btn btn-ghost sm" onclick="openSchedule('family', ${fid})">📋 الجدول</button>
         <button class="btn btn-wa sm" onclick="openFamilyInvoice(${fid})">📄 ${f.billing_cycle === 'prepaid' ? 'كشف رصيد' : 'فاتورة'}</button>
         <button class="btn btn-ghost sm" onclick="openParentLink(${fid})">📱 بوابة ولي الأمر</button>
+        <button class="btn btn-ghost sm" onclick="openFamilyHoliday(${fid})">🏖 إجازة</button>
         ${b.balance < 0 ? `<button class="btn btn-ghost sm" onclick="openPaymentReminder(${fid})">📲 مطالبة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openFamilyStatement(${fid})">كشف حساب</button>
         <button class="btn btn-ghost sm" onclick="openFamilyForm(${fid})">تعديل</button>
@@ -4894,4 +4895,43 @@ function renderTutorPerf() {
   return `<div class="chips">${chips}</div>
     <div class="card item"><div class="sub small">أرقام داخلية للإشراف. كل معلمة بتشوف أرقامها هي بس من بوابتها، ومحدش بيشوف ترتيب. <b>المؤشر</b> (من 100) بيظهر للمعلمات اللي على البوابة وعندهم 4 حصص على الأقل: التقارير 30 · التقرير في ميعاده 20 · الالتزام 25 · تأكيد التذكير 15 · الطلبة اللي كمّلوا 10.</div></div>
     <div class="list mt">${rows.length ? rows.map(card).join('') : '<div class="card empty">مفيش حصص في الشهر ده</div>'}</div>${totm}`;
+}
+
+
+/* ============================================================
+   🏖 إجازة أسرة: كل حصص الأسرة (مع كل المعلمات) في فترة تتسجل "إلغاء من الأسرة — إجازة" مرة واحدة
+   ============================================================ */
+function openFamilyHoliday(fid, from, to, reason) {
+  const f = byId(state.families, fid); if (!f) return;
+  const t = todayStr();
+  window._hol = { fid, from: from || t, to: to || t, reason: reason ?? 'إجازة' };
+  openModal(`🏖 إجازة — ${f.name}`, `
+    <p class="sub small">كل حصص الأسرة اللي لسه مفتوحة في الفترة دي (مع كل المعلمات) هتتسجل <b>إلغاء من الأسرة</b>. مش بتتحسب على الأسرة ولا للمعلمة، والمعلمة بيوصلها إشعار إن الحصة اتلغت.</p>
+    <div class="field-row"><div class="field"><label>من يوم</label><input type="date" class="input" id="hol-from" value="${window._hol.from}" onchange="_hol.from=this.value; holPreview()"></div>
+      <div class="field"><label>لحد يوم (شامل)</label><input type="date" class="input" id="hol-to" value="${window._hol.to}" onchange="_hol.to=this.value; holPreview()"></div></div>
+    <div class="field"><label>السبب</label><input class="input" id="hol-reason" value="${esc(window._hol.reason)}" oninput="_hol.reason=this.value" placeholder="إجازة / سفر / امتحانات"></div>
+    <div id="hol-list" class="mt"><div class="sub small">بيحمّل…</div></div>`);
+  holPreview();
+}
+async function holPreview() {
+  const h = window._hol, el = document.getElementById('hol-list'); if (!el) return;
+  if (!h.from || !h.to || h.to < h.from) { el.innerHTML = '<div class="neg small">اختار فترة صح</div>'; return; }
+  const sids = state.students.filter(x => x.family_id === h.fid).map(x => x.id);
+  const fromD = parseDay(h.from), toD = new Date(parseDay(h.to).getTime() + 864e5);
+  try {
+    h.rows = sids.length ? await q(sb.from('sessions').select('*').in('student_id', sids).in('status', ['scheduled', 'in_progress'])
+      .gte('scheduled_at', fromD.toISOString()).lt('scheduled_at', toD.toISOString()).order('scheduled_at')) : [];
+  } catch (e) { el.innerHTML = `<div class="neg small">${esc(dbError(e))}</div>`; return; }
+  el.innerHTML = h.rows.length ? `<div class="card item"><b>${h.rows.length} حصة هتتلغي:</b><div class="small mt">${h.rows.map(x => `• ${fmtShortDate(x.scheduled_at)} ${timeStr(new Date(x.scheduled_at))} — ${esc(byId(state.students, x.student_id)?.name || '')}${x.subject ? ' · ' + esc(x.subject) : ''} · ${esc(byId(state.tutors, x.tutor_id)?.name || '')}`).join('<br>')}</div></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="applyFamilyHoliday()">🏖 سجّل الإجازة (${h.rows.length})</button><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button></div>`
+    : '<div class="empty small">مفيش حصص مفتوحة للأسرة في الفترة دي</div>';
+}
+function applyFamilyHoliday() {
+  const h = window._hol; if (!h.rows?.length) return;
+  runSubmit(async () => {
+    const reason = (document.getElementById('hol-reason')?.value || '').trim() || 'إجازة';
+    await q(sb.from('sessions').update({ status: 'cancelled_by_student', cancel_reason: reason, cancel_note: `إجازة الأسرة من ${h.from} لـ ${h.to}`, cancel_scope: 'once', cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, actual_minutes: null }).in('id', h.rows.map(x => x.id)));
+    closeModal(); showToast(`🏖 اتسجلت الإجازة — ${h.rows.length} حصة`);
+    await refreshAll();
+  });
 }
