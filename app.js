@@ -2447,7 +2447,8 @@ function renderAttention() {
   if (tr) items.push(`<button class="att att-next" onclick="openTutorRequests()">📨 <b>${tr}</b> ${tr === 1 ? 'طلب' : 'طلبات'} من المعلمات مستنية ردك</button>`);
   const mr = (state.missingReports || []).length;
   if (mr) items.push(`<button class="att att-warn" onclick="openMissingReports()">⏳ <b>${mr}</b> ${mr === 1 ? 'حصة لسه مالهاش تقرير' : 'حصص لسه مالهاش تقرير'} من المعلمة</button>`);
-  const nr = (state.reports || []).filter(r => !r.sent_at).length;
+  const _ls = allLoadedSessions();
+  const nr = (state.reports || []).filter(r => !r.sent_at || _ls.some(x => (x.id === r.session_id || (r.group_key && x.group_key === r.group_key)) && (x.status === 'scheduled' || x.status === 'in_progress'))).length;
   const rb = document.getElementById('btn-reports'); if (rb) { rb.textContent = nr ? `📝 التقارير (${nr} جديد)` : '📝 التقارير'; rb.classList.toggle('btn-brand', !!nr); rb.classList.toggle('btn-ghost', !nr); }
   if (nr) items.push(`<button class="att att-next" onclick="openReports()">📝 <b>${nr}</b> ${nr === 1 ? 'تقرير حصة جديد' : 'تقارير حصص جديدة'} — ابعتها للأسر</button>`);
   const un = state.unrecorded || [];
@@ -3639,7 +3640,7 @@ function reportLine(s) {
   }
   const planned = s.duration_minutes || 60;
   return `<div class="rep-line mt">📝 تقرير المعلمة: ${r.attended ? `<b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}${r.absent_ids?.length ? ` · غاب ${r.absent_ids.length}` : ''}` : '<b class="neg">الطالب ماحضرش</b>'}
-    · ${r.sent_at ? '<span class="pos">اتبعت للأسرة ✓</span>' : '<span class="warn-txt">لسه ماتبعتش للأسرة</span>'}</div>`;
+    · ${r.sent_at ? '<span class="pos">اتعتمد للأسرة ✓</span>' : '<span class="warn-txt">لسه ماتعتمدش للأسرة</span>'}</div>`;
 }
 function reportBtn(s) {
   const r = repFor(s); if (!r) return '';
@@ -3705,14 +3706,14 @@ async function openReport(id) {
       ${q0 && q0.seq ? `<div class="mt" style="white-space:pre-line">${esc(seqLine(q0))}</div>` : ''}
       ${r.tutor_note ? `<div class="mt sub">🔒 ملاحظة للإشراف بس: ${esc(r.tutor_note)}</div>` : ''}
     </div>
-    ${r.attended && anyOpen ? `<div class="card item mb" style="background:var(--warn-soft)">الحصة لسه متسجلتش. <button class="btn btn-ok sm" onclick="applyReport(${jsq(r.id)}, 'done')">✓ سجّلها تمت (${durLabel(r.minutes)})</button></div>` : ''}
+    <div class="rep-states mb"><span class="badge ${repRecorded(r, rows) ? 'b-done' : 'b-pending'}">${repRecorded(r, rows) ? '✓ الحصة اتسجلت' : '⏳ الحصة لسه متسجلتش'}</span><span class="badge ${r.sent_at ? 'b-done' : 'b-pending'}">${r.sent_at ? '✓ اتعتمد للأسرة ' + ago(r.sent_at) : '⏳ لسه ماتعتمدش للأسرة'}</span></div>
+    ${!(repRecorded(r, rows) && r.sent_at) ? `<div class="card item mb" style="background:var(--warn-soft)"><button class="btn btn-ok" onclick="approveReport(${jsq(r.id)})">✓ ${repRecorded(r, rows) ? '' : r.attended ? `سجّل الحصة (${durLabel(r.minutes)}) و` : 'سجّل الغياب و'}اعتمد التقرير</button>
+      <div class="sub small mt">بعدها التقرير بيظهر للأسرة في البوابة، وتقدر تنسخ رسالته للجروب من تحت.</div></div>` : ''}
     ${r.attended && allDone && curMins !== r.minutes ? `<div class="card item mb" style="background:var(--warn-soft)">متسجلة ${durLabel(curMins)} والمعلمة كاتبة ${durLabel(r.minutes)}. <button class="btn btn-ghost sm" onclick="applyReport(${jsq(r.id)}, 'done')">عدّل المدة لـ ${durLabel(r.minutes)}</button></div>` : ''}
-    ${!r.attended && anyOpen ? `<div class="card item mb" style="background:var(--warn-soft)"><button class="btn btn-ghost sm" onclick="applyReport(${jsq(r.id)}, 'absent')">🚫 سجّل إن الطالب ماحضرش</button></div>` : ''}
     <div class="section-title"><h2>ابعته للأسرة</h2></div>
     <div class="list">${blocks.join('')}</div>
-    <div class="modal-foot">${r.sent_at ? `<span class="pos small">✓ اتبعت ${ago(r.sent_at)}</span><button class="btn btn-ghost" onclick="markReportSent(${jsq(r.id)}, false)">رجّعه "لسه ماتبعتش"</button>`
-      : `<button class="btn btn-ok" onclick="markReportSent(${jsq(r.id)}, true)">✓ اتبعت للأسرة</button>`}
-      <button class="btn btn-ghost" onclick="openReports()">كل التقارير</button></div>`);
+    <div class="modal-foot">${r.sent_at ? `<button class="btn btn-ghost" onclick="markReportSent(${jsq(r.id)}, false)">إلغاء الاعتماد</button>` : ''}
+      <button class="btn btn-ghost" onclick="openReports()">← كل التقارير</button></div>`);
   if (blocks.length === 1) document.querySelectorAll('.msg-item').forEach(d => d.open = true);
 }
 async function markReportSent(id, sent) {
@@ -3764,23 +3765,72 @@ function openMissingReports() {
       return msgBlock(`${tu?.name || ''} — ${ss.length} ${ss.length === 1 ? 'حصة' : 'حصص'}`, nudgeText(ss), { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }); }).join('')}</div>`);
   if (Object.keys(byT).length === 1) document.querySelectorAll('.msg-item').forEach(d => d.open = true);
 }
+// حالة التقرير: (1) الحصة اتسجلت في السيستم؟ (2) اتعتمد واتبعت للأسرة؟ — الاتنين لازم يخلصوا عشان يختفي من "محتاج منك"
+const repRecorded = (r, rows) => { const live = rows.filter(x => !isCancelled(x) || x.status === 'done');
+  return r.attended ? live.length > 0 && live.every(x => x.status === 'done' || ((r.absent_ids || []).includes(x.student_id) && isCancelled(x)))
+                    : rows.every(x => x.status !== 'scheduled' && x.status !== 'in_progress'); };
 async function openReports() {
   const list = state.reports || [];
-  const ids = [...new Set(list.map(r => r.session_id))];
-  let sess = allLoadedSessions().filter(x => ids.includes(x.id));
-  const miss = ids.filter(i => !sess.some(x => x.id === i));
-  if (miss.length) try { sess = sess.concat(await q(sb.from('sessions').select('*').in('id', miss))); } catch (e) {}
-  const card = r => { const s = sess.find(x => x.id === r.session_id); if (!s) return '';
+  const ids = [...new Set(list.map(r => r.session_id))], gks = [...new Set(list.map(r => r.group_key).filter(Boolean))];
+  let sess = [];
+  try {
+    const [a, b] = await Promise.all([ids.length ? q(sb.from('sessions').select('*').in('id', ids)) : [], gks.length ? q(sb.from('sessions').select('*').in('group_key', gks)) : []]);
+    sess = [...a, ...b.filter(x => !a.some(y => y.id === x.id))];
+  } catch (e) { sess = allLoadedSessions().filter(x => ids.includes(x.id)); }
+  const rowsOf = r => sess.filter(x => x.id === r.session_id || (r.group_key && x.group_key === r.group_key));
+  window._repRows = Object.fromEntries(list.map(r => [r.id, rowsOf(r)]));
+  const card = r => { const rows = rowsOf(r), s = rows.find(x => x.id === r.session_id) || rows[0]; if (!s) return '';
+    const rec = repRecorded(r, rows), sent = !!r.sent_at;
     const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : (byId(state.students, s.student_id)?.name || ''), fam = s.group_key ? null : sessionView(s).fam;
-    return `<div class="card item ${r.sent_at ? '' : 's-confirm'}" style="cursor:pointer" onclick="openReport(${jsq(r.id)})"><div class="item-head">
+    return `<div class="card item ${rec && sent ? '' : 's-confirm'}" style="cursor:pointer" onclick="openReport(${jsq(r.id)})"><div class="item-head">
       <div><b>${esc(who)}</b> <span class="sub small">${esc(fam?.name || '')}</span><div class="sub small">${esc(byId(state.tutors, r.tutor_id)?.name || '')} · ${esc(s.subject || '')} · ${fmtShortDate(s.scheduled_at)} ${timeStr(new Date(s.scheduled_at))}</div>
         <div class="small mt">${r.attended ? `⏱ ${durLabel(r.minutes)}${s.duration_minutes && r.minutes !== s.duration_minutes ? ` <span class="neg">⚠️ (المعاد ${durLabel(s.duration_minutes)})</span>` : ''}${r.topics ? ' · 📚 ' + esc(r.topics.slice(0, 70)) + (r.topics.length > 70 ? '…' : '') : ''}` : '<span class="neg">🚫 ماحضرش</span>'}</div></div>
-      ${r.sent_at ? '<span class="badge b-done">اتبعت</span>' : '<span class="badge b-pending">جديد</span>'}</div></div>`; };
-  const pend = list.filter(r => !r.sent_at), done = list.filter(r => r.sent_at).slice(0, 15);
-  openModal(`📝 تقارير الحصص${pend.length ? ` (${pend.length} جديد)` : ''}`, `
-    <p class="sub small">المعلمة بتكتب التقرير من البوابة بعد الحصة. ابعته للأسرة وعلّم عليه "اتبعت" — كده أي اعتراض بيبان من يومها مش آخر الشهر.</p>
-    ${pend.length ? `<div class="list">${pend.map(card).join('')}</div>` : '<div class="empty">مفيش تقارير جديدة 👌</div>'}
-    ${done.length ? `<details class="mt"><summary class="sub">آخر التقارير اللي اتبعتت</summary><div class="list mt">${done.map(card).join('')}</div></details>` : ''}`);
+      <div class="rep-states"><span class="badge ${rec ? 'b-done' : 'b-pending'}">${rec ? '✓ الحصة اتسجلت' : '⏳ الحصة لسه'}</span><span class="badge ${sent ? 'b-done' : 'b-pending'}">${sent ? '✓ اتعتمد للأسرة' : '⏳ لسه للأسرة'}</span></div></div></div>`; };
+  const todo = list.filter(r => !(repRecorded(r, rowsOf(r)) && r.sent_at)), done = list.filter(r => repRecorded(r, rowsOf(r)) && r.sent_at).slice(0, 20);
+  const warn = todo.filter(r => { const s = rowsOf(r)[0]; return r.attended && s && r.minutes !== (s.duration_minutes || 60); }).length;
+  openModal(`📝 تقارير الحصص${todo.length ? ` (${todo.length} محتاجة منك)` : ''}`, `
+    <p class="sub small">كل تقرير ليه خطوتين: <b>تسجيل الحصة</b> في السيستم (بالمدة اللي كتبتها المعلمة) و<b>اعتماده للأسرة</b> (بيظهر في بوابة ولي الأمر، وتقدر تنسخ رسالته للجروب). أول ما الاتنين يخلصوا التقرير بينزل تحت.</p>
+    ${todo.length > 1 ? `<div class="card item mb"><button class="btn btn-ok" onclick="approveAllReports()">⚡ سجّل واعتمد الكل (${todo.length})</button>${warn ? `<div class="small warn-txt mt">⚠️ ${warn} منهم المدة فيها مختلفة عن المعاد — هتتسجل بمدة المعلمة. افتحهم الأول لو عايز تراجع.</div>` : ''}</div>` : ''}
+    ${todo.length ? `<div class="list">${todo.map(card).join('')}</div>` : '<div class="empty">كل التقارير خلصت 👌</div>'}
+    ${done.length ? `<details class="mt"><summary class="sub">اللي خلصت (${done.length})</summary><div class="list mt">${done.map(card).join('')}</div></details>` : ''}`);
+}
+// تسجيل الحصة حسب التقرير (من غير ما يعيد رسم أي حاجة)
+async function recordReport(r, rows) {
+  if (!r.attended) {
+    const open = rows.filter(x => x.status === 'scheduled' || x.status === 'in_progress').map(x => x.id);
+    if (open.length) await q(sb.from('sessions').update({ status: 'cancelled_by_student', cancel_reason: 'لم يحضر', cancel_note: 'حسب تقرير المعلمة', cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, cancel_scope: 'once', actual_minutes: null }).in('id', open));
+    return;
+  }
+  const absent = rows.filter(x => (r.absent_ids || []).includes(x.student_id) && x.status !== 'done').map(x => x.id);
+  const present = rows.filter(x => !(r.absent_ids || []).includes(x.student_id) && (!isCancelled(x) || x.status === 'done')).map(x => x.id);
+  if (present.length) await q(sb.from('sessions').update({ status: 'done', actual_minutes: r.minutes, cancel_reason: null, cancel_note: null, cancelled_at: null, cancel_scope: null, cancelled_by_user: null }).in('id', present));
+  if (absent.length) await q(sb.from('sessions').update({ status: 'cancelled_by_student', cancel_reason: 'لم يحضر', cancel_note: 'حسب تقرير المعلمة', cancelled_at: new Date().toISOString(), cancelled_by_user: currentUser.id, cancel_scope: 'once', actual_minutes: null }).in('id', absent));
+}
+async function setReportSent(r, sent) {
+  await q(sb.from('session_reports').update(sent ? { sent_at: new Date().toISOString(), sent_by: currentUser.id } : { sent_at: null, sent_by: null }).eq('id', r.id));
+  r.sent_at = sent ? new Date().toISOString() : null;
+}
+// الزرار الأساسي: سجّل الحصة + اعتمد التقرير — ويرجع لقائمة التقارير
+async function approveReport(id) {
+  const r = (state.reports || []).find(x => x.id === id); if (!r) return;
+  try {
+    const rows = await repSessionRows(r);
+    if (!repRecorded(r, rows)) await recordReport(r, rows);
+    if (!r.sent_at) await setReportSent(r, true);
+    showToast('✓ الحصة اتسجلت والتقرير اتعتمد');
+    await refreshAll(); openReports();
+  } catch (e) { showToast(dbError(e), true); }
+}
+async function approveAllReports() {
+  const list = (state.reports || []).filter(r => !(repRecorded(r, window._repRows?.[r.id] || []) && r.sent_at));
+  if (!list.length || !confirm(`هتتسجل ${list.length} حصة بمدة المعلمات وتتعتمد تقاريرها للأسر. تكمل؟`)) return;
+  let ok = 0;
+  for (const r of list) {
+    try { const rows = window._repRows?.[r.id]?.length ? window._repRows[r.id] : await repSessionRows(r);
+      if (!repRecorded(r, rows)) await recordReport(r, rows); if (!r.sent_at) await setReportSent(r, true); ok++; } catch (e) { console.error(e); }
+  }
+  showToast(`✓ خلص ${ok} من ${list.length}`, ok < list.length);
+  await refreshAll(); openReports();
 }
 
 /* ============================================================
