@@ -196,6 +196,7 @@ function tutorRender() {
         <div class="card kpi"><div class="l">اتحوّل عن الشهر</div><div class="v num ${paidM >= total && total ? 'pos' : ''}">${fmt(paidM)}</div><div class="s">${total - paidM > 0.5 ? `باقي ${fmt(total - paidM)} ج` : paidM - total > 0.5 ? `💚 منهم ${fmt(paidM - total)} ج مقدّم للحصص الجاية` : total ? 'اتحوّل بالكامل ✅' : '—'}</div></div>
       </div>
       ${tPerfCard()}
+      ${list.length ? `<div class="actions" style="margin:10px 0"><button class="btn btn-brand sm" onclick="tutorStatement(false)">📋 كشف حسابي (ملخص)</button><button class="btn btn-ghost sm" onclick="tutorStatement(true)">📋 بالتفصيل</button></div>` : ''}
       <div class="section-title"><h2>حصصك لكل طالب</h2></div>
       <div class="card scrollx"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>المستحق</th></tr></thead><tbody>
         ${list.map(x => `<tr><td><b>${esc(x.who)}</b></td><td class="num"><b>${fmtU(x.mins / 60)}</b><div class="sub small">${durLabel(x.mins)}</div>${x.pmins ? `<div class="small warn-txt">⏳ + ${fmtU(x.pmins / 60)} مستنية تأكيد</div>` : ''}</td><td class="small">${esc([...x.subj].join('، '))}</td><td class="num">${fmt(x.amt, 2)} ج${x.pamt ? `<div class="small warn-txt">+ ≈ ${fmt(x.pamt)}</div>` : ''}</td></tr>`).join('')
@@ -522,4 +523,48 @@ function tPerfCard() {
       <div><small>طلابك</small><b>${r.students}</b><span class="sub small">${fmtU(r.done_min / 60)} حصة</span></div></div>
       ${tips.length ? `<div class="small mt">💡 ${tips.join(' · ')}</div>` : '<div class="small mt pos">🌟 شغل ممتاز — كملي كده</div>'}
       <p class="sub small" style="margin:6px 0 0">الأرقام دي ليكي انتي بس، ومحدش من زمايلك بيشوفها.</p></div>`;
+}
+
+/* ----- 📋 كشف حساب المعلمة (رسالة جاهزة تتنسخ وتتبعت للإشراف — في أي وقت في الشهر) ----- */
+function tutorStatement(detailed) {
+  const mr = tMonthRange(T.month), now = new Date(), cur = T.month === 0;
+  const fmtD = d => d.toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'long', year: 'numeric' });
+  const dayS = iso => new Date(iso).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: CAIRO_TZ });
+  // الحصص المؤكدة (الإشراف سجلها "تمت") + اللي عدّت ومستنية تأكيد — المجموعة لقاء واحد
+  const rows = T.monthRows.filter(s => s.status === 'done' || ((s.status === 'scheduled' || s.status === 'in_progress') && Date.now() >= new Date(s.scheduled_at).getTime() + (s.duration_minutes || 60) * 60e3));
+  const seen = new Set(), groups = { ok: {}, wait: {} };
+  rows.sort((a, b) => a.scheduled_at < b.scheduled_at ? -1 : 1).forEach(s => {
+    const ok = s.status === 'done', r = ok ? null : tRepFor(s);
+    if (!ok && r && !r.attended) return; // التقرير بيقول الطالب ماحضرش
+    const occ = (s.group_key || s.id) + '@' + s.scheduled_at;
+    const mins = ok ? tMins(s) : (r?.minutes || s.duration_minutes || 60);
+    const amt = ok ? Number(s.tutor_charge_egp || 0) : Number(s.tutor_cost_egp || 0) * mins / 60;
+    const key = s.group_key ? 'g:' + (s.group_name || s.group_key) : s.student_id + '|' + (s.subject || '');
+    const x = groups[ok ? 'ok' : 'wait'][key] ||= { who: s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : s.student_name, subj: s.subject || '', mins: 0, amt: 0, rates: new Set(), list: [] };
+    x.amt += amt; // المجموعة: مستحقها مجموع صفوفها
+    if (!seen.has(occ)) { seen.add(occ); x.mins += mins; x.list.push(`   - ${dayS(s.scheduled_at)}: ${durLabel(mins)}`); }
+    const rate = Number(s.group_key ? (s.tutor_charge_egp && mins ? s.tutor_charge_egp * 60 / mins : s.tutor_cost_egp) : s.tutor_cost_egp);
+    if (rate && !s.group_key) x.rates.add(Math.round(rate));
+  });
+  const block = g => Object.values(g).sort((a, b) => b.mins - a.mins).map(x => {
+    const n = x.mins / 60, rate = x.rates.size === 1 ? [...x.rates][0] : null;
+    return `• ${x.who}${x.subj ? ' — ' + x.subj : ''}: ${nSess(n)}${rate ? ` × ${fmt(rate)} ج` : ''} = ${fmt(x.amt, 2)} ج` + (detailed ? '\n' + x.list.join('\n') : '');
+  }).join('\n');
+  const sum = g => Object.values(g).reduce((a, x) => a + x.amt, 0), units = g => Object.values(g).reduce((a, x) => a + x.mins, 0) / 60;
+  const okT = sum(groups.ok), waitT = sum(groups.wait);
+  const paid = T.payouts.filter(p => p.period_start && new Date(p.period_start) >= new Date(mr.from.getTime() - 864e5) && new Date(p.period_start) < mr.to).reduce((a, p) => a + Number(p.total_egp), 0);
+  const end = cur ? now : new Date(mr.to.getTime() - 864e5);
+  const text = `📋 كشف حصص — ${T.me.name}
+الفترة: من ${fmtD(mr.from)} ${cur ? 'لحد النهارده ' + fmtD(end) : 'لـ ' + fmtD(end)}
+
+${Object.keys(groups.ok).length ? `✅ حصص اتأكدت (${nSess(units(groups.ok))}):\n${block(groups.ok)}` : '✅ لسه مفيش حصص اتأكدت'}${Object.keys(groups.wait).length ? `\n\n⏳ حصص عدّت ومستنية تأكيد الإشراف (${nSess(units(groups.wait))}):\n${block(groups.wait)}` : ''}
+
+💰 الإجمالي المؤكد: ${fmt(okT, 2)} ج${waitT ? `\n⏳ + حوالي ${fmt(waitT, 2)} ج بعد التأكيد` : ''}${paid ? `\n✔️ اتحوّل عن الفترة: ${fmt(paid, 2)} ج\n📌 الباقي: ${fmt(Math.max(0, okT + waitT - paid), 2)} ج` : ''}
+(الساعة = حصة، ونص الساعة = نص حصة)`;
+  window._tsText = text;
+  openModal(detailed ? '📋 كشف حسابي بالتفصيل' : '📋 كشف حسابي', `<div class="msg-preview">${esc(text)}</div>
+    <div class="modal-foot" style="flex-wrap:wrap">${T.me.group ? `<button class="btn btn-wa" onclick="copyAndOpen(window._tsText, ${jsq(T.me.group)}); closeModal()">💬 انسخي وابعتيه لجروب الإشراف</button>` : ''}
+      <button class="btn btn-ghost" onclick="copyText(window._tsText,'اتنسخ ✓')">📋 نسخ</button>
+      <button class="btn btn-ghost" onclick="tutorStatement(${!detailed})">${detailed ? 'ملخص بس' : 'بالتفصيل'}</button></div>
+    <p class="sub small">الكشف محسوب من أول الشهر لحد النهارده، وتقدري تبعتيه في أي وقت. لو فيه حصة ناقصة بلّغي الإشراف أو اطلبي "حصة إضافية".</p>`);
 }
