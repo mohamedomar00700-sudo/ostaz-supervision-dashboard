@@ -1160,7 +1160,7 @@ function famBalance(f) {
 }
 function renderFamilies() {
   renderFamSwitch();
-  const term = (document.getElementById('family-search').value || '').trim().toLowerCase();
+  const term = normAr(document.getElementById('family-search').value || '');
   const el = document.getElementById('families-list');
   if (!state.families.length) {
     el.innerHTML = `<div class="card empty">لسه مفيش أسر مسجّلة.<br><button class="btn btn-brand" onclick="openFamilyForm()">+ أضف أول أسرة</button></div>`;
@@ -1181,7 +1181,7 @@ function renderFamilies() {
   const list = state.families.filter(FF[state.famFilter || 'all'] || FF.all).filter(f => {
     if (!term) return true;
     const studs = state.students.filter(s => s.family_id === f.id).map(s => `${s.name} ${s.notes || ''} ${plansOf(s.id).map(p => planLabel(p)).join(' ')}`).join(' ');
-    return `${f.name} ${f.parent_name || ''} ${f.whatsapp || ''} ${studs}`.toLowerCase().includes(term);
+    return normAr(`${f.name} ${f.parent_name || ''} ${f.whatsapp || ''} ${studs}`).includes(term);
   });
   el.innerHTML = list.map(f => {
     const c = COUNTRIES[f.country] || {};
@@ -1593,7 +1593,7 @@ function tutBalance(t) {
   return { earned: Number(b.earned_egp), paid: Number(b.paid_egp), due: Number(b.earned_egp) - Number(b.paid_egp), count: Number(b.done_count) };
 }
 function renderTutors() {
-  const term = (document.getElementById('tutor-search').value || '').trim().toLowerCase();
+  const term = normAr(document.getElementById('tutor-search').value || '');
   const el = document.getElementById('tutors-list');
   if (!state.tutors.length) {
     el.innerHTML = `<div class="card empty">لسه مفيش معلمين مسجّلين.<br><button class="btn btn-brand" onclick="openTutorForm()">+ أضف أول معلم</button></div>`;
@@ -1612,7 +1612,7 @@ function renderTutors() {
     if (!term) return true;
     const subs = state.subjects.filter(s => s.tutor_id === t.id).map(s => s.subject).join(' ');
     const studs = state.plans.filter(p => p.tutor_id === t.id).map(p => byId(state.students, p.student_id)?.name || '').join(' ');
-    return `${t.name} ${t.phone || ''} ${subs} ${studs}`.toLowerCase().includes(term);
+    return normAr(`${t.name} ${t.phone || ''} ${subs} ${studs}`).includes(term);
   });
   el.innerHTML = list.map(t => {
     const subs = state.subjects.filter(s => s.tutor_id === t.id);
