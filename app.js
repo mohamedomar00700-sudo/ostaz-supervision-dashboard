@@ -2149,6 +2149,28 @@ function finFxHtml(done) {
     <div class="card item">${fxRows.map(r => `<div class="item-head" style="padding:4px 0"><span dir="ltr"><b>1 ${r.currency} = ${fmt(r.rate_to_egp, 4)} EGP</b></span>
       <span class="sub small">${r.auto ? `🔄 سعر السوق — آخر تحديث ${ago(r.updated_at)}` : `✋ سعر يدوي من ${fmtShortDate(r.updated_at)}`}</span></div>`).join('')}</div>`;
 }
+// تفصيل الحصص لكل شهر: كل طالب ← كل مادة ← مع مين وكام ساعة (للإدارة/الإشراف، مش للفاتورة)
+function famBreakdownHtml(ss, cur) {
+  const M = {};
+  ss.forEach(s => {
+    const k = monthKey(new Date(s.scheduled_at)), st = byId(state.students, s.student_id)?.name || '—';
+    const subj = (s.subject || '—').replace(/\s*\(مراجعة\)$/, ''), tn = byId(state.tutors, s.tutor_id)?.name || '—';
+    const c = charges(s).fam, mn = sMins(s);
+    const x = (((M[k] ||= {})[st] ||= {})[subj] ||= { mins: 0, fam: 0, free: 0, t: {} });
+    x.mins += mn; x.fam += c; if (!(c > 0)) x.free += mn;
+    const y = (x.t[tn] ||= { mins: 0, n: 0 }); y.mins += mn; y.n++;
+  });
+  const h = m => fmtU(m / 60);
+  return Object.keys(M).sort().reverse().map((k, i) => {
+    const studs = M[k], tot = Object.values(studs).flatMap(o => Object.values(o)).reduce((a, x) => a + x.mins, 0);
+    return `<details class="mt" ${i === 0 ? 'open' : ''}><summary><b>${new Date(k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}</b> <span class="sub small">· ${h(tot)} ساعة</span></summary>
+      ${Object.keys(studs).sort((a, b) => normAr(a).localeCompare(normAr(b), 'ar')).map(st => { const subs = studs[st];
+        const sm = Object.values(subs).reduce((a, x) => a + x.mins, 0), sf = Object.values(subs).reduce((a, x) => a + x.fam, 0);
+        return `<div class="card item mt"><div class="item-head"><b>${esc(st)}</b><span class="num">${h(sm)} س · <b>${fmt(sf, 2)} ${esc(cur)}</b></span></div>
+          ${Object.keys(subs).sort((a, b) => a.localeCompare(b, 'ar')).map(sj => { const x = subs[sj];
+            return `<div class="small mt"><b>${esc(sj)}</b>: ${h(x.mins)} س${x.free ? ` <span class="sub">(منها ${h(x.free)} مش محسوبة)</span>` : ''} — ${fmt(x.fam, 2)} ${esc(cur)}
+              <div class="sub">${Object.entries(x.t).sort((a, b) => b[1].mins - a[1].mins).map(([tn, y]) => `${esc(tn)}: ${h(y.mins)} س${y.n > 1 ? ` (${y.n} مرات)` : ''}`).join(' · ')}</div></div>`; }).join('')}</div>`; }).join('')}</details>`; }).join('');
+}
 // كشف حساب أسرة: كل الحصص والدفعات بالترتيب مع الرصيد
 async function openFamilyStatement(familyId) {
   const f = byId(state.families, familyId), cur = f.currency, ids = state.students.filter(s => s.family_id === familyId).map(s => s.id);
@@ -2164,6 +2186,7 @@ async function openFamilyStatement(familyId) {
       ${rows.map(r => `<tr><td>${new Date(r.k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}</td><td class="num">${r.mins ? fmtU(r.mins / 60) : '—'}</td>
         <td class="num">${fmt(r.charge, 2)}</td><td class="num pos">${r.paid ? fmt(r.paid, 2) : '—'}</td><td class="num ${r.bal < -0.01 ? 'neg' : 'pos'}"><b>${r.bal < -0.01 ? 'عليها ' : 'ليها '}${fmt(Math.abs(r.bal), 2)}</b></td></tr>`).join('') || '<tr><td colspan="5" class="empty">مفيش حركة</td></tr>'}
       </tbody></table></div><p class="sub small">المبالغ بالـ ${cur}. الرصيد تراكمي من أول تعامل.</p>
+      ${ss.length ? `<details class="mt"><summary class="sub">🔍 تفصيل الحصص: كل طالب خد كام ساعة في كل مادة ومع مين</summary>${famBreakdownHtml(ss, cur)}</details>` : ''}
       ${tx.length ? `<details class="mt"><summary class="sub">الدفعات (${tx.length})</summary><div class="list mt">${tx.slice().reverse().map(t => `<div class="card item"><div class="item-head"><span>${fmtShortDate(t.created_at)} · ${esc(t.method || '')}</span><b class="num ${t.type === 'refund' ? 'neg' : 'pos'}">${t.type === 'discount' ? '🎁 خصم ' : t.type === 'refund' ? '−' : ''}${money(t.amount, t.currency)}</b></div>${t.note ? `<div class="sub small">${esc(t.note)}</div>` : ''}</div>`).join('')}</div></details>` : ''}
       ${old.length ? `<details class="mt" ${ss.length ? '' : 'open'}><summary class="sub">📚 الحسابات القديمة قبل السيستم (${old.length} شهر · ${fmt(old.reduce((a, h) => a + Number(h.amount), 0), 2)} ${esc(old[0].currency)})</summary>
         <div class="list mt">${old.map(h => `<div class="card item"><div class="item-head"><b>${new Date(h.month + 'T12:00').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}</b>
