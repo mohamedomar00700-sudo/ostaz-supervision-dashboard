@@ -1768,10 +1768,16 @@ function openPayoutForm(tutorId) {
     { name: 'total_egp', label: 'المبلغ المصروف (EGP)', type: 'number', required: true, value: roundUp5(b.due), hint: b.due < -0.01 ? `ليها رصيد مقدّم ${money(-b.due, 'EGP')} — أي مبلغ هتصرفه هيزود المقدّم` : `المستحق بالظبط ${money(b.due, 'EGP')} — اتقرّب لأعلى لأقرب 5. فرق التقريب هدية للمعلمة ومش بيتخصم الشهر الجاي` },
     { name: 'method', label: 'طريقة الصرف', type: 'select', value: t.vodafone_cash ? 'فودافون كاش' : 'تحويل بنكي',
       options: ['فودافون كاش', 'InstaPay', 'تحويل بنكي', 'كاش'].map(x => ({ v: x, l: x })) },
+    { name: 'fee_egp', label: 'رسوم التحويل (EGP)', type: 'number', step: 0.01, value: instaFee(roundUp5(b.due)), hint: 'InstaPay: 0.1% (أقل 0.5 وأقصى 20 جنيه) — بتتسجل مصروف «رسوم تحويل» على الأكاديمية. خليها 0 لو مفيش رسوم' },
     [{ name: 'period_start', label: 'عن الفترة من', type: 'date', value: range.from }, { name: 'period_end', label: 'إلى', type: 'date', value: range.toIncl }],
     { name: 'note', label: 'ملاحظة', placeholder: 'رقم العملية مثلاً' },
   ];
   openModal(`صرف مستحقات — ${t.name}`, formHtml(fields, 'تأكيد الصرف'));
+  // الرسوم بتتحسب لوحدها مع المبلغ، لحد ما المستخدم يعدّلها بإيده
+  const amtEl = document.getElementById('f_total_egp'), feeEl = document.getElementById('f_fee_egp');
+  let feeTouched = false;
+  feeEl?.addEventListener('input', () => { feeTouched = true; });
+  amtEl?.addEventListener('input', () => { if (!feeTouched && feeEl) feeEl.value = instaFee(Number(amtEl.value) || 0); });
   window._formSubmit = () => runSubmit(async () => {
     const amt = fnum('total_egp');
     if (!(amt > 0)) return formError('اكتب مبلغ صحيح');
@@ -1785,6 +1791,11 @@ function openPayoutForm(tutorId) {
     if (isTip) try {
       await q(sb.from('expenses').insert({ category: 'rounding', payee: t.name, amount_egp: tip, method: fv('method'), paid_at: now.toISOString(),
         period_month: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, note: 'تقريب التحويل لأعلى — هدية' }));
+    } catch (e) {}
+    const fee = Math.round((Number(fv('fee_egp')) || 0) * 100) / 100;
+    if (fee > 0) try {
+      await q(sb.from('expenses').insert({ category: 'fees', payee: t.name, amount_egp: fee, method: fv('method'), paid_at: now.toISOString(),
+        period_month: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, note: `رسوم تحويل على ${fmt(amt, 2)} ج` }));
     } catch (e) {}
     closeModal(); showToast('تم تسجيل الصرف ✓'); await refreshAll();
   });
@@ -2609,6 +2620,8 @@ ${SIGN_F}`;
   openModal(`مطالبة — ${f.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}`);
 }
 
+// رسوم InstaPay (من 1 أبريل 2025): 0.1% بحد أدنى 50 قرش وأقصى 20 جنيه
+const instaFee = amt => amt > 0 ? Math.min(20, Math.max(0.5, Math.round(amt * 0.1) / 100)) : 0;
 // التحويل دايماً بيتقرّب لأعلى لأقرب 5 جنيه (32 → 35، 37 → 40)
 const roundUp5 = v => v > 0.009 ? Math.ceil((v - 0.009) / 5) * 5 : 0;
 // أجر الحصة: المجموعة تتحسب من أجر المجموعة نفسه (عشان 250 ÷ 3 ما تطلعش 249.99)
