@@ -1765,7 +1765,7 @@ function openPayoutForm(tutorId) {
   const b = tutBalance(t);
   const range = finRange();
   const fields = [
-    { name: 'total_egp', label: 'المبلغ المصروف (EGP)', type: 'number', required: true, value: roundUp5(b.due), hint: b.due < -0.01 ? `ليها رصيد مقدّم ${money(-b.due, 'EGP')} — أي مبلغ هتصرفه هيزود المقدّم` : `المستحق بالظبط ${money(b.due, 'EGP')} — اتقرّب لأعلى لأقرب 5 (الفرق بيتسجل مقدّم)` },
+    { name: 'total_egp', label: 'المبلغ المصروف (EGP)', type: 'number', required: true, value: roundUp5(b.due), hint: b.due < -0.01 ? `ليها رصيد مقدّم ${money(-b.due, 'EGP')} — أي مبلغ هتصرفه هيزود المقدّم` : `المستحق بالظبط ${money(b.due, 'EGP')} — اتقرّب لأعلى لأقرب 5. فرق التقريب هدية للمعلمة ومش بيتخصم الشهر الجاي` },
     { name: 'method', label: 'طريقة الصرف', type: 'select', value: t.vodafone_cash ? 'فودافون كاش' : 'تحويل بنكي',
       options: ['فودافون كاش', 'InstaPay', 'تحويل بنكي', 'كاش'].map(x => ({ v: x, l: x })) },
     [{ name: 'period_start', label: 'عن الفترة من', type: 'date', value: range.from }, { name: 'period_end', label: 'إلى', type: 'date', value: range.toIncl }],
@@ -1775,8 +1775,17 @@ function openPayoutForm(tutorId) {
   window._formSubmit = () => runSubmit(async () => {
     const amt = fnum('total_egp');
     if (!(amt > 0)) return formError('اكتب مبلغ صحيح');
-    await q(sb.from('tutor_payouts').insert({ tutor_id: t.id, total_egp: amt, method: fv('method'), note: fv('note') || null,
-      period_start: fv('period_start'), period_end: fv('period_end'), paid: true, paid_at: new Date().toISOString() }));
+    // التقريب لأعلى (أقل من 5 جنيه فوق المستحق) = هدية: الصرف يتسجل بالمستحق بالظبط والفرق مصروف لوحده، فمفيش مقدّم يتخصم بعدين
+    const due = Math.round(b.due * 100) / 100, tip = Math.round((amt - due) * 100) / 100;
+    const isTip = due > 0 && tip > 0.004 && tip < 5;
+    const now = new Date();
+    await q(sb.from('tutor_payouts').insert({ tutor_id: t.id, total_egp: isTip ? due : amt, method: fv('method'),
+      note: [fv('note'), isTip ? `اتحوّل ${fmt(amt)} ج (${fmt(tip, 2)} تقريب هدية)` : ''].filter(Boolean).join(' — ') || null,
+      period_start: fv('period_start'), period_end: fv('period_end'), paid: true, paid_at: now.toISOString() }));
+    if (isTip) try {
+      await q(sb.from('expenses').insert({ category: 'rounding', payee: t.name, amount_egp: tip, method: fv('method'), paid_at: now.toISOString(),
+        period_month: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, note: 'تقريب التحويل لأعلى — هدية' }));
+    } catch (e) {}
     closeModal(); showToast('تم تسجيل الصرف ✓'); await refreshAll();
   });
 }
@@ -2018,7 +2027,7 @@ function renderFinance() {
   ['families', 'tutors', 'coll'].forEach(k => { if (state['finQ_' + k] && document.getElementById(`fin-${k}-list`)) finSearch(k, state['finQ_' + k]); });
 }
 
-const EXP_CAT = { salary: '👤 راتب', marketing: '📣 إعلانات وتسويق', tools: '💻 اشتراكات وأدوات', rent: '🏢 إيجار', fees: '🏦 رسوم تحويل', other: '📦 أخرى' };
+const EXP_CAT = { salary: '👤 راتب', marketing: '📣 إعلانات وتسويق', tools: '💻 اشتراكات وأدوات', rent: '🏢 إيجار', fees: '🏦 رسوم تحويل', rounding: '🎁 تقريب لصالح المعلمين', other: '📦 أخرى' };
 function openExpenseForm(id) {
   const e = id ? (state.fin.expenses || []).find(x => x.id === id) : null;
   const payees = [...new Set((state.fin.expenses || []).map(x => x.payee).filter(Boolean))];
@@ -2666,7 +2675,7 @@ ${bl.text || '— لا توجد حصص مسجلة —'}
 🧮 الإجمالي: ${bl.n} ${bl.n >= 3 && bl.n <= 10 ? 'حصص' : 'حصة'} — ${durLabel(bl.mins)} = ${fmt(bl.amt, 2)} ج${Math.abs(prev) >= 1 ? `
 ${prev > 0 ? `➕ متبقي لكِ من قبل كده: ${fmt(prev, 2)} ج` : `➖ مدفوع لكِ مقدّم قبل كده: ${fmt(-prev, 2)} ج`}` : ''}
 ${due < -0.01 ? `💚 *مدفوع لكِ مقدّم: ${fmt(-due, 2)} ج* — هيتخصم من الحصص الجاية` : `💰 المستحق: ${fmt(due, 2)} ج
-✅ *هيتحوّل لكِ: ${fmt(send)} ج*${send - due >= 0.01 ? ' (اتقرّب لأعلى)' : ''}${payTo(t) ? `\n💳 على: ${payTo(t)}` : ''}`}
+✅ *هيتحوّل لكِ: ${fmt(send)} ج*${send - due >= 0.01 ? ' (اتقرّبت لأعلى 🎁)' : ''}${payTo(t) ? `\n💳 على: ${payTo(t)}` : ''}`}
 
 لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل 🙏
 ${SIGN_T}`;
