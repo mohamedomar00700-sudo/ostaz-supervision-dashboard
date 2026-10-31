@@ -1529,7 +1529,7 @@ ${lines || '— لا توجد حصص منفذة في الفترة —'}
 
 عدد الحصص: ${fmtU(unitsOf(bill))} (الساعة = حصة) · إجمالي الوقت: ${mins ? durLabel(mins) : '0'}${freeMins ? `\n＋ ${durLabel(freeMins)} ${free.every(x => x.kind === 'trial') ? 'تجريبية مجانية' : 'مش محسوبة عليكم'} 🎁` : ''}
 إجمالي الحصص: *${fmt(total, 2)} ${cur}*${Math.abs(prev) >= 0.01 ? `\n${prev < 0 ? 'متأخرات سابقة' : 'رصيد سابق لصالحكم'}: ${fmt(Math.abs(prev), 2)} ${cur}` : ''}${paid - discOf(tx) ? `\nالمدفوع في الفترة: ${fmt(paid - discOf(tx), 2)} ${cur}` : ''}${discOf(tx) ? `\nخصم: ${fmt(discOf(tx), 2)} ${cur} 🎁` : ''}
-${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*${egpLine}` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}
+${bal < 0 ? `المطلوب سداده: *${fmt(-bal, 2)} ${cur}*${egpLine}` : `الرصيد لصالحكم: *${fmt(bal, 2)} ${cur}*`}${bal < 0 && cur !== 'EGP' ? `\n💱 في حالة السداد بالجنيه المصري، يُحسب المبلغ بسعر صرف البنك يوم الدفع.` : ''}
 
 ${closing}
 ${SIGN_F}`;
@@ -2593,7 +2593,7 @@ async function openPaymentReminder(familyId) {
 نحيطكم علماً إن رصيد حصص الأسرة حالياً عليه مستحقات بقيمة *${fmt(-b.balance, 2)} ${f.currency}*.
 عدد الحصص اللي تمت حتى الآن: ${b.count}${last ? `\nآخر دفعة: ${fmt(last.amount, 2)} ${last.currency} بتاريخ ${fmtShortDate(last.created_at)}` : ''}
 
-برجاء التكرم بالسداد لضمان استمرار الحصص بدون انقطاع، ولو حابين كشف حساب تفصيلي نبعتهولكم فوراً.
+${f.currency !== 'EGP' ? '💱 في حالة السداد بالجنيه المصري، يُحسب المبلغ بسعر صرف البنك يوم الدفع.\n' : ''}برجاء التكرم بالسداد لضمان استمرار الحصص بدون انقطاع، ولو حابين كشف حساب تفصيلي نبعتهولكم فوراً.
 شكراً لتعاونكم 🙏
 ${SIGN_F}`;
   openModal(`مطالبة — ${f.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}`);
