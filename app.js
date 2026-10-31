@@ -2650,7 +2650,7 @@ function tutorBlocksText(ss) {
   }).join('\n\n');
   return { text, n: rows.reduce((a, x) => a + x.n, 0), mins: rows.reduce((a, x) => a + x.mins, 0), amt: rows.reduce((a, x) => a + x.amt, 0) };
 }
-const payTo = t => t.bank_account || t.vodafone_cash || '';
+const payTo = t => [t.vodafone_cash, t.bank_account].filter(Boolean).join(' أو ');   // المحفظة الأول لو موجودة
 
 // كشف مستحقات للمعلمة (من بعد آخر صرف)
 async function openTutorStatementMessage(tutorId) {
