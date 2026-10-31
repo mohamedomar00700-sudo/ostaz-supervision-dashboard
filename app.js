@@ -1560,23 +1560,24 @@ async function openTutorPeriodMessage(tutorId, detailed = false) {
       q(sb.from('tutor_payouts').select('*').eq('tutor_id', tutorId).eq('paid', true).gte('created_at', r.fromD.toISOString()).lt('created_at', r.toD.toISOString())),
     ]);
     const oc = occurrences(ss);
-    const earned = ss.reduce((a, s) => a + charges(s).tut, 0), mins = oc.reduce((a, s) => a + sMins(s), 0);
+    const earned = oc.reduce((a, o) => a + occTutExact(o), 0), mins = oc.reduce((a, s) => a + sMins(s), 0);
     const paid = po.reduce((a, p) => a + Number(p.total_egp), 0);
     const b = tutBalance(t);
     const label = r.fromD.getDate() === 1 && new Date(r.toD.getTime() - 1).getMonth() === r.fromD.getMonth()
       ? `شهر ${r.fromD.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` : `الفترة ${r.from} إلى ${r.toIncl}`;
     const lines = detailed
-      ? oc.map(s => `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ' ' + kindWord(s)} — ${durLabel(sMins(s))} = ${fmt(occTut(s), 2)} ج`).join('\n')
-      : tutorStudentSummary(ss).map(x => `• ${x.who}: ${nSess(x.n)}${x.subj ? ` (${x.subj})` : ''} — ${durLabel(x.mins)} = ${fmt(x.amt, 2)} ج`).join('\n');
+      ? oc.map(s => `• ${new Date(s.scheduled_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' })} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''}${s.kind === 'regular' || s.kind === 'group' ? '' : ' ' + kindWord(s)} — ${durLabel(sMins(s))} = ${fmt(occTutExact(s), 2)} ج`).join('\n')
+      : '\n' + tutorBlocksText(ss).text;
     const text = `${greetTutor(t.name)}
 كشف حصصك عن ${label}:
 ${lines || '— لا توجد حصص —'}
 
-إجمالي الوقت: ${mins ? durLabel(mins) : '0'}
-إجمالي المستحق عن الفترة: *${fmt(earned, 2)} جنيه*${paid ? `\nتم تحويل: ${fmt(paid, 2)} جنيه` : ''}
-${b.due > 0.01 ? `المتبقي لكِ حالياً: *${fmt(b.due, 2)} جنيه*` : b.due < -0.01 ? `💚 مدفوع لكِ مقدّم: *${fmt(-b.due, 2)} جنيه* — هيتخصم من الحصص الجاية` : 'لا يوجد متبقي ✅'}
+━━━━━━━━━━━━
+🧮 الإجمالي: ${oc.length} ${oc.length >= 3 && oc.length <= 10 ? 'حصص' : 'حصة'} — ${mins ? durLabel(mins) : '0'}
+💰 المستحق عن الفترة: ${fmt(earned, 2)} ج${paid ? `\n✔️ تم تحويل: ${fmt(paid, 2)} ج` : ''}
+${b.due > 0.01 ? `✅ *المتبقي لكِ: ${fmt(roundUp5(b.due))} ج*${roundUp5(b.due) - b.due >= 0.01 ? ` (${fmt(b.due, 2)} اتقرّب لأعلى)` : ''}${payTo(t) ? `\n💳 على: ${payTo(t)}` : ''}` : b.due < -0.01 ? `💚 مدفوع لكِ مقدّم: *${fmt(-b.due, 2)} ج* — هيتخصم من الحصص الجاية` : 'لا يوجد متبقي ✅'}
 
-لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل.
+لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل 🙏
 ${SIGN_T}`;
     const T = jsq(tutorId);
     openModal(`كشف ${label} — ${t.name}`, `<div class="chips"><button class="chip ${!detailed ? 'active' : ''}" onclick="openTutorPeriodMessage(${T}, false)">ملخص لكل طالب</button>
@@ -1764,7 +1765,7 @@ function openPayoutForm(tutorId) {
   const b = tutBalance(t);
   const range = finRange();
   const fields = [
-    { name: 'total_egp', label: 'المبلغ المصروف (EGP)', type: 'number', required: true, value: Math.max(b.due, 0).toFixed(2), hint: b.due < -0.01 ? `ليها رصيد مقدّم ${money(-b.due, 'EGP')} — أي مبلغ هتصرفه هيزود المقدّم` : `إجمالي المستحق حالياً: ${money(b.due, 'EGP')}` },
+    { name: 'total_egp', label: 'المبلغ المصروف (EGP)', type: 'number', required: true, value: roundUp5(b.due), hint: b.due < -0.01 ? `ليها رصيد مقدّم ${money(-b.due, 'EGP')} — أي مبلغ هتصرفه هيزود المقدّم` : `المستحق بالظبط ${money(b.due, 'EGP')} — اتقرّب لأعلى لأقرب 5 (الفرق بيتسجل مقدّم)` },
     { name: 'method', label: 'طريقة الصرف', type: 'select', value: t.vodafone_cash ? 'فودافون كاش' : 'تحويل بنكي',
       options: ['فودافون كاش', 'InstaPay', 'تحويل بنكي', 'كاش'].map(x => ({ v: x, l: x })) },
     [{ name: 'period_start', label: 'عن الفترة من', type: 'date', value: range.from }, { name: 'period_end', label: 'إلى', type: 'date', value: range.toIncl }],
@@ -2599,6 +2600,49 @@ ${SIGN_F}`;
   openModal(`مطالبة — ${f.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: f.whatsapp_group, phone: f.whatsapp, country: f.country, editFamily: f.id })}`);
 }
 
+// التحويل دايماً بيتقرّب لأعلى لأقرب 5 جنيه (32 → 35، 37 → 40)
+const roundUp5 = v => v > 0.009 ? Math.ceil((v - 0.009) / 5) * 5 : 0;
+// أجر الحصة: المجموعة تتحسب من أجر المجموعة نفسه (عشان 250 ÷ 3 ما تطلعش 249.99)
+const occTutExact = o => o._members && o.group_rate_egp != null ? Number(o.group_rate_egp) * sMins(o) / 60 : occTut(o);
+// أيام الحصص مجمعة بالشهر: "2، 5، 14 ×2 أكتوبر"
+function daysLine(isoList) {
+  const byM = {};
+  isoList.forEach(iso => { const d = new Date(iso); const k = d.getFullYear() * 100 + d.getMonth();
+    const m = byM[k] ||= { name: d.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' }), days: {} };
+    m.days[d.getDate()] = (m.days[d.getDate()] || 0) + 1; });
+  return Object.keys(byM).sort().map(k => { const m = byM[k];
+    return Object.keys(m.days).map(Number).sort((a, b) => a - b).map(d => m.days[d] > 1 ? `${d} ×${m.days[d]}` : d).join('، ') + ' ' + m.name; }).join(' — ');
+}
+// الكشف مقسّم على الطلاب: لكل طالب عدد الحصص والوقت والأجر والتواريخ
+function tutorBlocksText(ss) {
+  const m = {};
+  occurrences(ss).forEach(o => {
+    const key = o.group_key ? 'g:' + (o.group_series || o.group_name || o.group_key) : 's:' + o.student_id;
+    const x = m[key] ||= { group: !!o.group_key, who: o.group_key ? `${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : (byId(state.students, o.student_id)?.name || ''),
+      n: 0, mins: 0, amt: 0, subj: new Set(), durs: new Set(), rates: new Set(), days: [], extra: {} };
+    const mins = sMins(o), amt = occTutExact(o);
+    x.n++; x.mins += mins; x.amt += amt; x.days.push(o.scheduled_at); x.durs.add(mins);
+    if (o.subject) x.subj.add(o.subject);
+    if (mins) x.rates.add(Math.round(amt / mins * 60 * 100) / 100);
+    if (o.kind && o.kind !== 'regular' && o.kind !== 'group') { const w = kindWord(o); x.extra[w] = (x.extra[w] || 0) + 1; }
+  });
+  const rows = Object.values(m).sort((a, b) => a.group - b.group || b.mins - a.mins);
+  const nWord = n => n === 1 ? 'حصة واحدة' : n === 2 ? 'حصتين' : `${n} ${n <= 10 ? 'حصص' : 'حصة'}`;
+  const text = rows.map(x => {
+    const rate = x.rates.size === 1 ? [...x.rates][0] : null;
+    if (rate != null && Math.abs(rate * x.mins / 60 - x.amt) < 0.1) x.amt = rate * x.mins / 60;   // 73.33 × 8 → 586.67 مش 586.64
+    const oneDur = x.durs.size === 1 ? [...x.durs][0] : null;
+    let calc = oneDur && oneDur !== 60 && x.n > 1 ? `${x.n} × ${durLabel(oneDur)} = ${durLabel(x.mins)}` : durLabel(x.mins);
+    calc += rate != null ? ` × ${fmt(rate)} = ${fmt(x.amt, 2)} ج` : ` = ${fmt(x.amt, 2)} ج`;
+    const extra = Object.entries(x.extra).map(([k, v]) => `${v > 1 ? v + ' ' : ''}${k}`).join('، ');
+    return `${x.group ? '👥' : '👤'} *${x.who}* — ${nWord(x.n)}${x.subj.size ? ' · ' + [...x.subj].join('، ') : ''}${extra ? ` (منهم ${extra})` : ''}
+     ⏱ ${calc}
+     📅 ${daysLine(x.days)}`;
+  }).join('\n\n');
+  return { text, n: rows.reduce((a, x) => a + x.n, 0), mins: rows.reduce((a, x) => a + x.mins, 0), amt: rows.reduce((a, x) => a + x.amt, 0) };
+}
+const payTo = t => t.bank_account || t.vodafone_cash || '';
+
 // كشف مستحقات للمعلمة (من بعد آخر صرف)
 async function openTutorStatementMessage(tutorId) {
   const t = byId(state.tutors, tutorId);
@@ -2609,16 +2653,22 @@ async function openTutorStatementMessage(tutorId) {
     if (since) qq = qq.gt('scheduled_at', since);
     const ss = await q(qq);
     const b = tutBalance(t);
-    const lines = occurrences(ss).map(s => `• ${fmtShortDate(s.scheduled_at)} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''} — ${durLabel(sMins(s))} = ${fmt(occTut(s), 2)} ج`).join('\n');
-    const totalMins = occurrences(ss).reduce((a, s) => a + sMins(s), 0);
+    const bl = tutorBlocksText(ss);
+    const due = Math.round(b.due * 100) / 100;
+    const prev = Math.round((due - bl.amt) * 100) / 100;   // متبقي أو مقدّم من قبل الفترة
+    const send = roundUp5(due);
     const text = `${greetTutor(t.name)}
-كشف حصصك${since ? ` من بعد آخر تحويل (${fmtShortDate(since)})` : ''}:
-${lines || '— لا توجد حصص مسجلة —'}
+📋 كشف حصصك${since ? ` من بعد آخر تحويل (${fmtShortDate(since)})` : ''}
 
-إجمالي الوقت: ${durLabel(totalMins)}
-${b.due < -0.01 ? `💚 *مدفوع لكِ مقدّم: ${fmt(-b.due, 2)} جنيه* (للحصص الجاية)` : `*المستحق: ${fmt(b.due, 2)} جنيه*`}${t.default_rate_egp != null ? ` (أجر الساعة ${fmt(t.default_rate_egp)} ج)` : ''}
+${bl.text || '— لا توجد حصص مسجلة —'}
 
-لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل.
+━━━━━━━━━━━━
+🧮 الإجمالي: ${bl.n} ${bl.n >= 3 && bl.n <= 10 ? 'حصص' : 'حصة'} — ${durLabel(bl.mins)} = ${fmt(bl.amt, 2)} ج${Math.abs(prev) >= 1 ? `
+${prev > 0 ? `➕ متبقي لكِ من قبل كده: ${fmt(prev, 2)} ج` : `➖ مدفوع لكِ مقدّم قبل كده: ${fmt(-prev, 2)} ج`}` : ''}
+${due < -0.01 ? `💚 *مدفوع لكِ مقدّم: ${fmt(-due, 2)} ج* — هيتخصم من الحصص الجاية` : `💰 المستحق: ${fmt(due, 2)} ج
+✅ *هيتحوّل لكِ: ${fmt(send)} ج*${send - due >= 0.01 ? ' (اتقرّب لأعلى)' : ''}${payTo(t) ? `\n💳 على: ${payTo(t)}` : ''}`}
+
+لو فيه أي ملاحظة على الكشف بلّغينا قبل التحويل 🙏
 ${SIGN_T}`;
     openModal(`كشف للمعلمة — ${t.name}`, `<div class="msg-preview">${esc(text)}</div>${msgActionsHtml(text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id })}`);
   } catch (e) { showToast(dbError(e), true); }
