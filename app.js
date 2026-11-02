@@ -404,9 +404,11 @@ function durLabel(min) {
 // إجمالي الحصة = سعر الساعة × المدة الفعلية
 function charges(s) {
   const mins = sMins(s);
-  const fam = s.student_charge != null ? Number(s.student_charge) : Number(s.student_price || 0) * mins / 60;
-  const tut = s.tutor_charge_egp != null ? Number(s.tutor_charge_egp) : Number(s.tutor_cost_egp || 0) * mins / 60;
-  const rev = s.status === 'done' && s.revenue_egp != null ? Number(s.revenue_egp) : toEGP(fam, s.student_currency);
+  // الحساب بالظبط من السعر × المدة (من غير تقريب لكل حصة) — التقريب في العرض بس
+  const fam = s.student_price !== undefined ? Number(s.student_price || 0) * mins / 60 : Number(s.student_charge || 0);
+  const tut = s.tutor_cost_egp !== undefined ? Number(s.tutor_cost_egp || 0) * mins / 60 : Number(s.tutor_charge_egp || 0);
+  const rev = s.status === 'done' && s.fx_rate_to_egp != null ? fam * Number(s.fx_rate_to_egp)
+    : s.status === 'done' && s.revenue_egp != null ? Number(s.revenue_egp) : toEGP(fam, s.student_currency);
   return { mins, fam, tut, rev, margin: rev - tut };
 }
 function isNow(s) {
@@ -4404,7 +4406,7 @@ async function loadBusiness() {
   const now = new Date(), from = new Date(now.getFullYear(), now.getMonth() - 12, 1);
   setLoading(true);
   try {
-    const cols = 'id,student_id,tutor_id,status,scheduled_at,duration_minutes,actual_minutes,subject,kind,group_key,revenue_egp,tutor_charge_egp,student_charge,student_currency,cancel_reason,trial_outcome,trial_switched_to,created_at';
+    const cols = 'id,student_id,tutor_id,status,scheduled_at,duration_minutes,actual_minutes,subject,kind,group_key,revenue_egp,tutor_charge_egp,student_charge,student_price,tutor_cost_egp,fx_rate_to_egp,student_currency,cancel_reason,trial_outcome,trial_switched_to,created_at';
     const [ss, reps, monthly, fh] = await Promise.all([
       fetchAll(() => sb.from('sessions').select(cols).gte('scheduled_at', from.toISOString()).lte('scheduled_at', new Date(now.getTime() + 864e5).toISOString()).order('scheduled_at')),
       q(sb.from('session_reports').select('session_id,group_key,created_at').gte('created_at', new Date(now.getTime() - 40 * 864e5).toISOString())),
