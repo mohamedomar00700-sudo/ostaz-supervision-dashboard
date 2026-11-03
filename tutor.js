@@ -44,7 +44,18 @@ async function tutorPreviewRows(from, to) { // نفس شكل tutor_sessions بس
   const rows = await q(sb.from('sessions').select('*').eq('tutor_id', T.preview).gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).order('scheduled_at'));
   return rows.map(s => { const st = byId(state.students, s.student_id) || {};
     const pl = state.plans.find(p => p.student_id === s.student_id && p.tutor_id === s.tutor_id && p.meeting_link);
-    return { ...s, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', meeting_link: s.meeting_link || pl?.meeting_link || null }; });
+    const fam = s.family_block ? byId(state.families, st.family_id) : null;
+    return { ...s, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', meeting_link: s.meeting_link || pl?.meeting_link || null,
+      ...(fam ? { family_label: famBlockLabel(fam), kids: state.students.filter(x => x.family_id === fam.id).map(x => ({ id: x.id, name: x.name })) } : {}) }; });
+}
+// حصص الأسرة: اسم "أولاد أم فلان" + الأولاد + مين حضر (من التقرير)
+async function tAttachFamily(rows, from, to) {
+  try {
+    const [fb, fp] = await Promise.all([sb.rpc('tutor_family_blocks', { p_from: from.toISOString(), p_to: to.toISOString() }), sb.rpc('tutor_family_present', { p_from: from.toISOString(), p_to: to.toISOString() })]);
+    const info = Object.fromEntries((fb.data || []).map(x => [x.session_id, x])), pres = Object.fromEntries((fp.data || []).map(x => [x.session_id, x.present_ids]));
+    rows.forEach(r => { const i = info[r.id]; if (i) Object.assign(r, { family_block: true, family_label: i.family_label, kids: i.kids || [], present_ids: pres[r.id] || null }); });
+  } catch (e) {}
+  return rows;
 }
 async function tutorRefresh() {
   if (T.preview) {
@@ -76,6 +87,7 @@ async function tutorRefresh() {
     for (const r of [a, b, c, d]) if (r.error) throw r.error;
     const enfix = r => { const en = / · EN$/.test(r.grade || ''); return { ...r, en, grade: (r.grade || '').replace(/ · EN$/, '') }; };
     T.week = a.data.map(enfix); T.students = b.data.map(enfix); T.payouts = c.data; T.monthRows = d.data.map(enfix);
+    await Promise.all([tAttachFamily(T.week, new Date(from.getTime() - 7 * 864e5), to), tAttachFamily(T.monthRows, mr.from, mr.to)]);
     try { const rr = await sb.rpc('tutor_reports_mine', { p_from: new Date(from.getTime() - 40 * 864e5).toISOString(), p_to: to.toISOString() }); T.reports = rr.data || []; } catch (e) { T.reports = []; }
     try { const soonIds = T.week.filter(r => r.status === 'scheduled' && new Date(r.scheduled_at).getTime() > Date.now() - 3 * 3600e3).map(r => r.id);
       T.acks = new Set(soonIds.length ? (await q(sb.from('session_acks').select('session_id').eq('party', 'tutor').in('session_id', soonIds))).map(a => a.session_id) : []); } catch (e) { T.acks = new Set(); }
@@ -106,6 +118,7 @@ async function tutorAck(id, silent) {
   try { const { error } = await sb.rpc('tutor_ack', { p_session: id }); if (error) throw error; (T.acks ||= new Set()).add(id); if (!silent) { showToast('تمام ✓'); tutorRender(); } }
   catch (e) { if (!silent) showToast(dbError(e), true); }
 }
+const tPresentNames = s => { const p = s.present_ids || tRepFor(s)?.present_ids; return p && p.length ? (s.kids || []).filter(k => p.includes(k.id)).map(k => k.name).join('، ') : ''; };
 function tutorSessionCard(s, compact) {
   const start = new Date(s.scheduled_at).getTime(), end = start + tDur(s) * 60e3, now = Date.now();
   const live = !tCancelled(s) && s.status !== 'done' && now >= start - 10 * 60e3 && now <= end;
@@ -113,7 +126,9 @@ function tutorSessionCard(s, compact) {
   const badge = tCancelled(s) ? '<span class="badge b-cancel">اتلغت</span>' : s.status === 'done' ? '<span class="badge b-done">تمت ✓</span>'
     : now > end ? '<span class="badge b-pending">⏳ مستنية تأكيد الإشراف</span>'
     : live ? '<span class="badge b-now">دلوقتي</span>' : soon ? `<span class="badge b-pending">بعد ${Math.round((start - now) / 60e3)} د</span>` : '';
-  const who = s.group_key ? `👥 ${esc(s.group_name || 'مجموعة')}: ${esc(s.names.join('، '))}` : `${esc(s.student_name)} <span class="sub small">${esc(s.grade || '')}</span>`;
+  const who = s.group_key ? `👥 ${esc(s.group_name || 'مجموعة')}: ${esc(s.names.join('، '))}`
+    : s.family_block ? `👨‍👩‍👧 ${esc(s.family_label || 'حصة أسرة')}: ${esc((s.kids || []).map(k => k.name).join(' · '))}${s.status === 'done' && tPresentNames(s) ? ` <span class="sub small">(حضر: ${esc(tPresentNames(s))})</span>` : ''}`
+    : `${esc(s.student_name)} <span class="sub small">${esc(s.grade || '')}</span>`;
   const kind = s.kind === 'trial' ? ' <span class="badge b-trial">🧪 تجريبية — طالب جديد</span>' : s.kind === 'revision' ? ' <span class="badge b-rev">مراجعة</span>' : '';
   return `<div class="card item session ${live ? 's-now' : ''}" style="${tCancelled(s) ? 'opacity:.55' : ''}">
     <div class="left"><div class="time">${tTime(s.scheduled_at)}</div><div class="sub small">حتى ${tTime(tEnd(s))}</div></div>
@@ -127,7 +142,7 @@ function tutorSessionCard(s, compact) {
         ${!T.preview && start - now < 26 * 3600e3 && now < end ? (tAcked(s) ? '<span class="pos small">✓ أكدتي</span>' : `<button class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" onclick="tutorAck(${jsq(s.id)})">✅ تمام، شفت</button>`) : ''}
         ${s.meeting_link ? `<a class="btn ${live || soon ? 'btn-brand' : 'btn-ghost'} sm" href="${esc(linkHref(s.meeting_link))}" target="_blank" rel="noopener" onclick="${T.preview ? '' : `tutorAck(${jsq(s.id)}, true)`}">🎥 دخول الحصة</a>`
           : `<button class="btn btn-ghost sm" onclick="tutorEditLink(${jsq(s.student_id)}, ${jsq(s.subject || null)}, '')">🔗 ضيفي لينك الحصة</button>`}
-      </div>` : !tCancelled(s) && s.status === 'done' ? `<div class="actions">${tRepBtn(s)}${!s.group_key && !tPendingFor(s) && Date.now() - new Date(s.scheduled_at) < 14 * 864e5 ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">👥 حضر أخ/أخت بداله؟</button>` : ''}</div>` : ''}
+      </div>` : !tCancelled(s) && s.status === 'done' ? `<div class="actions">${tRepBtn(s)}${!s.group_key && !s.family_block && !tPendingFor(s) && Date.now() - new Date(s.scheduled_at) < 14 * 864e5 ? `<button class="btn btn-ghost sm" onclick="tutorRequest(${jsq(s.id)})">👥 حضر أخ/أخت بداله؟</button>` : ''}</div>` : ''}
     </div></div>`;
 }
 
@@ -417,13 +432,16 @@ function tutorReport(sessionId) {
   const old = tRepFor(s);
   const members = s.group_key ? (s.rows || [s]).map(r => ({ id: r.student_id, name: r.student_name })) : [];
   const planned = s.duration_minutes || 60;
-  const R = window._tr = { attended: old ? old.attended : true, absent: new Set(old?.absent_ids || []), mins: old?.minutes || tMins(s) || planned, durChanged: !!(old?.minutes && old.minutes !== planned),
+  const kids = s.family_block ? (s.kids || []) : [];
+  const R = window._tr = { attended: old ? old.attended : true, absent: new Set(old?.absent_ids || []), present: new Set(s.present_ids || (old ? (old.attended ? kids.map(k => k.id) : []) : kids.map(k => k.id))), mins: old?.minutes || tMins(s) || planned, durChanged: !!(old?.minutes && old.minutes !== planned),
     topics: old?.topics || '', homework: old?.homework || '', level: old?.level || '', note: old?.tutor_note || '', hw: old?.hw_done || '' };
   const render = () => {
     const opts = [...new Set([planned, planned + 15, planned + 30, planned + 60, Math.max(15, planned - 15)])].sort((a, b) => a - b);
     document.getElementById('modal-body').innerHTML = `
-      <div class="sub small mb">${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)} · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</div>
-      ${s.group_key ? `<div class="field"><label>مين حضر؟</label><div class="gm-list">${members.map(m => `<label class="gm-row gm-check"><input type="checkbox" ${R.absent.has(m.id) ? '' : 'checked'} onchange="_tr.absent[this.checked ? 'delete' : 'add'](${jsq(m.id)})"> <b>${esc(m.name)}</b></label>`).join('')}</div></div>`
+      <div class="sub small mb">${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.family_block ? '👨‍👩‍👧 ' + (s.family_label || 'حصة أسرة') : s.student_name)} · ${esc(s.subject || '')} · ${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</div>
+      ${s.family_block ? `<div class="field"><label>👨‍👩‍👧 مين من الأولاد حضر معاكي النهارده؟</label><div class="gm-list">${kids.map(m => `<label class="gm-row gm-check"><input type="checkbox" ${R.present.has(m.id) ? 'checked' : ''} onchange="_tr.present[this.checked ? 'add' : 'delete'](${jsq(m.id)}); _tr.attended = _tr.present.size > 0; _trRender()"> <b>${esc(m.name)}</b></label>`).join('')}</div>
+          <div class="hint">شيلي العلامة من اللي ماحضرش — حتى لو كل واحد خد جزء من الوقت علّمي عليه. ولو محدش حضر شيلي الكل.</div></div>`
+      : s.group_key ? `<div class="field"><label>مين حضر؟</label><div class="gm-list">${members.map(m => `<label class="gm-row gm-check"><input type="checkbox" ${R.absent.has(m.id) ? '' : 'checked'} onchange="_tr.absent[this.checked ? 'delete' : 'add'](${jsq(m.id)})"> <b>${esc(m.name)}</b></label>`).join('')}</div></div>`
         : `<div class="field"><label>الطالب حضر؟</label><div class="seg-wrap"><button type="button" class="chip ${R.attended ? 'active' : ''}" onclick="_tr.attended=true; _trRender()">✅ حضر</button><button type="button" class="chip ${!R.attended ? 'active' : ''}" onclick="_tr.attended=false; _trRender()">🚫 ماحضرش</button></div></div>`}
       ${R.attended ? `<div class="field"><label>الحصة خدت وقتها؟</label><div class="seg-wrap">
           <button type="button" class="chip ${!R.durChanged ? 'active' : ''}" onclick="_tr.durChanged=false; _tr.mins=${planned}; _trRender()">✅ آه (${durLabel(planned)})</button>
@@ -443,7 +461,7 @@ function tutorReport(sessionId) {
   window._trRender = () => { render(); hmWire('tr_hm', v => { R.mins = v; document.querySelectorAll('#modal-body .chips .chip').forEach(c => c.classList.remove('active')); }); };
   openModal(old ? '✏️ تعديل تقرير الحصة' : '📝 تقرير الحصة', ''); window._trRender();
   window._trSend = () => runSubmit(async () => {
-    const attended = s.group_key ? R.absent.size < members.length : R.attended;
+    const attended = s.group_key ? R.absent.size < members.length : s.family_block ? R.present.size > 0 : R.attended;
     if (!R.durChanged) R.mins = planned;
     if (attended && !(R.mins >= 5 && R.mins <= 720)) return formError('اكتبي مدة الحصة صح');
     if (attended && !R.topics.trim()) return formError('اكتبي اتشرح إيه في الحصة — ده اللي بيوصل لولي الأمر');
@@ -453,9 +471,10 @@ function tutorReport(sessionId) {
     if (error && /not started/.test(error.message)) return formError('الحصة لسه مابدأتش');
     if (error && /too old/.test(error.message)) return formError('الحصة دي قديمة — ابعتي التفاصيل للإشراف على الجروب');
     if (error) throw error;
+    if (s.family_block) await sb.rpc('tutor_report_present', { p_session: s.id, p_present: [...R.present] }).catch(() => null);
     if (attended && (R.hw || old?.hw_done)) await sb.rpc('tutor_report_hw', { p_session: s.id, p_hw: R.hw || null }).catch(() => null);
-    const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : s.student_name;
-    const q = attended && !s.group_key ? await sessionSeq(s.id) : null;
+    const who = s.group_key ? `👥 ${s.group_name || 'مجموعة'}` : s.family_block ? `👨‍👩‍👧 ${kids.filter(k => R.present.has(k.id)).map(k => k.name).join(' و') || s.family_label}` : s.student_name;
+    const q = attended && !s.group_key && !s.family_block ? await sessionSeq(s.id) : null;
     const absentNames = members.filter(m => R.absent.has(m.id)).map(m => m.name);
     window._trText = `📝 تقرير حصة ${who}${s.subject ? ' — ' + s.subject : ''} (${T.me.name})
 📅 ${relDayLabel(s.scheduled_at, CAIRO_TZ)} الساعة ${tTime(s.scheduled_at)}

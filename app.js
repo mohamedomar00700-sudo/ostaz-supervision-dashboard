@@ -377,11 +377,17 @@ function switchTab(t) {
    الجدول (يوم / أسبوع)
    ============================================================ */
 function sessionView(s) {
-  const st = byId(state.students, s.student_id);
+  let st = byId(state.students, s.student_id);
   const fam = st ? byId(state.families, st.family_id) : null;
   const tu = byId(state.tutors, s.tutor_id);
+  if (st && s.family_block) st = { ...st, name: famBlockName(fam) };   // حصة أسرة: الاسم بيبقى "أولاد أم فلان"
   return { st, fam, tu };
 }
+// حصة أسرة = الأولاد مع بعض والمعلم بيحدد مين حضر؛ بتتحسب مرة واحدة بالمدة
+const famBlockLabel = fam => fam ? 'أولاد ' + ((fam.parent_name || '').trim() || fam.name.replace(/^أسرة\s*/, '')) : 'حصة أسرة';
+const famKids = fam => fam ? state.students.filter(x => x.family_id === fam.id).map(x => x.name) : [];
+const famBlockName = fam => `👨‍👩‍👧 ${famBlockLabel(fam)} (${famKids(fam).join('، ')})`;
+const sName = s => { const st = byId(state.students, s.student_id); return s.family_block && st ? famBlockName(byId(state.families, st.family_id)) : (st?.name || ''); };
 // الطالب بيدرس بالإنجليزي (لغات / دولي)؟
 const isEN = studentId => { const st = byId(state.students, studentId); return !!st && st.curriculum && st.curriculum !== 'arabic'; };
 const enTag = studentId => isEN(studentId) ? ' <span class="badge b-en" title="منهج لغات / دولي — الحصة بالإنجليزي">EN</span>' : '';
@@ -839,6 +845,8 @@ async function openSessionForm(id, prefill = {}) {
     [{ name: 'student_price', label: 'سعر الساعة للأسرة', type: 'number', required: true, value: s?.student_price, hint: 'بعملة الأسرة' },
      { name: 'tutor_cost_egp', label: 'أجر الساعة للمعلم (EGP)', type: 'number', required: true, value: s?.tutor_cost_egp }],
     { name: 'meeting_link', label: 'رابط الحصة', value: s?.meeting_link, placeholder: 'meet.google.com/…' },
+    { name: 'family_block', label: '👨‍👩‍👧 حصة أسرة؟', type: 'select', value: s?.family_block || prefill.family_block ? '1' : '0',
+      options: [{ v: '0', l: 'لأ — حصة للطالب ده بس' }, { v: '1', l: 'آه — الإخوات مع بعض، والمعلم يحدد مين حضر (بتتحسب مرة واحدة بالمدة)' }] },
     { name: 'notes', label: 'ملاحظات', type: 'textarea', value: s?.notes ?? prefill.notes },
   ];
   if (!s) fields.push({ name: 'repeat', label: 'تكرار أسبوعي', type: 'select', value: String(prefill.repeat || 1),
@@ -946,6 +954,7 @@ async function openSessionForm(id, prefill = {}) {
       scheduled_at: start.toISOString(), duration_minutes: dur,
       meeting_link: fv('meeting_link') || null, student_price: fnum('student_price'),
       student_currency: fam.currency, tutor_cost_egp: fnum('tutor_cost_egp'), notes: fv('notes') || null,
+      family_block: fv('family_block') === '1',
     };
     if (!s && prefill.makeup_of) row.makeup_of = prefill.makeup_of;
     if (row.kind === 'trial') row.student_price = 0;
@@ -2641,8 +2650,8 @@ function daysLine(isoList) {
 function tutorBlocksText(ss) {
   const m = {};
   occurrences(ss).forEach(o => {
-    const key = o.group_key ? 'g:' + (o.group_series || o.group_name || o.group_key) : 's:' + o.student_id;
-    const x = m[key] ||= { group: !!o.group_key, who: o.group_key ? `${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : (byId(state.students, o.student_id)?.name || ''),
+    const key = o.group_key ? 'g:' + (o.group_series || o.group_name || o.group_key) : (o.family_block ? 'f:' : 's:') + o.student_id;
+    const x = m[key] ||= { group: !!o.group_key, fam: !!o.family_block, who: o.group_key ? `${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : sName(o),
       n: 0, mins: 0, amt: 0, subj: new Set(), durs: new Set(), rates: new Set(), days: [], extra: {} };
     const mins = sMins(o), amt = occTutExact(o);
     x.n++; x.mins += mins; x.amt += amt; x.days.push(o.scheduled_at); x.durs.add(mins);
@@ -2659,7 +2668,7 @@ function tutorBlocksText(ss) {
     let calc = oneDur && oneDur !== 60 && x.n > 1 ? `${x.n} × ${durLabel(oneDur)} = ${durLabel(x.mins)}` : durLabel(x.mins);
     calc += rate != null ? ` × ${fmt(rate)} = ${fmt(x.amt, 2)} ج` : ` = ${fmt(x.amt, 2)} ج`;
     const extra = Object.entries(x.extra).map(([k, v]) => `${v > 1 ? v + ' ' : ''}${k}`).join('، ');
-    return `${x.group ? '👥' : '👤'} *${x.who}* — ${nWord(x.n)}${x.subj.size ? ' · ' + [...x.subj].join('، ') : ''}${extra ? ` (منهم ${extra})` : ''}
+    return `${x.group ? '👥 ' : x.fam ? '' : '👤 '}*${x.who}* — ${nWord(x.n)}${x.subj.size ? ' · ' + [...x.subj].join('، ') : ''}${extra ? ` (منهم ${extra})` : ''}
      ⏱ ${calc}
      📅 ${daysLine(x.days)}`;
   }).join('\n\n');
@@ -3022,7 +3031,7 @@ function occurrences(list) {
 }
 const occTut = o => o._members ? o._members.reduce((a, m) => a + charges(m).tut, 0) : charges(o).tut;
 const groupNames = rows => rows.map(m => byId(state.students, m.student_id)?.name || '').filter(Boolean).join('، ');
-const occWho = o => o._members && o.group_key ? `👥 ${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : (byId(state.students, o.student_id)?.name || '');
+const occWho = o => o._members && o.group_key ? `👥 ${o.group_name || 'مجموعة'} (${groupNames(o._members)})` : sName(o);
 function loadedGroup(key) {
   const seen = new Set();
   return allLoadedSessions().filter(s => s.group_key === key && !seen.has(s.id) && seen.add(s.id)).sort((a, b) => a.id < b.id ? -1 : 1);
@@ -3737,7 +3746,7 @@ function reportLine(s) {
     return tu?.user_id && ended && !(isCancelled(s) && s.status !== 'done') ? `<div class="rep-line mt warn-txt">⏳ لسه المعلمة ماكتبتش تقرير الحصة <a href="javascript:void(0)" onclick="nudgeReport(${jsq(s.id)})">📲 فكّرها</a></div>` : '';
   }
   const planned = s.duration_minutes || 60;
-  return `<div class="rep-line mt">📝 تقرير المعلمة: ${r.attended ? `<b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}${r.absent_ids?.length ? ` · غاب ${r.absent_ids.length}` : ''}` : '<b class="neg">الطالب ماحضرش</b>'}
+  return `<div class="rep-line mt">📝 تقرير المعلمة: ${r.attended ? `<b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}${r.absent_ids?.length ? ` · غاب ${r.absent_ids.length}` : ''}${r.present_ids?.length ? ` · 👨‍👩‍👧 حضر: <b>${esc(r.present_ids.map(id => byId(state.students, id)?.name).filter(Boolean).join('، '))}</b>` : ''}` : '<b class="neg">الطالب ماحضرش</b>'}
     · ${r.sent_at ? '<span class="pos">اتعتمد للأسرة ✓</span>' : '<span class="warn-txt">لسه ماتعتمدش للأسرة</span>'}</div>`;
 }
 function reportBtn(s) {
@@ -3766,8 +3775,9 @@ function reportFamilyText(r, s, st, fam, absent, q) {
 بنبلغكم إن ${st?.name || 'الطالب'} ماحضرش حصة${subj} يوم ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}.
 لو فيه ظرف أو حابين نرتب حصة تعويضية بلّغونا 🙏
 ${SIGN_F}`;
+  const kidsLine = s.family_block && (r.present_ids || []).length ? (r.present_ids.map(id => byId(state.students, id)?.name).filter(Boolean).join(' و')) : null;
   return `السلام عليكم ورحمة الله 🌷
-📝 تقرير حصة ${st?.name || ''}${subj}
+📝 تقرير حصة ${kidsLine || (s.family_block ? 'الأولاد' : st?.name || '')}${subj}
 📅 ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}
 ⏱ مدة الحصة: ${durLabel(r.minutes)}${q && q.seq ? `\n${seqLine(q)}` : ''}${r.topics ? `\n📚 اللي اتشرح: ${r.topics}` : ''}${r.homework ? `\n✍️ الواجب: ${r.homework}` : ''}${r.level ? `\n⭐ المشاركة: ${REP_LEVEL[r.level]}` : ''}${r.hw_done && REP_HW[r.hw_done] ? `\n${REP_HW[r.hw_done]}` : ''}
 لو عندكم أي ملاحظة على الحصة بلّغونا 🙏
@@ -3782,7 +3792,8 @@ async function openReport(id) {
   const allDone = live.length && live.every(x => x.status === 'done');
   const anyOpen = rows.some(x => x.status === 'scheduled' || x.status === 'in_progress');
   const curMins = s0.actual_minutes || planned;
-  const who = s0.group_key ? `👥 ${s0.group_name || 'مجموعة'}` : (byId(state.students, s0.student_id)?.name || '');
+  const who = s0.group_key ? `👥 ${s0.group_name || 'مجموعة'}` : sName(s0);
+  const presentNames = (r.present_ids || []).map(sid => byId(state.students, sid)?.name).filter(Boolean);
   // رسالة لكل أسرة (في المجموعة: الغايب بياخد رسالة غياب)
   const brows = (s0.group_key ? rows : [s0]).filter(x => !isCancelled(x) || x.status === 'done' || (r.absent_ids || []).includes(x.student_id));
   const seqs = await Promise.all(brows.map(x => sessionSeq(x.id)));
@@ -3798,7 +3809,7 @@ async function openReport(id) {
     ${r.attended && r.minutes !== planned ? `<div class="pill bad mb" style="display:inline-block">⚠️ المدة اتغيرت: ${durLabel(planned)} ← ${durLabel(r.minutes)} — اتأكد قبل التسجيل</div>` : ''}
     <div class="card item rep-card">
       ${r.attended ? `<div class="meta" style="margin:0"><span>المدة حسب المعلمة: <b>${durLabel(r.minutes)}</b>${r.minutes !== planned ? ` <span class="${r.minutes > planned ? 'pos' : 'neg'}">(المخطط ${durLabel(planned)})</span>` : ''}</span>
-        ${absentNames.length ? `<span class="neg">غاب: <b>${esc(absentNames.join('، '))}</b></span>` : ''}${r.level ? `<span>المشاركة: <b>${REP_LEVEL[r.level]}</b></span>` : ''}</div>
+        ${absentNames.length ? `<span class="neg">غاب: <b>${esc(absentNames.join('، '))}</b></span>` : ''}${presentNames.length ? `<span>👨‍👩‍👧 حضر: <b>${esc(presentNames.join('، '))}</b></span>` : ''}${r.level ? `<span>المشاركة: <b>${REP_LEVEL[r.level]}</b></span>` : ''}</div>
         ${r.topics ? `<div class="mt">📚 <b>اللي اتشرح:</b> ${esc(r.topics)}</div>` : ''}${r.homework ? `<div class="mt">✍️ <b>الواجب:</b> ${esc(r.homework)}</div>` : ''}`
         : `<div class="neg"><b>🚫 الطالب ماحضرش الحصة</b></div>`}
       ${q0 && q0.seq ? `<div class="mt" style="white-space:pre-line">${esc(seqLine(q0))}</div>` : ''}
