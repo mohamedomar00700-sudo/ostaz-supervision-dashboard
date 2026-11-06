@@ -163,7 +163,7 @@ Deno.serve(async (req) => {
       admin.from('student_subjects').select('student_id,tutor_id,subject,tutor_rate_egp'),
       admin.from('sessions').select('student_id,tutor_id,subject,tutor_cost_egp,student_price,kind,scheduled_at,status')
         .in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at', { ascending: false }).limit(3000),
-      admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes')
+      admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes,tutor_cost_egp')
         .gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).neq('status', 'cancelled_by_academy').order('scheduled_at'),
     ]);
     const famBy = new Map((families || []).map(f => [f.id, f]));
@@ -289,6 +289,7 @@ Deno.serve(async (req) => {
         if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() === new Date(s.scheduled_at).getTime()) delete patch.scheduled_at;
         if (patch.duration_minutes && patch.duration_minutes === s.duration_minutes) delete patch.duration_minutes;
         if (patch.actual_minutes && patch.actual_minutes === (s.actual_minutes || s.duration_minutes)) delete patch.actual_minutes;
+        if (patch.tutor_cost_egp != null && !patch.tutor_id && Number(patch.tutor_cost_egp) === Number(s.tutor_cost_egp)) delete patch.tutor_cost_egp;
         if (!Object.keys(patch).length) { already.push({ student_name: r.student_name, tutor_name: r.tutor_name, subject: s.subject, date: c.date, time: c.time, minutes: s.actual_minutes || s.duration_minutes, by: supName(s.created_by, s.notes), differs: false }); return null; }
         r.patch = patch; if (patch.scheduled_at) { const n = cairoParts(new Date(patch.scheduled_at)); r.new_date = n.date; r.new_time = n.time; }
         return r;

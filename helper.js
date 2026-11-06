@@ -500,11 +500,16 @@
     body.appendChild(row); scroll();
     const hs = panel.querySelector('.sq-headsvg'); hs && hs.classList.add('sq-think');
     let data, error;
-    try { ({ data, error } = await sb.functions.invoke('saqqour-ai', { body: { text, history: AI.hist } })); } catch (err) { error = err; }
+    for (let tryN = 0; tryN < 2; tryN++) { // لو النت/السيرفر وقع مرة نجرّب تاني تلقائي
+      data = null; error = null;
+      try { ({ data, error } = await sb.functions.invoke('saqqour-ai', { body: { text, history: AI.hist } })); } catch (err) { error = err; }
+      if (!(error && /Failed to send|fetch|network|502|504/i.test(String(error.message || error) + (error.context?.status || '')))) break;
+    }
     row.remove(); hs && hs.classList.remove('sq-think');
     if (error || !data || data.error) {
       let msg = data?.error || error?.message || 'حصلت مشكلة';
       try { const j = await error?.context?.json?.(); if (j?.error) msg = j.error; } catch (_) {}
+      if (/Failed to send/i.test(msg)) msg = 'السيرفر ما ردّش المرة دي (غالباً جوجل كان بطيء) — ابعت الرسالة تاني';
       botSay(`معلش 😅 ${e(msg)}`); return;
     }
     AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
