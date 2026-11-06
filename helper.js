@@ -170,6 +170,38 @@
     return n;
   }
   function hello() { const h = new Date().getHours(); return h < 12 ? 'صباح الخير' : h < 17 ? 'أهلاً' : 'مساء الخير'; }
+  // سطر "متسجلة بالفعل" بيتداس عليه → يفتح الحصة من الداتا بيز نفسها (دليل إنها متسجلة بجد)
+  function sessLink(id) { const k = 'a' + (++SQ.aid); SQ.actions[k] = () => showSess(id); return `<span data-sq-act="${k}" style="cursor:pointer;display:inline">`; }
+  async function showSess(id) {
+    const { data: s, error } = await sb.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,status,subject,kind,family_block,notes,created_at,updated_at,created_by,students(name,families(name)),tutors(name)').eq('id', id).maybeSingle();
+    if (error || !s) { botSay('معلش، مش لاقي الحصة دي في السيستم — ممكن تكون اتمسحت'); return; }
+    let by = 'محمد عمر (الإدارة)';
+    if (s.created_by) { try { const { data: sp } = await sb.from('supervisors').select('name').eq('id', s.created_by).maybeSingle(); if (sp?.name) by = sp.name; } catch (_) {} }
+    else if (/صقّور/.test(s.notes || '')) by = 'صقّور';
+    const cairo = iso => new Intl.DateTimeFormat('ar-EG', { timeZone: 'Africa/Cairo', weekday: 'long', day: 'numeric', month: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+    const ST = { scheduled: '🕒 مجدولة', in_progress: '▶ جارية', done: '✅ تمت', cancelled_by_student: '✖ ملغية (الطالب)', cancelled_by_tutor: '✖ ملغية (المعلم)', cancelled_by_academy: '✖ ملغية (الأكاديمية)' };
+    const row = (k, v) => v ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border,#eee)"><span class="sub">${k}</span><b style="text-align:left">${v}</b></div>` : '';
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(s.scheduled_at));
+    const html = `<div>
+      ${row('الطالب', e(s.students?.name || '') + (s.family_block ? ' (حصة أسرة)' : ''))}
+      ${row('الأسرة', e(s.students?.families?.name || ''))}
+      ${row('المعلم', e(s.tutors?.name || ''))}
+      ${row('المادة', e(s.subject || '') + (s.kind === 'trial' ? ' · تجريبية' : s.kind === 'revision' ? ' · مراجعة' : ''))}
+      ${row('الميعاد', cairo(s.scheduled_at))}
+      ${row('المدة', dl(s.actual_minutes || s.duration_minutes))}
+      ${row('الحالة', ST[s.status] || s.status)}
+      ${row('سجّلها', e(by))}
+      ${row('اتسجلت', cairo(s.created_at))}
+      ${s.updated_at && Math.abs(new Date(s.updated_at) - new Date(s.created_at)) > 60e3 ? row('آخر تعديل', cairo(s.updated_at)) : ''}
+      ${s.notes ? `<div class="sub" style="margin-top:8px">📝 ${e(s.notes)}</div>` : ''}
+      <div class="sub" style="margin-top:8px;font-size:11px">رقم الحصة في السيستم: ${String(s.id).slice(0, 8)}</div>
+      <button class="btn btn-brand" style="width:100%;margin-top:12px" id="sq-goday">📅 افتح يوم الحصة في الجدول</button>
+    </div>`;
+    if (typeof openModal !== 'function') { botSay(html); return; }
+    openModal('الحصة متسجلة في السيستم ✅', html);
+    const b = document.getElementById('sq-goday');
+    if (b) b.onclick = () => { if (typeof closeModal === 'function') closeModal(); closePanel(); try { if (typeof setDay === 'function') setDay(day); } catch (_) {} };
+  }
   function act(label, fn, alt) { const id = 'a' + (++SQ.aid); SQ.actions[id] = fn; return `<button class="${alt ? 'sq-alt' : ''}" data-sq-act="${id}">${label}</button>`; }
   function go(fn) { closePanel(); setTimeout(() => { try { fn(); } catch (err) { console.warn(err); } }, 220); }
   function attItems() { return [...document.querySelectorAll('#attention .att')]; }
@@ -529,7 +561,7 @@
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
-    if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}${x.at ? ' ' + regAt(x.at) : ''}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}`).join('<br>')}</div>`;
+    if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `${x.session_id ? sessLink(x.session_id) : ''}• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}${x.at ? ' ' + regAt(x.at) : ''}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}${x.session_id ? ' <u style="color:#2563eb">👁 شوفها</u></span>' : ''}`).join('<br>')}<div class="sub" style="margin-top:4px">دوسي على أي حصة عشان تشوفها من السيستم نفسه</div></div>`;
     if (acts.length) {
       const k = 'p' + (++AI.n); AI.pending[k] = { acts, text, reply: data.reply };
       html += `<div style="margin-top:8px">${acts.map((a, i) => actHtml(a, i, k)).join('')}</div>
