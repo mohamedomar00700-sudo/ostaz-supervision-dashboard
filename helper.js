@@ -374,7 +374,7 @@
       panel.innerHTML = `<div class="sq-head"><div class="sq-av">${mascot(44, 'sq-headsvg')}</div><div><b>صقّور</b><div class="sq-st"><span class="sq-dot"></span>مساعدك في أستاذ أونلاين</div></div>
         <div class="sq-hb"><button data-x="tour" title="جولة في التطبيق">🧭</button><button data-x="close" title="إغلاق">✕</button></div></div>
         <div class="sq-body"></div><div class="sq-chips"></div>
-        <form class="sq-foot"><textarea rows="1" placeholder="${mode() === 'sup' ? 'اكتبلي زي الواتساب: جدول بكرة، تقرير النهارده، إلغاء، سؤال…' : 'اسألني أي حاجة…'}" autocomplete="off"></textarea>${mode() === 'sup' && navigator.mediaDevices && window.MediaRecorder ? '<button type="button" class="sq-mic" aria-label="فويس" title="اتكلم بدل ما تكتب">🎙️</button>' : ''}<button type="submit" aria-label="إرسال">➤</button></form>`;
+        <form class="sq-foot"><textarea rows="1" placeholder="${mode() === 'sup' ? 'اكتبلي زي الواتساب: جدول بكرة، تقرير النهارده، إلغاء، سؤال…' : 'اسألني أي حاجة…'}" autocomplete="off"></textarea>${mode() === 'sup' && navigator.mediaDevices && (window.AudioContext || window.webkitAudioContext) ? '<button type="button" class="sq-mic" aria-label="فويس" title="اتكلم بدل ما تكتب">🎙️</button>' : ''}<button type="submit" aria-label="إرسال">➤</button></form>`;
       document.body.appendChild(panel);
       body = panel.querySelector('.sq-body'); chips = panel.querySelector('.sq-chips'); input = panel.querySelector('textarea');
       const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(140, input.scrollHeight) + 'px'; };
@@ -555,38 +555,52 @@
   }
 
   /* ---------------- الفويس: المشرفة تتكلم بدل ما تكتب → Gemini يكتب الكلام → صقّور يكمّل عادي ---------------- */
-  const VOICE = { rec: null, chunks: [], t0: 0, timer: null, stream: null };
-  function pickMime() {
-    const c = ['audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm'];
-    return c.find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (_) { return false; } }) || '';
-  }
+  // بنسجّل WAV (16kHz مونو) بنفسنا بدل MediaRecorder عشان Gemini يقبله من أي موبايل (آيفون بيسجّل mp4 مش مدعوم)
+  const VOICE = { on: false, ctx: null, src: null, proc: null, stream: null, bufs: [], rate: 48000, t0: 0, timer: null };
   async function voiceToggle(btn) {
-    if (VOICE.rec && VOICE.rec.state === 'recording') { VOICE.rec.stop(); return; }
-    try { VOICE.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    if (VOICE.on) { voiceStop(btn); return; }
+    try { VOICE.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
     catch (err) { botSay('محتاج إذن الميكروفون 🎙️ — اسمح للتطبيق يستخدم المايك من إعدادات المتصفح وجرّب تاني.'); return; }
-    const mime = pickMime();
-    VOICE.chunks = []; VOICE.rec = new MediaRecorder(VOICE.stream, mime ? { mimeType: mime } : undefined);
-    VOICE.rec.ondataavailable = ev => { if (ev.data && ev.data.size) VOICE.chunks.push(ev.data); };
-    VOICE.rec.onstop = () => voiceDone(btn);
-    VOICE.rec.start(); VOICE.t0 = Date.now();
-    btn.classList.add('rec');
-    const tick = () => { const s = Math.floor((Date.now() - VOICE.t0) / 1000); btn.textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; if (s >= 180) VOICE.rec.stop(); };
+    const AC = window.AudioContext || window.webkitAudioContext;
+    VOICE.ctx = new AC(); VOICE.rate = VOICE.ctx.sampleRate; VOICE.bufs = [];
+    try { await VOICE.ctx.resume(); } catch (_) {}
+    VOICE.src = VOICE.ctx.createMediaStreamSource(VOICE.stream);
+    VOICE.proc = VOICE.ctx.createScriptProcessor(4096, 1, 1);
+    VOICE.proc.onaudioprocess = ev => { if (VOICE.on) VOICE.bufs.push(new Float32Array(ev.inputBuffer.getChannelData(0))); };
+    VOICE.src.connect(VOICE.proc); VOICE.proc.connect(VOICE.ctx.destination);
+    VOICE.on = true; VOICE.t0 = Date.now(); btn.classList.add('rec');
+    const tick = () => { const s = Math.floor((Date.now() - VOICE.t0) / 1000); btn.textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; if (s >= 180) voiceStop(btn); };
     tick(); VOICE.timer = setInterval(tick, 500);
     if (navigator.vibrate) navigator.vibrate(30);
   }
+  function voiceStop(btn) {
+    VOICE.on = false;
+    try { VOICE.proc.disconnect(); VOICE.src.disconnect(); } catch (_) {}
+    try { VOICE.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    try { VOICE.ctx.close(); } catch (_) {}
+    voiceDone(btn);
+  }
+  function wavB64() { // دمج + تحويل لـ 16kHz + WAV 16-bit
+    const len = VOICE.bufs.reduce((a, b) => a + b.length, 0); const all = new Float32Array(len); let o = 0; VOICE.bufs.forEach(b => { all.set(b, o); o += b.length; });
+    const ratio = VOICE.rate / 16000, n = Math.floor(len / ratio), pcm = new Int16Array(n);
+    for (let i = 0; i < n; i++) { const st = Math.floor(i * ratio), en = Math.min(len, Math.floor((i + 1) * ratio)); let sum = 0, c = 0; for (let j = st; j < en; j++) { sum += all[j]; c++; } const v = Math.max(-1, Math.min(1, c ? sum / c : 0)); pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff; }
+    const buf = new ArrayBuffer(44 + pcm.length * 2), dv = new DataView(buf); const w = (p, str) => { for (let i = 0; i < str.length; i++) dv.setUint8(p + i, str.charCodeAt(i)); };
+    w(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length * 2, true); w(8, 'WAVE'); w(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+    dv.setUint32(24, 16000, true); dv.setUint32(28, 32000, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); w(36, 'data'); dv.setUint32(40, pcm.length * 2, true);
+    new Uint8Array(buf, 44).set(new Uint8Array(pcm.buffer));
+    const bytes = new Uint8Array(buf); let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return { b64: btoa(bin), secs: n / 16000 };
+  }
   async function voiceDone(btn) {
     clearInterval(VOICE.timer); btn.classList.remove('rec'); btn.textContent = '🎙️';
-    try { VOICE.stream && VOICE.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
-    const type = (VOICE.rec && VOICE.rec.mimeType) || 'audio/webm';
-    const blob = new Blob(VOICE.chunks, { type });
-    if (Date.now() - VOICE.t0 < 800 || blob.size < 1500) { botSay('الفويس كان قصير قوي 😅 اضغط 🎙️ واتكلم، واضغط تاني لما تخلص.'); return; }
+    const wav = wavB64(); VOICE.bufs = [];
+    if (wav.secs < 0.8) { botSay('الفويس كان قصير قوي 😅 اضغط 🎙️ واتكلم، واضغط تاني لما تخلص.'); return; }
     const row = document.createElement('div'); row.className = 'sq-row';
     row.innerHTML = `<div class="sq-mini">${mascot(26)}</div><div class="sq-msg sq-bot sq-typing"><i></i><i></i><i></i></div>`;
     body.appendChild(row); scroll();
     let data, error;
     try {
-      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
-      ({ data, error } = await sb.functions.invoke('saqqour-voice', { body: { audio: b64, mime: type } }));
+      ({ data, error } = await sb.functions.invoke('saqqour-voice', { body: { audio: wav.b64, mime: 'audio/wav' } }));
     } catch (err) { error = err; }
     row.remove();
     if (error || !data || data.error || !data.text) {
