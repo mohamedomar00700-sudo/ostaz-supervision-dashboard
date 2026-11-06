@@ -514,6 +514,8 @@
     }
     AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
     const acts = data.actions || [];
+    // لو كله متسجل ومفيش أي تغيير، ما نعرضش كلام Gemini اللي بيقول "هعدّل…" (بيلخبط)
+    if (!acts.length && data.already?.length && !data.questions?.length) data.reply = `كل الحصص دي متسجلة بالفعل ✅ — مفيش حاجة محتاجة تتسجل أو تتعدل.`;
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
