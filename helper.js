@@ -137,8 +137,8 @@
   .sq-chips button{flex:none;border:1px solid var(--border,#e5e7eb);background:var(--bg,#f4f6f8);color:var(--text,#111);border-radius:999px;padding:6px 12px;font-size:12.5px;cursor:pointer;font-family:inherit;white-space:nowrap}
   .sq-chips button:hover{border-color:var(--brand,#1d4ed8);color:var(--brand,#1d4ed8)}
   .sq-foot{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));background:var(--card,#fff);border-top:1px solid var(--border,#e5e7eb)}
-  .sq-foot input{flex:1;border:1px solid var(--border,#e5e7eb);background:var(--bg,#f4f6f8);color:var(--text,#111);border-radius:999px;padding:10px 16px;font-size:14px;font-family:inherit;outline:none}
-  .sq-foot input:focus{border-color:var(--brand,#1d4ed8)}
+  .sq-foot textarea{flex:1;border:1px solid var(--border,#e5e7eb);background:var(--bg,#f4f6f8);color:var(--text,#111);border-radius:20px;padding:10px 16px;font-size:14px;font-family:inherit;outline:none;resize:none;max-height:140px;line-height:1.5}
+  .sq-foot textarea:focus{border-color:var(--brand,#1d4ed8)}
   .sq-foot button{width:44px;height:44px;border-radius:50%;border:none;background:var(--brand,#1d4ed8);color:#fff;font-size:18px;cursor:pointer;flex:none}
   .sq-tour-hole{position:fixed;z-index:70;border-radius:14px;box-shadow:0 0 0 9999px rgba(15,23,42,.62);transition:all .45s cubic-bezier(.4,0,.2,1);pointer-events:none;outline:3px solid #f59e0b;outline-offset:3px}
   .sq-tour-card{position:fixed;z-index:71;width:min(320px,calc(100vw - 24px));background:var(--card,#fff);color:var(--text,#111);border-radius:18px;padding:14px;box-shadow:0 20px 50px rgba(0,0,0,.35);
@@ -371,12 +371,15 @@
       panel.innerHTML = `<div class="sq-head"><div class="sq-av">${mascot(44, 'sq-headsvg')}</div><div><b>صقّور</b><div class="sq-st"><span class="sq-dot"></span>مساعدك في أستاذ أونلاين</div></div>
         <div class="sq-hb"><button data-x="tour" title="جولة في التطبيق">🧭</button><button data-x="close" title="إغلاق">✕</button></div></div>
         <div class="sq-body"></div><div class="sq-chips"></div>
-        <form class="sq-foot"><input placeholder="اسألني أي حاجة… أو اكتب اسم أسرة أو معلم" autocomplete="off"><button type="submit" aria-label="إرسال">➤</button></form>`;
+        <form class="sq-foot"><textarea rows="1" placeholder="${mode() === 'sup' ? 'اكتبلي زي الواتساب: جدول بكرة، تقرير النهارده، إلغاء، سؤال…' : 'اسألني أي حاجة…'}" autocomplete="off"></textarea><button type="submit" aria-label="إرسال">➤</button></form>`;
       document.body.appendChild(panel);
-      body = panel.querySelector('.sq-body'); chips = panel.querySelector('.sq-chips'); input = panel.querySelector('input');
+      body = panel.querySelector('.sq-body'); chips = panel.querySelector('.sq-chips'); input = panel.querySelector('textarea');
+      const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(140, input.scrollHeight) + 'px'; };
+      input.addEventListener('input', grow);
+      input.addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.shiftKey && window.innerWidth > 700) { ev.preventDefault(); panel.querySelector('form').requestSubmit(); } });
       panel.querySelector('[data-x=close]').onclick = closePanel;
       panel.querySelector('[data-x=tour]').onclick = () => { closePanel(); setTimeout(startTour, 250); };
-      panel.querySelector('form').onsubmit = ev => { ev.preventDefault(); const v = input.value.trim(); if (!v) return; input.value = ''; ask(v); };
+      panel.querySelector('form').onsubmit = ev => { ev.preventDefault(); const v = input.value.trim(); if (!v) return; input.value = ''; input.style.height = 'auto'; ask(v); };
     } else panel.style.display = '';
     renderChips();
     if (!body.children.length) {
@@ -432,11 +435,127 @@
     else { if (it.go) gos.push(act(it.go[0], () => go(it.go[1]))); if (it.go2) gos.push(act(it.go2[0], () => go(it.go2[1]), true)); }
     botSay(html + (gos.length ? `<div class="sq-go">${gos.join('')}</div>` : ''));
   }
+  /* ---------------- صقّور الذكي (Gemini): كلام عادي → عمليات على الحصص بعد التأكيد ---------------- */
+  const AI = { hist: [], pending: {}, n: 0 };
+  const STATUS_AR = { done: 'تمت ✅', cancelled_by_student: 'اتلغت من الطالب ❌', cancelled_by_tutor: 'اتلغت من المعلم ❌', cancelled_by_academy: 'اتلغت (الأكاديمية) ❌', scheduled: 'مجدولة' };
+  function aiWanted(text, ranked, talk) {
+    if (mode() !== 'sup') return false;
+    const t = String(text);
+    if (/\n/.test(t) || t.length > 45) return true;                                   // جدول أو تقرير
+    if (/(سجل|سجّل|ضيف|أضف|اضف|الغي|ألغي|لغي|اتلغ|اتأجل|أجّل|اجل|تمت|اتعمل|دخل|دخلت|بكرة|بكره|النهارده|امبارح|كله تمام|الساعة|الساعه|مين بيدرس|مين بتدرس|مدرس|مدرسة|عندنا)/.test(t)) return true;
+    if (/\d/.test(t) && t.length > 12) return true;
+    return !(talk || (ranked[0] && ranked[0].s >= 2));                               // مافهمش محلياً → نسأل الذكاء
+  }
+  function cairoDate(d) { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(d); }
+  function dayLbl(date) {
+    const today = cairoDate(new Date()), tm = cairoDate(new Date(Date.now() + 864e5)), ys = cairoDate(new Date(Date.now() - 864e5));
+    if (date === today) return 'النهارده'; if (date === tm) return 'بكرة'; if (date === ys) return 'امبارح';
+    const d = new Date(date + 'T12:00:00'); return d.toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric' });
+  }
+  function t12(hm) { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h < 12 ? 'ص' : 'م'; h = h % 12 || 12; return `${h}${m ? ':' + String(m).padStart(2, '0') : ''} ${ap}`; }
+  const dl = m => (typeof durLabel === 'function' ? durLabel(m) : m + ' د');
+  function actHtml(a, i, k) {
+    const who = `<b>${e(a.student_name)}</b>${a.subject ? ' · ' + e(a.subject) : ''} · ${e(a.tutor_name)}`;
+    let h = '';
+    if (a.op === 'add_session') {
+      const tags = [a.kind === 'trial' ? '🧪 تجريبية' : a.kind === 'revision' ? '📝 مراجعة' : '', a.family_block ? '👨‍👩‍👧 حصة أسرة' : '', a.status === 'done' ? '✅ تمت' : ''].filter(Boolean).join(' · ');
+      h = `➕ ${who}<div class="small">${dayLbl(a.date)} ${t12(a.time)} · ${dl(a.duration_minutes)}${a.status === 'done' && a.actual_minutes !== a.duration_minutes ? ` (فعلي ${dl(a.actual_minutes)})` : ''}${tags ? ' · ' + tags : ''}</div>
+        <div class="small sub">${a.kind === 'trial' ? 'مجانية للأسرة والمعلم' : `${a.student_price} ${e(a.student_currency)}/ساعة للأسرة · ${a.tutor_cost_egp} ج/ساعة للمعلم`}</div>
+        ${a.duplicate_of ? `<div class="small" style="color:#b45309">⚠️ فيه حصة للطالب ده متسجلة ${t12(a.duplicate_of.time)} (${STATUS_AR[a.duplicate_of.status] || ''}) — اتأكد إنها مش مكررة</div>` : ''}`;
+    } else if (a.op === 'set_status') {
+      h = `${a.status === 'done' ? '✅' : '❌'} ${who}<div class="small">${dayLbl(a.date)} ${t12(a.time)} ← <b>${STATUS_AR[a.status] || a.status}</b>${a.status === 'done' && a.actual_minutes && a.actual_minutes !== (a.old?.actual_minutes || a.old?.duration_minutes) ? ` · المدة ${dl(a.actual_minutes)}` : ''}${a.cancel_reason ? ' · ' + e(a.cancel_reason) : ''}</div>`;
+    } else if (a.op === 'update_session') {
+      const ch = [a.new_date || a.new_time ? `الميعاد ← ${dayLbl(a.new_date)} ${t12(a.new_time)}` : '', a.patch?.duration_minutes ? `المدة ← ${dl(a.patch.duration_minutes)}` : '', a.new_tutor_name ? `المعلم ← ${e(a.new_tutor_name)}` : '', a.patch?.subject ? `المادة ← ${e(a.patch.subject)}` : ''].filter(Boolean).join(' · ');
+      h = `✏️ ${who}<div class="small">${dayLbl(a.date)} ${t12(a.time)} · ${ch}</div>`;
+    }
+    if (a.note) h += `<div class="small sub">📝 ${e(a.note)}</div>`;
+    return `<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-top:1px solid rgba(0,0,0,.07);cursor:pointer"><input type="checkbox" data-ai="${k}" data-i="${i}" checked style="margin-top:5px"><div style="flex:1;min-width:0">${h}</div></label>`;
+  }
+  async function aiAsk(text) {
+    const row = document.createElement('div'); row.className = 'sq-row';
+    row.innerHTML = `<div class="sq-mini">${mascot(26)}</div><div class="sq-msg sq-bot sq-typing"><i></i><i></i><i></i></div>`;
+    body.appendChild(row); scroll();
+    const hs = panel.querySelector('.sq-headsvg'); hs && hs.classList.add('sq-think');
+    let data, error;
+    try { ({ data, error } = await sb.functions.invoke('saqqour-ai', { body: { text, history: AI.hist } })); } catch (err) { error = err; }
+    row.remove(); hs && hs.classList.remove('sq-think');
+    if (error || !data || data.error) {
+      let msg = data?.error || error?.message || 'حصلت مشكلة';
+      try { const j = await error?.context?.json?.(); if (j?.error) msg = j.error; } catch (_) {}
+      botSay(`معلش 😅 ${e(msg)}`); return;
+    }
+    AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
+    const acts = data.actions || [];
+    let html = e(data.reply || '');
+    if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
+    if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
+    if (acts.length) {
+      const k = 'p' + (++AI.n); AI.pending[k] = { acts, text, reply: data.reply };
+      html += `<div style="margin-top:8px">${acts.map((a, i) => actHtml(a, i, k)).join('')}</div>
+        <div class="sq-go">${act(`✅ نفّذ (${acts.length})`, () => aiExec(k))}${act('إلغاء', () => { delete AI.pending[k]; botSay('تمام، ما عملتش حاجة 👍'); }, true)}</div>
+        <div class="small sub" style="margin-top:4px">شيل علامة ✓ من أي سطر مش عايزه — أو اكتبلي التعديل وأنا أعيد.</div>`;
+    }
+    botSay(html, acts.length ? 'happy' : null);
+  }
+  async function aiExec(k) {
+    const P = AI.pending[k]; if (!P) return; delete AI.pending[k];
+    const sel = [...document.querySelectorAll(`input[data-ai="${k}"]`)].filter(x => x.checked).map(x => P.acts[+x.dataset.i]);
+    document.querySelectorAll(`input[data-ai="${k}"]`).forEach(x => x.disabled = true);
+    if (!sel.length) { botSay('ما اخترتش حاجة، فما عملتش حاجة 👍'); return; }
+    const uid = (typeof currentSupervisor !== 'undefined' && currentSupervisor) ? currentSupervisor.id : null;
+    const results = []; let ok = 0;
+    for (const a of sel) {
+      try {
+        if (a.op === 'add_session') {
+          const row = { student_id: a.student_id, tutor_id: a.tutor_id, scheduled_at: a.scheduled_at, duration_minutes: a.duration_minutes, actual_minutes: a.actual_minutes, status: a.status,
+            subject: a.subject, kind: a.kind, family_block: !!a.family_block, student_price: a.student_price, student_currency: a.student_currency, tutor_cost_egp: a.tutor_cost_egp,
+            notes: '🦅 صقّور' + (a.note ? ': ' + a.note : ''), created_by: uid };
+          const { data, error } = await sb.from('sessions').insert(row).select('id').single(); if (error) throw error;
+          results.push({ op: a.op, id: data.id, ok: true });
+        } else if (a.op === 'set_status') {
+          const patch = { status: a.status };
+          if (a.status === 'done') patch.actual_minutes = a.actual_minutes;
+          if (a.status.startsWith('cancelled')) Object.assign(patch, { cancel_reason: a.cancel_reason, cancel_note: a.note || null, cancelled_at: new Date().toISOString(), cancelled_by_user: uid, actual_minutes: null });
+          const { error } = await sb.from('sessions').update(patch).eq('id', a.session_id); if (error) throw error;
+          results.push({ op: a.op, id: a.session_id, ok: true, old: a.old });
+        } else if (a.op === 'update_session') {
+          const { error } = await sb.from('sessions').update(a.patch).eq('id', a.session_id); if (error) throw error;
+          results.push({ op: a.op, id: a.session_id, ok: true, old: a.old });
+        }
+        ok++;
+      } catch (err) { results.push({ op: a.op, ok: false, err: String(err?.message || err).slice(0, 200), who: a.student_name }); }
+    }
+    let logId = null;
+    try { const { data } = await sb.from('saqqour_log').insert({ input: P.text, reply: P.reply, actions: sel, results, executed_at: new Date().toISOString() }).select('id').single(); logId = data?.id; } catch (_) {}
+    try { if (typeof refreshAll === 'function') await refreshAll(); } catch (_) {}
+    const bad = results.filter(r => !r.ok);
+    botSay(`${ok ? `اتنفّذ ${ok} ${ok === 1 ? 'حاجة' : 'حاجات'} ✓` : ''}${bad.length ? `<div class="small" style="color:#b91c1c">${bad.map(b => `ما اتنفّذش (${e(b.who || '')}): ${e(b.err)}`).join('<br>')}</div>` : ''}
+      ${ok && logId ? `<div class="sq-go">${act('↩️ تراجع', () => aiUndo(logId, results))}</div>` : ''}`, ok ? 'happy' : null);
+  }
+  async function aiUndo(logId, results) {
+    let n = 0;
+    for (const r of results.filter(x => x.ok).reverse()) {
+      try {
+        if (r.op === 'add_session') await sb.from('sessions').update({ status: 'cancelled_by_academy', cancel_reason: 'اتسجلت بالغلط', cancel_note: 'تراجع من صقّور', actual_minutes: null }).eq('id', r.id);
+        else if (r.old) {
+          const back = { status: r.old.status, scheduled_at: r.old.scheduled_at, duration_minutes: r.old.duration_minutes, actual_minutes: r.old.actual_minutes, tutor_id: r.old.tutor_id, subject: r.old.subject };
+          if (!String(r.old.status).startsWith('cancelled')) Object.assign(back, { cancel_reason: null, cancel_note: null, cancelled_at: null });
+          await sb.from('sessions').update(back).eq('id', r.id);
+        }
+        n++;
+      } catch (_) {}
+    }
+    try { await sb.from('saqqour_log').update({ undone_at: new Date().toISOString() }).eq('id', logId); } catch (_) {}
+    try { if (typeof refreshAll === 'function') await refreshAll(); } catch (_) {}
+    botSay(`رجّعت ${n} ${n === 1 ? 'حاجة' : 'حاجات'} زي ما كانت ↩️`);
+  }
+
   async function ask(text) {
     meSay(text);
     const q = N(text).replace(/[؟?!.,،]/g, ' ').replace(/\s+/g, ' ').trim();
     const talk = TALK.find(t => t.k.some(k => (' ' + q + ' ').includes(' ' + N(k))));
     const ranked = kb().map(it => ({ it, s: scoreEntry(q, it) })).sort((a, b) => b.s - a.s);
+    if (aiWanted(text, ranked, talk)) { await aiAsk(text); return; }
     const ents = findEntities(q);
     if (talk && (!ranked[0] || ranked[0].s < 2.5)) { await typing(500); botSay(talk.r[Math.floor(Math.random() * talk.r.length)], 'happy'); return; }
     if (ranked[0] && ranked[0].s >= 2) { await runIntent(ranked[0].it, ents); return; }
