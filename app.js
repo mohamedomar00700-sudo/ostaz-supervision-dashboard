@@ -1184,10 +1184,10 @@ function renderFamilies() {
     el.innerHTML = `<div class="card empty">لسه مفيش أسر مسجّلة.<br><button class="btn btn-brand" onclick="openFamilyForm()">+ أضف أول أسرة</button></div>`;
     return;
   }
-  const FF = { all: () => true, owe: f => famBalance(f).balance < 0, low: lowPrepaid, nogroup: f => !f.whatsapp_group,
+  const FF = { all: () => true, owe: f => famBalance(f).balance < 0, low: lowPrepaid, empty: emptyPrepaid, nogroup: f => !f.whatsapp_group,
     noprice: f => state.students.some(s => s.family_id === f.id && s.default_price == null) };
   const counts = Object.fromEntries(Object.entries(FF).map(([k, fn]) => [k, state.families.filter(fn).length]));
-  document.getElementById('family-chips').innerHTML = [['all', 'الكل'], ['owe', '💸 عليها فلوس'], ['low', '🪫 باقة قربت تخلص'], ['nogroup', 'بدون جروب'], ['noprice', 'طالب بدون سعر']]
+  document.getElementById('family-chips').innerHTML = [['all', 'الكل'], ['owe', '💸 عليها فلوس'], ['empty', '🔴 الباقة خلصت'], ['low', '🪫 باقة قربت تخلص'], ['nogroup', 'بدون جروب'], ['noprice', 'طالب بدون سعر']]
     .filter(([k]) => k === 'all' || counts[k] || state.famFilter === k)
     .map(([k, l]) => `<button class="chip ${(state.famFilter || 'all') === k ? 'active' : ''}" onclick="state.famFilter='${k}'; renderFamilies()">${l} (${counts[k]})</button>`).join('');
   const fams = state.families.filter(f => state.students.some(s => s.family_id === f.id)), act = state.act || { stu: new Set() };
@@ -1214,7 +1214,7 @@ function renderFamilies() {
         </div>
         <div style="text-align:left">
           <div class="num ${b.balance < 0 ? 'neg' : 'pos'}" style="font-weight:800">${money(b.balance, f.currency)}</div>
-          <div class="sub small">${b.balance < 0 ? 'مستحق على الأسرة' : f.billing_cycle === 'prepaid' ? (lowPrepaid(f) ? '🪫 الباقة قربت تخلص' : 'رصيد الباقة') : 'رصيد'}</div>
+          <div class="sub small">${f.billing_cycle === 'prepaid' && emptyPrepaid(f) ? (b.balance < -0.01 ? '🔴 الباقة خلصت — مستحق على الأسرة' : '🔴 الباقة خلصت') : b.balance < 0 ? 'مستحق على الأسرة' : f.billing_cycle === 'prepaid' ? (lowPrepaid(f) ? '🪫 الباقة قربت تخلص' : 'رصيد الباقة') : 'رصيد'}</div>
         </div>
       </div>
       ${f.whatsapp_group ? `<div class="actions" style="margin-top:8px"><a class="btn btn-wa sm" href="${esc(f.whatsapp_group)}" target="_blank" rel="noopener">💬 جروب الأسرة</a></div>` : ''}
@@ -1463,12 +1463,13 @@ function periodFor(cycle, which) { // which: 0 = الحالية، -1 = اللي 
   const from = new Date(now.getFullYear(), now.getMonth() + which, 1), to = new Date(now.getFullYear(), now.getMonth() + which + 1, 1);
   return { from, to, label: `شهر ${from.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' })}` };
 }
-function lowPrepaid(f) {
+function lowPrepaid(f) { // لسه فيها رصيد بس أقل من ساعتين
   if (f.billing_cycle !== 'prepaid') return false;
   const prices = state.students.filter(s => s.family_id === f.id).map(s => Number(s.default_price || 0));
-  const hour = Math.max(20, ...prices);
-  return famBalance(f).balance < 2 * hour;
+  const hour = Math.max(20, ...prices), bal = famBalance(f).balance;
+  return bal > 0.01 && bal < 2 * hour;
 }
+function emptyPrepaid(f) { return f.billing_cycle === 'prepaid' && famBalance(f).balance <= 0.01; } // الباقة خلصت
 function finPeriod() { // فترة قسم المالية المختارة
   const r = state.fin?.range || finRange();
   const whole = r.fromD.getDate() === 1 && r.toD.getDate() === 1 && (r.toD.getMonth() - r.fromD.getMonth() + 12) % 12 === 1;
@@ -2015,10 +2016,10 @@ function renderFinance() {
       <select id="fin-asof" class="input" style="width:auto" onchange="setFinAsOf(this.value)"><option value="">النهارده (شامل حصص الشهر ده)</option>
         ${asOfMonths().map(k => `<option value="${k}" ${k === AK ? 'selected' : ''}>آخر ${esc(asOfLabel(k))}</option>`).join('')}</select></div>
       ${AK ? `<p class="sub small mb">الرصيد هنا = الحصص اللي تمت لحد آخر ${esc(asOfLabel(AK))} − كل الدفعات لحد النهارده. يعني اللي دفع حسابه بعد آخر الشهر هيبان خالص، واللي "عليها" لسه ما دفعتش حساب الشهور دي.${asOfWait ? ' <b>بيتحسب…</b>' : ''}</p>` : ''}`;
-    const test = (k, x) => k === 'all' ? true : k === 'owing' ? x.b.balance < -0.01 : k === 'clear' ? Math.abs(x.b.balance) <= 0.01 && !!(x.p.charge || x.paid) : k === 'credit' ? x.b.balance > 0.01 : k === 'paid' ? x.paid > 0 : k === 'low' ? lowPrepaid(x.f) : !!(x.p.charge || x.paid || x.b.balance < -0.01 || lowPrepaid(x.f));
+    const test = (k, x) => k === 'all' ? true : k === 'owing' ? x.b.balance < -0.01 : k === 'clear' ? Math.abs(x.b.balance) <= 0.01 && !!(x.p.charge || x.paid) : k === 'credit' ? x.b.balance > 0.01 : k === 'paid' ? x.paid > 0 : k === 'low' ? (lowPrepaid(x.f) || emptyPrepaid(x.f)) : !!(x.p.charge || x.paid || x.b.balance < -0.01 || lowPrepaid(x.f) || emptyPrepaid(x.f));
     const rows = all.filter(x => test(F, x)).sort((a, b) => a.b.balance - b.b.balance || a.f.name.localeCompare(b.f.name, 'ar'));
     const cnt = k => all.filter(x => test(k, x)).length;
-    const chips = [['active', 'فيها حركة'], ['owing', '🔴 عليها فلوس'], ['clear', '✅ خالصة'], ['credit', '🟢 ليها رصيد'], ['paid', '💳 دفعت في الفترة'], ['low', '🪫 الباقة قربت تخلص'], ['all', 'الكل']];
+    const chips = [['active', 'فيها حركة'], ['owing', '🔴 عليها فلوس'], ['clear', '✅ خالصة'], ['credit', '🟢 ليها رصيد'], ['paid', '💳 دفعت في الفترة'], ['low', '🪫 باقات خلصت/قربت تخلص'], ['all', 'الكل']];
     body = `<div class="fin-tools"><input class="input search" placeholder="🔎 ابحث باسم الأسرة أو الطالب أو البلد…" value="${esc(state.finQ_families || '')}" oninput="finSearch('families', this.value)">
         <span class="sub small"><b id="fin-families-count">${rows.length}</b> أسرة</span></div>
       ${asOfSel}
@@ -2026,7 +2027,7 @@ function renderFinance() {
       ${Object.keys(tabByCur).length ? `<div class="card item mb fin-sum"><b>${AK ? `لسه على الأسر عن حصص لحد آخر ${esc(asOfLabel(AK))}:` : 'إجمالي اللي على الأسر دلوقتي:'}</b> ${Object.entries(tabByCur).map(([cu, v]) => `<bdi class="neg num">${fmt(v, 2)} ${cu}</bdi>`).join(' + ')}${isAdmin ? ` <span class="sub">≈ ${fmt(Math.round(tabEgp))} ج</span>` : ''}</div>` : (AK && !asOfWait ? `<div class="card item mb fin-sum pos"><b>كل الأسر دفعت حسابها لحد آخر ${esc(asOfLabel(AK))} ✓</b></div>` : '')}
       <div class="list" id="fin-families-list">${rows.map(x => { const cur = x.f.currency; const kids = state.students.filter(s => s.family_id === x.f.id).map(s => s.name).join(' ');
         return `<div class="card item fin-row" data-q="${esc(normAr(`${x.f.name} ${kids} ${x.f.country || ''}`))}">
-          <div class="item-head"><div><div class="item-title">${esc(x.f.name)}</div><div class="sub small">${esc(x.f.country || '')} · ${CYCLES[x.f.billing_cycle] || ''}${lowPrepaid(x.f) ? ' · <span class="neg">🪫 الباقة قربت تخلص</span>' : ''}</div></div>
+          <div class="item-head"><div><div class="item-title">${esc(x.f.name)}</div><div class="sub small">${esc(x.f.country || '')} · ${CYCLES[x.f.billing_cycle] || ''}${emptyPrepaid(x.f) ? ' · <span class="neg">🔴 الباقة خلصت</span>' : lowPrepaid(x.f) ? ' · <span class="neg">🪫 الباقة قربت تخلص</span>' : ''}</div></div>
             <span class="badge ${x.b.balance < -0.01 ? 'b-cancel' : x.b.balance > 0.01 ? 'b-done' : 'b-sched'} num">${x.b.balance < -0.01 ? 'عليها ' : x.b.balance > 0.01 ? 'ليها ' : 'خالصة '}${Math.abs(x.b.balance) > 0.01 ? `<bdi>${fmt(Math.abs(x.b.balance), 2)} ${cur}</bdi>` : '✓'}</span></div>
           <div class="meta"><span>حصص الفترة: <b class="num"><bdi>${fmt(x.p.charge, 2)} ${cur}</bdi></b>${x.p.mins ? ` (${durLabel(x.p.mins)})` : ''}</span><span>دفعت في الفترة: <b class="num">${x.paid ? `<bdi>${fmt(x.paid, 2)} ${cur}</bdi>` : '—'}</b></span></div>
           <div class="actions"><button class="btn btn-wa sm" onclick="openFamilyInvoice(${jsq(x.f.id)}, 'fin')">📄 فاتورة</button>
@@ -2611,8 +2612,10 @@ function renderAttention() {
   if (relay) items.push(`<button class="att" onclick="switchTab('relay')">🔁 <b>${relay}</b> مهمة ترحيل مفتوحة</button>`);
   const owing = state.families.filter(f => famBalance(f).balance < 0).length;
   if (owing) items.push(`<button class="att" onclick="switchTab('fin')">💸 <b>${owing}</b> أسرة عليها مستحقات</button>`);
+  const empty = state.families.filter(emptyPrepaid).length;
+  if (empty) items.push(`<button class="att" onclick="openFamFilter('empty')">🔴 <b>${empty}</b> ${empty === 1 ? 'باقة خلصت' : 'باقات خلصت'} — محتاجة تجديد</button>`);
   const low = state.families.filter(lowPrepaid).length;
-  if (low) items.push(`<button class="att att-warn" onclick="switchTab('families')">🪫 <b>${low}</b> باقة قربت تخلص</button>`);
+  if (low) items.push(`<button class="att att-warn" onclick="openFamFilter('low')">🪫 <b>${low}</b> ${low === 1 ? 'باقة قربت تخلص' : 'باقات قربت تخلص'}</button>`);
   const noRate = state.tutors.filter(t => t.default_rate_egp == null).length;
   if (noRate) items.push(`<button class="att" onclick="switchTab('tutors')">🧑‍🏫 <b>${noRate}</b> معلم بدون أجر ساعة</button>`);
   const noPrice = state.students.filter(s => s.default_price == null).length;
@@ -4906,6 +4909,10 @@ const LEAD_ST = { new: { l: 'جديد', c: 'b-sched' }, talking: { l: 'بنتك�
 const LEAD_STAGE = { new: 0, talking: 1, trial_booked: 2, trial_done: 3, won: 4 };
 const LEAD_SRC = { instagram: '📸 إنستجرام', whatsapp: '💬 واتساب', referral: '🤝 ترشيح', facebook: '📘 فيسبوك', tiktok: '🎵 تيك توك', other: 'تاني' };
 const LEAD_LOST = ['السعر غالي', 'المواعيد مش مناسبة', 'مردّش بعد التجريبية', 'مردّش خالص', 'مش مقتنع بالأونلاين', 'لقى مدرّس تاني', 'كان بيسأل بس', 'تاني'];
+function openFamFilter(k) { // من التنبيهات → قسم الأسر على الفلتر ده على طول
+  state.famFilter = k; const fs = document.getElementById('family-search'); if (fs) fs.value = '';
+  switchTab('families'); if ((state.famView || 'fams') !== 'fams') setFamView('fams'); renderFamilies();
+}
 function renderFamSwitch() {
   const el = document.getElementById('fam-switch'); if (!el) return;
   const v = state.famView || 'fams', due = (state.leads || []).filter(leadDue).length;
