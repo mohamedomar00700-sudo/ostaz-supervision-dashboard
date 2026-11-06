@@ -34,47 +34,79 @@ const AR_DAYS: Record<string, string> = { Saturday: 'السبت', Sunday: 'ال�
 
 const CANCEL_REASONS = ['إلغاء من الأسرة', 'إلغاء من المعلمة', 'امتحانات', 'مرض', 'إجازة', 'ظرف طارئ', 'مشكلة إنترنت / تقنية', 'لم يحضر', 'اتأجلت لميعاد تاني', 'اتسجلت بالغلط', 'أخرى'];
 
+const SESSION_REF = { type: 'STRING', description: 'كود الحصة الموجودة من "حصص الفترة" (زي X12)' };
 const SCHEMA = {
   type: 'OBJECT',
   properties: {
     reply: { type: 'STRING', description: 'رد قصير بالعامية المصرية: فهمت إيه وهتعمل إيه' },
     questions: { type: 'ARRAY', items: { type: 'STRING' }, description: 'أسئلة لو فيه حاجة مش واضحة (اسم مش معروف، وقت ناقص…)' },
-    actions: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          op: { type: 'STRING', enum: ['add_session', 'set_status', 'update_session'] },
-          session: { type: 'STRING', nullable: true, description: 'كود الحصة الموجودة (X12) — لـ set_status و update_session' },
-          student: { type: 'STRING', nullable: true, description: 'كود الطالب (S3)' },
-          tutor: { type: 'STRING', nullable: true, description: 'كود المعلم (T5)' },
-          subject: { type: 'STRING', nullable: true },
-          date: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD' },
-          time: { type: 'STRING', nullable: true, description: 'HH:MM بتوقيت مصر 24 ساعة' },
-          duration_minutes: { type: 'INTEGER', nullable: true },
-          actual_minutes: { type: 'INTEGER', nullable: true, description: 'المدة الفعلية لو اتعملت بمدة مختلفة' },
-          kind: { type: 'STRING', enum: ['regular', 'trial', 'revision'], nullable: true },
-          family_block: { type: 'BOOLEAN', nullable: true, description: 'حصة للإخوات مع بعض (بتتحسب مرة واحدة بالمدة)' },
-          status: { type: 'STRING', enum: ['scheduled', 'done', 'cancelled_by_student', 'cancelled_by_tutor', 'cancelled_by_academy'], nullable: true },
-          cancel_reason: { type: 'STRING', enum: CANCEL_REASONS, nullable: true },
-          tutor_rate_egp: { type: 'NUMBER', nullable: true, description: 'بس لو المستخدم قال سعر المعلم صراحة' },
-          student_price: { type: 'NUMBER', nullable: true, description: 'بس لو المستخدم قال سعر الحصة للأسرة صراحة' },
-          note: { type: 'STRING', nullable: true, description: 'ملاحظة قصيرة (سبب، تفاصيل)' },
-        },
-        required: ['op'],
-      },
+    add_sessions: {
+      type: 'ARRAY', description: 'حصص جديدة مش موجودة في حصص الفترة — حصة لكل سطر في الجدول',
+      items: { type: 'OBJECT', properties: {
+        student: { type: 'STRING', description: 'كود الطالب (S3)' },
+        tutor: { type: 'STRING', description: 'كود المعلم (T5)' },
+        date: { type: 'STRING', description: 'YYYY-MM-DD' },
+        time: { type: 'STRING', description: 'HH:MM بتوقيت مصر 24 ساعة' },
+        subject: { type: 'STRING' },
+        duration_minutes: { type: 'INTEGER' },
+        kind: { type: 'STRING', enum: ['regular', 'trial', 'revision'] },
+        family_block: { type: 'BOOLEAN', description: 'حصة للإخوات مع بعض (بتتحسب مرة واحدة بالمدة)' },
+        status: { type: 'STRING', enum: ['scheduled', 'done'], description: 'done لو الحصة اتعملت خلاص' },
+        actual_minutes: { type: 'INTEGER', nullable: true },
+        tutor_rate_egp: { type: 'NUMBER', nullable: true, description: 'بس لو اتقال سعر المعلم صراحة' },
+        student_price: { type: 'NUMBER', nullable: true, description: 'بس لو اتقال سعر الأسرة صراحة' },
+        note: { type: 'STRING', nullable: true },
+      }, required: ['student', 'tutor', 'date', 'time', 'subject', 'duration_minutes', 'kind', 'family_block', 'status'],
+      propertyOrdering: ['student', 'tutor', 'subject', 'date', 'time', 'duration_minutes', 'kind', 'family_block', 'status', 'actual_minutes', 'tutor_rate_egp', 'student_price', 'note'] },
+    },
+    status_changes: {
+      type: 'ARRAY', description: 'تغيير حالة حصة موجودة: تمت أو اتلغت',
+      items: { type: 'OBJECT', properties: {
+        session: SESSION_REF,
+        status: { type: 'STRING', enum: ['done', 'cancelled_by_student', 'cancelled_by_tutor', 'cancelled_by_academy'] },
+        actual_minutes: { type: 'INTEGER', nullable: true, description: 'المدة الفعلية لو اختلفت' },
+        cancel_reason: { type: 'STRING', enum: CANCEL_REASONS, nullable: true },
+        note: { type: 'STRING', nullable: true },
+      }, required: ['session', 'status'], propertyOrdering: ['session', 'status', 'actual_minutes', 'cancel_reason', 'note'] },
+    },
+    updates: {
+      type: 'ARRAY', description: 'تعديل حصة موجودة: ميعاد/مدة/معلم/مادة',
+      items: { type: 'OBJECT', properties: {
+        session: SESSION_REF,
+        date: { type: 'STRING', nullable: true }, time: { type: 'STRING', nullable: true },
+        duration_minutes: { type: 'INTEGER', nullable: true }, tutor: { type: 'STRING', nullable: true },
+        subject: { type: 'STRING', nullable: true }, tutor_rate_egp: { type: 'NUMBER', nullable: true }, note: { type: 'STRING', nullable: true },
+      }, required: ['session'], propertyOrdering: ['session', 'date', 'time', 'duration_minutes', 'tutor', 'subject', 'tutor_rate_egp', 'note'] },
     },
   },
-  required: ['reply', 'actions'],
+  required: ['reply', 'questions', 'add_sessions', 'status_changes', 'updates'],
+  propertyOrdering: ['questions', 'add_sessions', 'status_changes', 'updates', 'reply'],
 };
 
-function systemPrompt(now: { date: string; time: string; weekday: string }) {
+// موديلات Flash المتاحة على المفتاح ده (الأحدث الأول) — عشان لو جوجل وقفت موديل ما نقعش
+let _models: string[] | null = null;
+async function flashModels(key: string) {
+  if (_models) return _models;
+  try {
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': key } });
+    const j = await r.json();
+    const ver = (n: string) => Number((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+    _models = (j.models || []).filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map((m: any) => String(m.name).replace(/^models\//, ''))
+      .filter((n: string) => /^gemini-[\d.]+-flash(-\d+)?$/.test(n))
+      .sort((a: string, b: string) => ver(b) - ver(a));
+  } catch { _models = []; }
+  return _models!;
+}
+
+function systemPrompt(now: { date: string; time: string; weekday: string }, extra = '') {
   return `إنت "صقّور"، مساعد الإشراف في أكاديمية "أستاذ أونلاين" (دروس أونلاين 1:1، طلاب في الإمارات والسعودية ومصر، معلمين في مصر).
 المشرفة بتكتبلك بالعامية المصرية جدول بكرة أو تقرير آخر اليوم أو تعديل، وإنت بتحوّل كلامها لعمليات على الحصص. إنت بتقترح بس؛ المشرفة هتأكد قبل التنفيذ.
 
 النهارده: ${AR_DAYS[now.weekday] || now.weekday} ${now.date}، الساعة دلوقتي ${now.time} بتوقيت مصر.
 
 القواعد:
+- كل سطر في الجدول = عنصر في add_sessions (ما تنساش ولا سطر).
 - استخدم الأكواد اللي في البيانات بس (S للطالب، T للمعلم، X للحصة). عمرك ما تخترع كود. لو اسم مش لاقيه أو فيه احتمالين، اسأل في questions وما تعملش العملية دي.
 - الأوقات كلها بتوقيت مصر بصيغة 24 ساعة. لو قالت "توقيت الإمارات" اطرح ساعتين، "توقيت السعودية" اطرح ساعة.
 - ساعة من 1 لـ 8 من غير "الصبح" = بعد الضهر (4 = 16:00). 9 و10 و11 = الصبح إلا لو قالت بليل/مساءً. 12 = الضهر.
@@ -83,15 +115,18 @@ function systemPrompt(now: { date: string; time: string; weekday: string }) {
 - "تجربة/تجريبية/حصة تجريبية" → kind=trial (مجانية للأسرة والمعلم إلا لو قالت المعلم هيتحاسب — ساعتها حط tutor_rate_egp).
 - "مراجعة" → kind=revision.
 - لو الإخوات واخدين مع بعض في نفس الوقت مع نفس المعلم ("رسمية وحمدان مع فاتن"، "ولاد أم حمدان") → حصة واحدة family_block=true على واحد منهم، والمدة = مدة البلوك كله. ما تعملش حصة لكل واحد.
-- لو الحصة موجودة فعلاً في "حصص الفترة" (نفس الطالب ونفس اليوم وقريب من نفس الوقت) ما تضيفهاش تاني — استخدم update_session لو فيه تغيير.
-- تقرير آخر اليوم: "كله تمام" / "الباقي تمام" → set_status=done لكل حصة "مجدولة" في اليوم ده ما اتذكرتش كملغية. "اتلغت" → cancelled_by_student لو من الطالب/الأسرة (امتحانات، مرض، تعبانة، سفر، مدخلش)، cancelled_by_tutor لو من المعلم، مع cancel_reason مناسب وnote بالتفاصيل.
-- "دخل ساعة ونص بدل ساعة" لحصة موجودة → set_status=done مع actual_minutes. لو حصة مش موجودة واتعملت → add_session بـ status=done.
-- اتأجلت لميعاد تاني → update_session بالتاريخ/الوقت الجديد (لو الميعاد معروف)، وإلا set_status cancelled_by_student وcancel_reason "اتأجلت لميعاد تاني".
+- لو الحصة موجودة فعلاً في "حصص الفترة" (نفس الطالب ونفس اليوم وقريب من نفس الوقت) ما تضيفهاش تاني — استخدم updates لو فيه تغيير.
+- تقرير آخر اليوم: "كله تمام" / "الباقي تمام" → status_changes بـ done لكل حصة "مجدولة" في اليوم ده ما اتذكرتش كملغية. "اتلغت" → cancelled_by_student لو من الطالب/الأسرة (امتحانات، مرض، تعبانة، سفر، مدخلش)، cancelled_by_tutor لو من المعلم، مع cancel_reason مناسب وnote بالتفاصيل.
+- "دخل ساعة ونص بدل ساعة" لحصة موجودة → status_changes بـ done مع actual_minutes. لو حصة مش موجودة واتعملت → add_sessions بـ status=done.
+- اتأجلت لميعاد تاني → updates بالتاريخ/الوقت الجديد (لو الميعاد معروف)، وإلا status_changes بـ cancelled_by_student وcancel_reason "اتأجلت لميعاد تاني".
 - ما تحطش student_price أو tutor_rate_egp إلا لو اتقالوا صراحة؛ السيستم بيحط السعر المعتاد لوحده.
 - المادة: اكتبها بالعربي زي ما بنستخدمها (رياضيات، علوم، إنجليزي، عربي، فيزياء، كيمياء، أحياء، قرآن، تربية إسلامية، سوشيال…). لو ما اتقالتش خد مادة الطالب المعتادة مع المعلم ده من "مين بيدرّس مين".
 - reply: جملة أو اتنين بالعامية، من غير تكرار كل العمليات (الكارت هيعرضها).
-- لو الرسالة سؤال مش أمر (مثلاً "مين مدرّسة الإنجليزي بتاعت حمدة؟" أو "عندنا كام حصة بكرة؟") جاوب في reply من البيانات وخلي actions فاضية.
-- ممنوع تقول أي حاجة عن إيراد الأكاديمية أو هامش الربح.`;
+- لو الرسالة سؤال مش أمر (مثلاً "مين مدرّسة الإنجليزي بتاعت حمدة؟" أو "عندنا كام حصة بكرة؟") جاوب في reply من البيانات وخلي القوايم فاضية.
+- لو المشرفة ذكرت يوم (امبارح/النهارده/يوم معين) والحصة اللي تقصدها مش موجودة في اليوم ده، ما تختارش حصة من يوم تاني — اسأل في questions.
+- reply بصيغة اقتراح ("هسجّل…"، "هعدّل…") مش "سجّلت"، لأن مفيش حاجة بتتنفذ قبل ما المشرفة تأكد.
+- في الأسئلة عن "مين بيدرّس" رد بالمعلم الحالي (آخر حصص)، ولو فيه أكتر من واحد قول مين آخر واحد.
+- ممنوع تقول أي حاجة عن إيراد الأكاديمية أو هامش الربح.${extra ? '\n' + extra : ''}`;
 }
 
 Deno.serve(async (req) => {
@@ -164,20 +199,21 @@ Deno.serve(async (req) => {
 
     const contents = [
       { role: 'user', parts: [{ text: dataBlock }] },
-      { role: 'model', parts: [{ text: '{"reply":"تمام، البيانات قدامي.","questions":[],"actions":[]}' }] },
+      { role: 'model', parts: [{ text: '{"questions":[],"add_sessions":[],"status_changes":[],"updates":[],"reply":"تمام، البيانات قدامي."}' }] },
       ...history.map(h => ({ role: h.role === 'model' ? 'model' : 'user', parts: [{ text: String(h.text || '').slice(0, 3000) }] })),
       { role: 'user', parts: [{ text }] },
     ];
-    const models = [Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash', 'gemini-2.0-flash'];
+    const models = [Deno.env.get('GEMINI_MODEL'), 'gemini-flash-latest', ...(await flashModels(key))].filter((m, i, a) => m && a.indexOf(m) === i) as string[];
+    if (body.list_models) return json({ models });
     let out: any = null, lastErr = '';
-    for (const m of models) {
+    for (const m of models.slice(0, 4)) {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt(nowC) }] }, contents,
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt(nowC, S.saqqour_rules || '') }] }, contents,
           generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: SCHEMA } }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { lastErr = j?.error?.message || `HTTP ${r.status}`; if (r.status === 404 || r.status === 400 && /model/i.test(lastErr)) continue; break; }
+      if (!r.ok) { lastErr = j?.error?.message || `HTTP ${r.status}`; if (r.status === 404 || /model|not (found|available|supported)/i.test(lastErr)) continue; break; }
       const t = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || '';
       try { out = JSON.parse(t); } catch { lastErr = 'رد مش مفهوم من Gemini'; }
       break;
@@ -187,7 +223,8 @@ Deno.serve(async (req) => {
     // ---------- تحقق + تكملة الأسعار والقيم ----------
     const warnings: string[] = [];
     const winBy = new Map((win || []).map(s => [s.id, s]));
-    const actions = (Array.isArray(out.actions) ? out.actions : []).map((a: any) => {
+    const raw = [...(out.add_sessions || []).map((a: any) => ({ ...a, op: 'add_session' })), ...(out.status_changes || []).map((a: any) => ({ ...a, op: 'set_status' })), ...(out.updates || []).map((a: any) => ({ ...a, op: 'update_session' }))];
+    const actions = raw.map((a: any) => {
       const r: any = { op: a.op, note: a.note || null };
       if (a.op === 'add_session') {
         const st = stuBy.get(sId.get(a.student) || ''), tu = tutBy.get(tId.get(a.tutor) || '');
@@ -238,7 +275,7 @@ Deno.serve(async (req) => {
       return null;
     }).filter(Boolean);
 
-    return json({ reply: out.reply || '', questions: out.questions || [], actions, warnings });
+    return json({ reply: out.reply || '', questions: out.questions || [], actions, warnings, ...(body.debug ? { raw: out } : {}) });
   } catch (e) {
     return json({ error: String(e?.message || e).slice(0, 300) }, 500);
   }
