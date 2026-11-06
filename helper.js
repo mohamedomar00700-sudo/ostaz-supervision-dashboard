@@ -138,6 +138,9 @@
   .sq-chips button:hover{border-color:var(--brand,#1d4ed8);color:var(--brand,#1d4ed8)}
   .sq-foot{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));background:var(--card,#fff);border-top:1px solid var(--border,#e5e7eb)}
   .sq-foot textarea{flex:1;border:1px solid var(--border,#e5e7eb);background:var(--bg,#f4f6f8);color:var(--text,#111);border-radius:20px;padding:10px 16px;font-size:14px;font-family:inherit;outline:none;resize:none;max-height:140px;line-height:1.5}
+  .sq-foot .sq-mic{background:var(--bg,#f4f6f8);color:var(--text,#111);border:1px solid var(--border,#e5e7eb);font-size:20px}
+  .sq-foot .sq-mic.rec{background:#dc2626;color:#fff;border-color:#dc2626;animation:sqPulse 1s infinite;font-size:13px;font-weight:700}
+  @keyframes sqPulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.5)}50%{box-shadow:0 0 0 8px rgba(220,38,38,0)}}
   .sq-foot textarea:focus{border-color:var(--brand,#1d4ed8)}
   .sq-foot button{width:44px;height:44px;border-radius:50%;border:none;background:var(--brand,#1d4ed8);color:#fff;font-size:18px;cursor:pointer;flex:none}
   .sq-tour-hole{position:fixed;z-index:70;border-radius:14px;box-shadow:0 0 0 9999px rgba(15,23,42,.62);transition:all .45s cubic-bezier(.4,0,.2,1);pointer-events:none;outline:3px solid #f59e0b;outline-offset:3px}
@@ -371,7 +374,7 @@
       panel.innerHTML = `<div class="sq-head"><div class="sq-av">${mascot(44, 'sq-headsvg')}</div><div><b>صقّور</b><div class="sq-st"><span class="sq-dot"></span>مساعدك في أستاذ أونلاين</div></div>
         <div class="sq-hb"><button data-x="tour" title="جولة في التطبيق">🧭</button><button data-x="close" title="إغلاق">✕</button></div></div>
         <div class="sq-body"></div><div class="sq-chips"></div>
-        <form class="sq-foot"><textarea rows="1" placeholder="${mode() === 'sup' ? 'اكتبلي زي الواتساب: جدول بكرة، تقرير النهارده، إلغاء، سؤال…' : 'اسألني أي حاجة…'}" autocomplete="off"></textarea><button type="submit" aria-label="إرسال">➤</button></form>`;
+        <form class="sq-foot"><textarea rows="1" placeholder="${mode() === 'sup' ? 'اكتبلي زي الواتساب: جدول بكرة، تقرير النهارده، إلغاء، سؤال…' : 'اسألني أي حاجة…'}" autocomplete="off"></textarea>${mode() === 'sup' && navigator.mediaDevices && window.MediaRecorder ? '<button type="button" class="sq-mic" aria-label="فويس" title="اتكلم بدل ما تكتب">🎙️</button>' : ''}<button type="submit" aria-label="إرسال">➤</button></form>`;
       document.body.appendChild(panel);
       body = panel.querySelector('.sq-body'); chips = panel.querySelector('.sq-chips'); input = panel.querySelector('textarea');
       const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(140, input.scrollHeight) + 'px'; };
@@ -379,6 +382,7 @@
       input.addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.shiftKey && window.innerWidth > 700) { ev.preventDefault(); panel.querySelector('form').requestSubmit(); } });
       panel.querySelector('[data-x=close]').onclick = closePanel;
       panel.querySelector('[data-x=tour]').onclick = () => { closePanel(); setTimeout(startTour, 250); };
+      const mic = panel.querySelector('.sq-mic'); if (mic) mic.onclick = () => voiceToggle(mic);
       panel.querySelector('form').onsubmit = ev => { ev.preventDefault(); const v = input.value.trim(); if (!v) return; input.value = ''; input.style.height = 'auto'; ask(v); };
     } else panel.style.display = '';
     renderChips();
@@ -550,12 +554,56 @@
     botSay(`رجّعت ${n} ${n === 1 ? 'حاجة' : 'حاجات'} زي ما كانت ↩️`);
   }
 
+  /* ---------------- الفويس: المشرفة تتكلم بدل ما تكتب → Gemini يكتب الكلام → صقّور يكمّل عادي ---------------- */
+  const VOICE = { rec: null, chunks: [], t0: 0, timer: null, stream: null };
+  function pickMime() {
+    const c = ['audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm'];
+    return c.find(m => { try { return MediaRecorder.isTypeSupported(m); } catch (_) { return false; } }) || '';
+  }
+  async function voiceToggle(btn) {
+    if (VOICE.rec && VOICE.rec.state === 'recording') { VOICE.rec.stop(); return; }
+    try { VOICE.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (err) { botSay('محتاج إذن الميكروفون 🎙️ — اسمح للتطبيق يستخدم المايك من إعدادات المتصفح وجرّب تاني.'); return; }
+    const mime = pickMime();
+    VOICE.chunks = []; VOICE.rec = new MediaRecorder(VOICE.stream, mime ? { mimeType: mime } : undefined);
+    VOICE.rec.ondataavailable = ev => { if (ev.data && ev.data.size) VOICE.chunks.push(ev.data); };
+    VOICE.rec.onstop = () => voiceDone(btn);
+    VOICE.rec.start(); VOICE.t0 = Date.now();
+    btn.classList.add('rec');
+    const tick = () => { const s = Math.floor((Date.now() - VOICE.t0) / 1000); btn.textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; if (s >= 180) VOICE.rec.stop(); };
+    tick(); VOICE.timer = setInterval(tick, 500);
+    if (navigator.vibrate) navigator.vibrate(30);
+  }
+  async function voiceDone(btn) {
+    clearInterval(VOICE.timer); btn.classList.remove('rec'); btn.textContent = '🎙️';
+    try { VOICE.stream && VOICE.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    const type = (VOICE.rec && VOICE.rec.mimeType) || 'audio/webm';
+    const blob = new Blob(VOICE.chunks, { type });
+    if (Date.now() - VOICE.t0 < 800 || blob.size < 1500) { botSay('الفويس كان قصير قوي 😅 اضغط 🎙️ واتكلم، واضغط تاني لما تخلص.'); return; }
+    const row = document.createElement('div'); row.className = 'sq-row';
+    row.innerHTML = `<div class="sq-mini">${mascot(26)}</div><div class="sq-msg sq-bot sq-typing"><i></i><i></i><i></i></div>`;
+    body.appendChild(row); scroll();
+    let data, error;
+    try {
+      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+      ({ data, error } = await sb.functions.invoke('saqqour-voice', { body: { audio: b64, mime: type } }));
+    } catch (err) { error = err; }
+    row.remove();
+    if (error || !data || data.error || !data.text) {
+      let msg = data?.error || error?.message || 'ما قدرتش أسمع الفويس';
+      try { const j = await error?.context?.json?.(); if (j?.error) msg = j.error; } catch (_) {}
+      botSay(`معلش 😅 ${e(msg)} — جرّب تاني أو اكتبها.`); return;
+    }
+    ask('🎙️ ' + data.text);
+  }
+
   async function ask(text) {
     meSay(text);
+    const voice = /^🎙️ /.test(text); if (voice) text = text.replace(/^🎙️ /, '');
     const q = N(text).replace(/[؟?!.,،]/g, ' ').replace(/\s+/g, ' ').trim();
     const talk = TALK.find(t => t.k.some(k => (' ' + q + ' ').includes(' ' + N(k))));
     const ranked = kb().map(it => ({ it, s: scoreEntry(q, it) })).sort((a, b) => b.s - a.s);
-    if (aiWanted(text, ranked, talk)) { await aiAsk(text); return; }
+    if (voice || aiWanted(text, ranked, talk)) { await aiAsk(text); return; }
     const ents = findEntities(q);
     if (talk && (!ranked[0] || ranked[0].s < 2.5)) { await typing(500); botSay(talk.r[Math.floor(Math.random() * talk.r.length)], 'happy'); return; }
     if (ranked[0] && ranked[0].s >= 2) { await runIntent(ranked[0].it, ents); return; }
