@@ -512,6 +512,7 @@
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
+    if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}`).join('<br>')}</div>`;
     if (acts.length) {
       const k = 'p' + (++AI.n); AI.pending[k] = { acts, text, reply: data.reply };
       html += `<div style="margin-top:8px">${acts.map((a, i) => actHtml(a, i, k)).join('')}</div>
@@ -531,6 +532,11 @@
     for (const a of sel) {
       try {
         if (a.op === 'add_session') {
+          // حماية من التكرار: لو حد سجّل نفس الحصة بعد ما الكارت ده طلع (أو الكارت اتضغط مرتين)
+          const t0 = new Date(a.scheduled_at).getTime();
+          const { data: ex } = await sb.from('sessions').select('id,status,scheduled_at').eq('student_id', a.student_id)
+            .gte('scheduled_at', new Date(t0 - 60 * 60e3).toISOString()).lte('scheduled_at', new Date(t0 + 60 * 60e3).toISOString());
+          if ((ex || []).some(x => !String(x.status).startsWith('cancelled'))) { results.push({ op: a.op, ok: false, dup: true, who: a.student_name, err: 'متسجلة بالفعل — ما اتكررتش' }); continue; }
           const row = { student_id: a.student_id, tutor_id: a.tutor_id, scheduled_at: a.scheduled_at, duration_minutes: a.duration_minutes, actual_minutes: a.actual_minutes, status: a.status,
             subject: a.subject, kind: a.kind, family_block: !!a.family_block, student_price: a.student_price, student_currency: a.student_currency, tutor_cost_egp: a.tutor_cost_egp,
             notes: '🦅 صقّور' + (a.note ? ': ' + a.note : ''), created_by: uid };

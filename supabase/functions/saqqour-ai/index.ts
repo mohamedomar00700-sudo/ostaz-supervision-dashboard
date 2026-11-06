@@ -126,6 +126,7 @@ function systemPrompt(now: { date: string; time: string; weekday: string }, extr
 - لو المشرفة ذكرت يوم (امبارح/النهارده/يوم معين) والحصة اللي تقصدها مش موجودة في اليوم ده، ما تختارش حصة من يوم تاني — اسأل في questions.
 - reply بصيغة اقتراح ("هسجّل…"، "هعدّل…") مش "سجّلت"، لأن مفيش حاجة بتتنفذ قبل ما المشرفة تأكد.
 - في الأسئلة عن "مين بيدرّس" رد بالمعلم الحالي (آخر حصص)، ولو فيه أكتر من واحد قول مين آخر واحد.
+- أسماء الطلاب ممكن تشبه أسماء المعلمات (فطوم/فاطمة، شيماء، مريم…). الاسم اللي بعد "مع/مس/مستر/أ." هو المعلم، واللي في أول السطر هو الطالب. ولو المعلم مش واضح، اختار المعلم اللي بيدرّس الطالب ده المادة دي في "مين بيدرّس مين".
 - ممنوع تقول أي حاجة عن إيراد الأكاديمية أو هامش الربح.${extra ? '\n' + extra : ''}`;
 }
 
@@ -162,10 +163,12 @@ Deno.serve(async (req) => {
       admin.from('student_subjects').select('student_id,tutor_id,subject,tutor_rate_egp'),
       admin.from('sessions').select('student_id,tutor_id,subject,tutor_cost_egp,student_price,kind,scheduled_at,status')
         .in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at', { ascending: false }).limit(3000),
-      admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block')
+      admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes')
         .gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).neq('status', 'cancelled_by_academy').order('scheduled_at'),
     ]);
     const famBy = new Map((families || []).map(f => [f.id, f]));
+    const { data: sups } = await admin.from('supervisors').select('id,name');
+    const supName = (id: string | null, notes?: string | null) => (id && (sups || []).find((x: any) => x.id === id)?.name) || (/صقّور/.test(notes || '') ? 'صقّور' : 'محمد عمر (الإدارة)');
     const activeStu = new Set((recent || []).map(r => r.student_id)), activeTut = new Set((recent || []).map(r => r.tutor_id));
     (win || []).forEach(s => { activeStu.add(s.student_id); activeTut.add(s.tutor_id); });
     (plans || []).forEach(p => { activeStu.add(p.student_id); if (p.tutor_id) activeTut.add(p.tutor_id); });
@@ -213,7 +216,7 @@ Deno.serve(async (req) => {
           generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: SCHEMA } }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { lastErr = j?.error?.message || `HTTP ${r.status}`; if (r.status === 404 || /model|not (found|available|supported)/i.test(lastErr)) continue; break; }
+      if (!r.ok) { lastErr = j?.error?.message || `HTTP ${r.status}`; if (r.status === 404 || r.status === 429 || r.status >= 500 || /model|not (found|available|supported)/i.test(lastErr)) continue; break; }
       const t = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || '';
       try { out = JSON.parse(t); } catch { lastErr = 'رد مش مفهوم من Gemini'; }
       break;
@@ -221,7 +224,7 @@ Deno.serve(async (req) => {
     if (!out) return json({ error: /quota|rate|exhaust/i.test(lastErr) ? 'وصلنا للحد المجاني بتاع Gemini دلوقتي — جرّب كمان شوية' : 'Gemini: ' + lastErr }, 502);
 
     // ---------- تحقق + تكملة الأسعار والقيم ----------
-    const warnings: string[] = [];
+    const warnings: string[] = []; const already: any[] = [];
     const winBy = new Map((win || []).map(s => [s.id, s]));
     const raw = [...(out.add_sessions || []).map((a: any) => ({ ...a, op: 'add_session' })), ...(out.status_changes || []).map((a: any) => ({ ...a, op: 'set_status' })), ...(out.updates || []).map((a: any) => ({ ...a, op: 'update_session' }))];
     const actions = raw.map((a: any) => {
@@ -229,22 +232,31 @@ Deno.serve(async (req) => {
       if (a.op === 'add_session') {
         const st = stuBy.get(sId.get(a.student) || ''), tu = tutBy.get(tId.get(a.tutor) || '');
         if (!st || !tu || !a.date || !a.time) { warnings.push(`حصة ناقصة بيانات اتشالت (${a.student || '?'} / ${a.tutor || '?'} / ${a.date || '?'} ${a.time || '?'})`); return null; }
-        const fam = famBy.get(st.family_id); const p = pair.get(st.id + '|' + tu.id);
+        let tu2 = tu;
+        // أولوية المعلم اللي متسجل مع الطالب قبل كده: لو المعلم ده عمره ما درّس الطالب وفيه معلم تاني بيدرّسه نفس المادة → نختار المعلم المعتاد
+        if (!pair.has(st.id + '|' + tu.id)) {
+          const sn = (x: string) => String(x || '').replace(/\s/g, '');
+          const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
+          if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة. لو فعلاً معلمة جديدة شيل علامة ✓ واكتبها تاني وقول "معلمة جديدة".`); tu2 = alt; } }
+        }
+        const tuF = tu2;
+        const fam = famBy.get(st.family_id); const p = pair.get(st.id + '|' + tuF.id);
         const kind = a.kind === 'trial' || a.kind === 'revision' ? a.kind : 'regular';
         const dur = Number(a.duration_minutes) || (kind === 'trial' ? 30 : 60);
         const subject = a.subject || (p ? [...p.subj][0] : null) || null;
         const status = a.status === 'done' ? 'done' : 'scheduled';
         Object.assign(r, {
-          student_id: st.id, tutor_id: tu.id, student_name: st.name, tutor_name: tu.name, family_name: fam?.name || '',
+          student_id: st.id, tutor_id: tuF.id, student_name: st.name, tutor_name: tuF.name, family_name: fam?.name || '',
           subject, kind, family_block: !!a.family_block, scheduled_at: toIso(a.date, a.time), date: a.date, time: a.time,
           duration_minutes: dur, actual_minutes: status === 'done' ? (Number(a.actual_minutes) || dur) : null, status,
           student_currency: fam?.currency || 'AED',
           student_price: kind === 'trial' ? 0 : (a.student_price != null ? Number(a.student_price) : Number(st.default_price ?? p?.price ?? 0)),
-          tutor_cost_egp: a.tutor_rate_egp != null ? Number(a.tutor_rate_egp) : kind === 'trial' ? 0 : Number(p?.rate ?? tu.default_rate_egp ?? 0),
+          tutor_cost_egp: a.tutor_rate_egp != null ? Number(a.tutor_rate_egp) : kind === 'trial' ? 0 : Number(p?.rate ?? tuF.default_rate_egp ?? 0),
         });
-        // تكرار؟
-        const dup = (win || []).find(s => s.student_id === st.id && Math.abs(new Date(s.scheduled_at).getTime() - new Date(r.scheduled_at).getTime()) < 50 * 60e3);
-        if (dup) r.duplicate_of = { code: xCode.get(dup.id), status: dup.status, time: cairoParts(new Date(dup.scheduled_at)).time };
+        // متسجلة بالفعل؟ (نفس الطالب أو حصة أسرة لأخ مع نفس المعلم، في حدود ساعة، ومش ملغية) → ما نقترحهاش تاني
+        const near = (win || []).filter(s => (s.student_id === st.id || ((s.family_block || a.family_block) && s.tutor_id === tuF.id && stuBy.get(s.student_id)?.family_id === st.family_id)) && !String(s.status).startsWith('cancelled') && Math.abs(new Date(s.scheduled_at).getTime() - new Date(r.scheduled_at).getTime()) <= 60 * 60e3);
+        const same = near.find(s => s.tutor_id === tuF.id) || near[0];
+        if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }
         return r;
       }
       const sid = xId.get(a.session || ''); const s = sid && winBy.get(sid);
@@ -275,7 +287,7 @@ Deno.serve(async (req) => {
       return null;
     }).filter(Boolean);
 
-    return json({ reply: out.reply || '', questions: out.questions || [], actions, warnings, ...(body.debug ? { raw: out } : {}) });
+    return json({ reply: out.reply || '', questions: out.questions || [], actions, warnings, already, ...(body.debug ? { raw: out } : {}) });
   } catch (e) {
     return json({ error: String(e?.message || e).slice(0, 300) }, 500);
   }
