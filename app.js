@@ -2684,22 +2684,22 @@ ${SIGN_F}`;
 const MALE_TUTOR = /^(محمود|البيومي|عبد ?الرحمن|أحمد|احمد|محمد|مصطفى|مصطفي|عمر|علي|حسن|حسين|إبراهيم|ابراهيم|خالد|يوسف|كريم|طارق|هشام|عمرو|مستر)/;
 function tutBareName(t) { return String(t?.name || '').replace(/\(.*?\)/g, '').replace(/^\s*(أ\.|أ\/|ا\.|أستاذة?|استاذة?|مس|مستر)\s*/, '').trim(); }
 function tutTitle(t) { const n = String(t?.name || '').trim(); if (/^د\./.test(n)) return 'د. ' + tutBareName(t).replace(/^د\.\s*/, ''); const b = tutBareName(t); return (MALE_TUTOR.test(b) ? 'مستر ' : 'مس ') + b; }
-function normSubj(s) { const x = String(s || '').trim(); if (!x) return ''; if (/physics/i.test(x)) return 'فيزياء'; if (/chem/i.test(x)) return 'كيمياء'; if (/^قرآن/.test(x)) return 'قرآن'; return x; }
+function grpSubj(s) { const x = String(s || '').trim(); if (!x) return ''; if (/physics/i.test(x)) return 'فيزياء'; if (/chem/i.test(x)) return 'كيمياء'; if (/^قرآن/.test(x)) return 'قرآن'; return x; }
 function activePairs() { // حصة الأسرة بتتسجل على طالب واحد — نوزّعها على كل إخواته
   // (إلا الأخ اللي بياخد نفس المادة لوحده مع معلمة تانية — يبقى مش داخل الحصة دي)
   const out = [], rows = (state.actPairs || []).filter(x => x.student_id && x.tutor_id);
-  const solo = new Set(rows.filter(x => !x.family_block).map(x => `${x.student_id}|${normSubj(x.subject)}|${x.tutor_id}`));
-  const soloOther = (sid, subj, tid) => rows.some(x => !x.family_block && x.student_id === sid && normSubj(x.subject) === subj && x.tutor_id !== tid && !solo.has(`${sid}|${subj}|${tid}`));
+  const solo = new Set(rows.filter(x => !x.family_block).map(x => `${x.student_id}|${grpSubj(x.subject)}|${x.tutor_id}`));
+  const soloOther = (sid, subj, tid) => rows.some(x => !x.family_block && x.student_id === sid && grpSubj(x.subject) === subj && x.tutor_id !== tid && !solo.has(`${sid}|${subj}|${tid}`));
   rows.forEach(x => {
     const st = x.family_block && byId(state.students, x.student_id);
     if (!st) { out.push(x); return; }
-    state.students.filter(k => k.family_id === st.family_id && (k.id === x.student_id || !soloOther(k.id, normSubj(x.subject), x.tutor_id))).forEach(k => out.push({ ...x, student_id: k.id }));
+    state.students.filter(k => k.family_id === st.family_id && (k.id === x.student_id || !soloOther(k.id, grpSubj(x.subject), x.tutor_id))).forEach(k => out.push({ ...x, student_id: k.id }));
   });
   return out;
 }
 function tutGroupName(t) {
   const ps = activePairs().filter(x => x.tutor_id === t.id);
-  const subj = [...new Set(ps.map(x => normSubj(x.subject)).filter(Boolean))];
+  const subj = [...new Set(ps.map(x => grpSubj(x.subject)).filter(Boolean))];
   if (!subj.length) { const m = String(t.name).match(/\((.*?)\)/); if (m) subj.push(m[1]); }
   const kids = [...new Set(ps.map(x => byId(state.students, x.student_id)?.name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
   const head = `${tutTitle(t)}${subj.length ? ' · ' + subj.join('، ') : ''}`, tail = ' · أستاذ';
@@ -2717,7 +2717,7 @@ function famGroupName(f) {
 function whoTeachesWhomText() {
   const by = {};
   activePairs().forEach(x => { const st = byId(state.students, x.student_id), t = byId(state.tutors, x.tutor_id); if (!st || !t) return;
-    const m = (by[st.id] ||= { st, subj: {} }); const sj = normSubj(x.subject) || 'حصة'; (m.subj[sj] ||= new Set()).add(tutTitle(t)); });
+    const m = (by[st.id] ||= { st, subj: {} }); const sj = grpSubj(x.subject) || 'حصة'; (m.subj[sj] ||= new Set()).add(tutTitle(t)); });
   const fams = {};
   Object.values(by).forEach(x => { const f = byId(state.families, x.st.family_id); const k = f ? famGroupName(f).split(' · ')[0] : 'بدون أسرة'; (fams[k] ||= []).push(x); });
   const d = new Date().toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', year: 'numeric' });
@@ -4550,6 +4550,9 @@ function gradeStage(g) {
   if (/عشر|العاشر|ثانوي/.test(g)) return 'ثانوي';
   if (/السابع|الثامن|التاسع|إعدادي|متوسط/.test(g)) return 'إعدادي / متوسط';
   if (/الأول|الثاني|الثالث|الرابع|الخامس|السادس|ابتدائي/.test(g)) return 'ابتدائي';
+  if (/كبار|جامع|سنة|بالغ/.test(g)) return 'كبار';
+  const n = Number((g.match(/\d{1,2}/) || [])[0]); // "10" أو "Grade 7"
+  if (n >= 10 && n <= 12) return 'ثانوي'; if (n >= 7 && n <= 9) return 'إعدادي / متوسط'; if (n >= 1 && n <= 6) return 'ابتدائي';
   return 'غير محدد';
 }
 async function fetchAll(build) { // تخطي حد الألف صف
@@ -4617,7 +4620,9 @@ function bizCompute() {
     totals: { fam: famWithStu.length, ever: everFam, stu: state.students.length, tut: state.tutors.length, linked: linked.size } };
 }
 function normSubj(s) { s = (s || '').trim(); if (!s) return 'غير محدد'; if (/رياض|math/i.test(s)) return 'رياضيات'; if (/إنج|انج|english/i.test(s)) return 'إنجليزي'; if (/عربي|لغة عربية|arabic/i.test(s)) return 'عربي';
-  if (/علوم|science/i.test(s)) return 'علوم'; if (/قرآن|قران|إسلام|اسلام|دين/.test(s)) return 'قرآن وتربية إسلامية'; return s; }
+  if (/فيزي|physic/i.test(s)) return 'فيزياء'; if (/كيمي|chem/i.test(s)) return 'كيمياء'; if (/أحياء|احياء|biolog/i.test(s)) return 'أحياء';
+  if (/علوم|science/i.test(s)) return 'علوم'; if (/قرآن|قران|إسلام|اسلام|دين/.test(s)) return 'قرآن وتربية إسلامية';
+  if (/سوشيال|اجتماع|دراسات|social/i.test(s)) return 'سوشيال / دراسات'; if (/فرنس|french/i.test(s)) return 'فرنساوي'; if (/ict|حاسب|كمبيوتر/i.test(s)) return 'ICT / كمبيوتر'; return s; }
 const pctChg = (a, b) => b ? (a - b) / Math.abs(b) * 100 : null;
 const chgHtml = (a, b, inv) => { const p = pctChg(a, b); if (p == null) return a ? '<span class="sub">جديد</span>' : ''; const good = inv ? p <= 0 : p >= 0;
   return `<span class="${good ? 'pos' : 'neg'}">${p >= 0 ? '▲' : '▼'} ${Math.abs(p) >= 100 ? Math.round(Math.abs(p)) : Math.abs(p).toFixed(1)}%</span>`; };
@@ -4625,13 +4630,14 @@ function bizKpi(label, val, sub, chg, opts = {}) {
   return `<div class="card kpi biz-kpi ${opts.cls || ''}"${opts.click ? ` onclick="${opts.click}" style="cursor:pointer"` : ''}><div class="l">${opts.icon ? `<span class="biz-ic">${opts.icon}</span>` : ''}${label}</div>
     <div class="v num ${opts.vcls || ''}">${val}</div>${sub ? `<div class="s">${sub}</div>` : ''}${chg ? `<div class="s kpi-cmp">${chg} <span class="sub">مقابل الـ30 يوم اللي قبلهم</span></div>` : ''}</div>`;
 }
-function distCard(title, rows, total, money) {
+function distCard(title, rows, total, money, max = 8) {
   if (!rows.length) return '';
-  const colors = ['#3b82f6', '#16a34a', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#ec4899'];
-  let acc = 0; const segs = rows.slice(0, 8).map((r, i) => { const w = total ? r.h / total * 100 : 0; acc += w; return `<span style="width:${w}%;background:${colors[i % 8]}" title="${esc(r.k)} ${Math.round(w)}%"></span>`; }).join('');
+  if (rows.length > max) { const rest = rows.slice(max - 1); rows = [...rows.slice(0, max - 1), { k: `الباقي (${rest.map(r => r.k).join('، ')})`, h: rest.reduce((a, r) => a + r.h, 0), n: rest.reduce((a, r) => a + r.n, 0), rev: rest.reduce((a, r) => a + r.rev, 0) }]; }
+  const colors = ['#3b82f6', '#16a34a', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4', '#84cc16', '#ec4899', '#0ea5e9', '#d946ef', '#f97316', '#14b8a6', '#64748b', '#eab308'];
+  let acc = 0; const segs = rows.slice(0, max).map((r, i) => { const w = total ? r.h / total * 100 : 0; acc += w; return `<span style="width:${w}%;background:${colors[i % 14]}" title="${esc(r.k)} ${Math.round(w)}%"></span>`; }).join('');
   return `<div class="card item biz-dist"><h3>${title}</h3><div class="stackbar">${segs}</div>
-    ${rows.slice(0, 8).map((r, i) => `<div class="dist-row"><i style="background:${colors[i % 8]}"></i><span class="dist-k">${esc(r.k)}</span>
-      <span class="sub small">${r.n} طالب</span><span class="num"><b>${total ? Math.round(r.h / total * 100) : 0}%</b></span>${money && isAdmin ? `<span class="num small sub">${fmtK(r.rev)} ج</span>` : ''}</div>`).join('')}</div>`;
+    ${rows.slice(0, max).map((r, i) => `<div class="dist-row"><i style="background:${colors[i % 14]}"></i><span class="dist-k">${esc(r.k)}</span>
+      <span class="sub small">${r.n} طالب</span><span class="num"><b>${total ? (r.h / total * 100 < 1 ? (r.h / total * 100).toFixed(1) : Math.round(r.h / total * 100)) : 0}%</b></span>${money && isAdmin ? `<span class="num small sub">${fmtK(r.rev)} ج</span>` : ''}</div>`).join('')}</div>`;
 }
 function bizTrendHtml(MM) {
   if (!MM.length) return '';
@@ -4694,7 +4700,7 @@ function renderBusiness() {
     <div class="section-title"><h2>🌍 مين عملاءنا؟ <span class="sub small">(نسبة من ساعات آخر 30 يوم)</span></h2></div>
     <div class="grid2 biz-grid">
       ${distCard('حسب البلد', z.byCountry, totalH, true)}${distCard('حسب المنهج', z.byCurr, totalH, true)}
-      ${distCard('حسب المرحلة', z.byStage, totalH, true)}${distCard('حسب المادة', z.bySubj, totalH, true)}
+      ${distCard('حسب المرحلة', z.byStage, totalH, true)}${distCard('حسب المادة', z.bySubj, totalH, true, 14)}
     </div>
 
     <div class="section-title"><h2>⭐ الأكثر نشاطاً <span class="sub small">(آخر 30 يوم)</span></h2></div>
