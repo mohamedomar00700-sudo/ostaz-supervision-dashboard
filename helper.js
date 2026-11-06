@@ -173,8 +173,9 @@
   // سطر "متسجلة بالفعل" بيتداس عليه → يفتح الحصة من الداتا بيز نفسها (دليل إنها متسجلة بجد)
   function sessLink(id) { const k = 'a' + (++SQ.aid); SQ.actions[k] = () => showSess(id); return `<span data-sq-act="${k}" style="cursor:pointer;display:inline">`; }
   async function showSess(id) {
-    const { data: s, error } = await sb.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,status,subject,kind,family_block,notes,created_at,created_by,students(name,families(name)),tutors(name)').eq('id', id).maybeSingle();
-    if (error || !s) { botSay('معلش، مش لاقي الحصة دي في السيستم — ممكن تكون اتمسحت'); return; }
+    const { data: s, error } = await sb.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,status,subject,kind,family_block,notes,created_at,created_by,students(name,families(name)),tutors!sessions_tutor_id_fkey(name)').eq('id', id).maybeSingle();
+    if (error) { console.warn(error); botSay('معلش، ما عرفتش أفتح الحصة دلوقتي — جرّب تاني'); return; }
+    if (!s) { botSay('⚠️ الحصة دي مش موجودة في السيستم — ممكن تكون اتمسحت'); return; }
     let by = 'محمد عمر (الإدارة)';
     if (s.created_by) { try { const { data: sp } = await sb.from('supervisors').select('name').eq('id', s.created_by).maybeSingle(); if (sp?.name) by = sp.name; } catch (_) {} }
     else if (/صقّور/.test(s.notes || '')) by = 'صقّور';
