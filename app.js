@@ -283,10 +283,12 @@ async function loadMasters() {
     q(sb.from('family_balances').select('*')),
     q(sb.from('tutor_balances').select('*')),
     q(sb.from('student_subjects').select('*').order('created_at')),
-    q(sb.from('sessions').select('student_id,tutor_id').eq('status', 'done').gte('scheduled_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(5000)),
+    q(sb.from('sessions').select('student_id,tutor_id,subject,status,family_block').in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(5000)),
   ]);
   state.plans = plans;
-  state.act = { stu: new Set(act.map(x => x.student_id)), tut: new Set(act.map(x => x.tutor_id)) };
+  state.actPairs = act; // مين بيدرّس مين: حصص تمت آخر 30 يوم + الجاية
+  const actDone = act.filter(x => x.status === 'done');
+  state.act = { stu: new Set(actDone.map(x => x.student_id)), tut: new Set(actDone.map(x => x.tutor_id)) };
   state.families = families; state.students = students; state.tutors = tutors; state.subjects = subjects;
   state.fx = Object.fromEntries(fx.map(r => [r.currency, Number(r.rate_to_egp)]));
   state.fxRows = fx;
@@ -1017,7 +1019,8 @@ function renderWeek() {
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(from); d.setDate(d.getDate() + i); return d; });
   const showAll = state.covShowAll;
   document.getElementById('week-panel').innerHTML = `
-    <div class="row-gap mb"><button class="btn btn-ghost sm" onclick="openFamilySchedules()">📋 جداول الأسر للأسبوع (رسائل جاهزة)</button></div>
+    <div class="row-gap mb"><button class="btn btn-ghost sm" onclick="openFamilySchedules()">📋 جداول الأسر للأسبوع (رسائل جاهزة)</button>
+      <button class="btn btn-ghost sm" onclick="openGroupNames()">🏷 أسماء الجروبات + مين بيدرّس مين</button></div>
     <div class="stats">
       <div class="card stat"><div class="v">${occurrences(active).length}</div><div class="l">حصص الأسبوع</div></div>
       <div class="card stat"><div class="v num">${fmt(occurrences(active).reduce((a, s) => a + sMins(s), 0) / 60, 1)}</div><div class="l">ساعة</div></div>
@@ -1231,6 +1234,7 @@ function renderFamilies() {
         <button class="btn btn-ghost sm" onclick="openFamilyHoliday(${fid})">🏖 إجازة</button>
         ${b.balance < 0 ? `<button class="btn btn-ghost sm" onclick="openPaymentReminder(${fid})">📲 مطالبة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="openFamilyStatement(${fid})">كشف حساب</button>
+        <button class="btn btn-ghost sm" onclick="copyText(famGroupName(byId(state.families, ${fid})), 'اتنسخ اسم الجروب ✓')">🏷 اسم الجروب</button>
         <button class="btn btn-ghost sm" onclick="openFamilyForm(${fid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('أسرة ' + f.name + ' وكل طلابها')}, () => q(sb.from('families').delete().eq('id', ${fid})))">حذف</button>` : ''}
       </div>
@@ -1667,6 +1671,7 @@ function renderTutors() {
         ${!t.user_id ? `<button class="btn btn-ghost sm" onclick="openTutorInvite(${tid})">📲 دعوة للبوابة</button>` : ''}
         <button class="btn btn-ghost sm" onclick="tutorPreview(${tid})">👁 شوف بوابتها</button>
         <button class="btn btn-ghost sm" onclick="openTutorStatement(${tid})">كشف حساب</button>
+        <button class="btn btn-ghost sm" onclick="copyText(tutGroupName(byId(state.tutors, ${tid})), 'اتنسخ اسم الجروب ✓')">🏷 اسم الجروب</button>
         <button class="btn btn-ghost sm" onclick="openTutorForm(${tid})">تعديل</button>
         ${isAdmin ? `<button class="btn btn-danger sm" onclick="confirmDelete(${jsq('المعلم ' + t.name)}, () => q(sb.from('tutors').delete().eq('id', ${tid})))">حذف</button>` : ''}
       </div>
@@ -2668,6 +2673,73 @@ ${body}
 لأي تعديل في المواعيد تواصلوا معنا هنا.
 ${SIGN_F}`;
 }
+/* ============================================================
+   أسماء جروبات الواتساب: صيغة ثابتة عشان البحث على واتساب
+   المعلمة: "مس حنين · إنجليزي · حمدان، رسمية · أستاذ"  (أسماء الطلاب بس، من غير أسماء الأسر)
+   الأسرة: "أسرة أم حمدان · حمدان، حمدة، رسمية · أستاذ"  (من غير أي اسم معلمة)
+   ============================================================ */
+const MALE_TUTOR = /^(محمود|البيومي|عبد ?الرحمن|أحمد|احمد|محمد|مصطفى|مصطفي|عمر|علي|حسن|حسين|إبراهيم|ابراهيم|خالد|يوسف|كريم|طارق|هشام|عمرو|مستر)/;
+function tutBareName(t) { return String(t?.name || '').replace(/\(.*?\)/g, '').replace(/^\s*(أ\.|أ\/|ا\.|أستاذة?|استاذة?|مس|مستر)\s*/, '').trim(); }
+function tutTitle(t) { const n = String(t?.name || '').trim(); if (/^د\./.test(n)) return 'د. ' + tutBareName(t).replace(/^د\.\s*/, ''); const b = tutBareName(t); return (MALE_TUTOR.test(b) ? 'مستر ' : 'مس ') + b; }
+function normSubj(s) { const x = String(s || '').trim(); if (!x) return ''; if (/physics/i.test(x)) return 'فيزياء'; if (/chem/i.test(x)) return 'كيمياء'; if (/^قرآن/.test(x)) return 'قرآن'; return x; }
+function activePairs() { // حصة الأسرة بتتسجل على طالب واحد — نوزّعها على كل إخواته
+  // (إلا الأخ اللي بياخد نفس المادة لوحده مع معلمة تانية — يبقى مش داخل الحصة دي)
+  const out = [], rows = (state.actPairs || []).filter(x => x.student_id && x.tutor_id);
+  const solo = new Set(rows.filter(x => !x.family_block).map(x => `${x.student_id}|${normSubj(x.subject)}|${x.tutor_id}`));
+  const soloOther = (sid, subj, tid) => rows.some(x => !x.family_block && x.student_id === sid && normSubj(x.subject) === subj && x.tutor_id !== tid && !solo.has(`${sid}|${subj}|${tid}`));
+  rows.forEach(x => {
+    const st = x.family_block && byId(state.students, x.student_id);
+    if (!st) { out.push(x); return; }
+    state.students.filter(k => k.family_id === st.family_id && (k.id === x.student_id || !soloOther(k.id, normSubj(x.subject), x.tutor_id))).forEach(k => out.push({ ...x, student_id: k.id }));
+  });
+  return out;
+}
+function tutGroupName(t) {
+  const ps = activePairs().filter(x => x.tutor_id === t.id);
+  const subj = [...new Set(ps.map(x => normSubj(x.subject)).filter(Boolean))];
+  if (!subj.length) { const m = String(t.name).match(/\((.*?)\)/); if (m) subj.push(m[1]); }
+  const kids = [...new Set(ps.map(x => byId(state.students, x.student_id)?.name).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'));
+  const head = `${tutTitle(t)}${subj.length ? ' · ' + subj.join('، ') : ''}`, tail = ' · أستاذ';
+  let k = kids.join('، ');
+  while (k && (head + ' · ' + k + tail).length > 100) { kids.pop(); k = kids.join('، ') + '…'; } // واتساب: أقصى 100 حرف
+  return head + (k ? ' · ' + k : '') + tail;
+}
+function famGroupName(f) {
+  const all = state.students.filter(s => s.family_id === f.id), act = new Set(activePairs().map(x => x.student_id));
+  const kids = (all.some(s => act.has(s.id)) ? all.filter(s => act.has(s.id)) : all).map(s => s.name);
+  let n = String(f.name).replace(/\s*\(.*?\)\s*/g, ' ').trim(); if (!/^(أسرة|اسرة|عائلة)/.test(n)) n = 'أسرة ' + n;
+  return `${n}${kids.length ? ' · ' + [...new Set(kids)].join('، ') : ''} · أستاذ`.slice(0, 100);
+}
+// رسالة "مين بيدرّس مين" — لجروب الإشراف بس (فيها أسماء الأسر والمعلمات)
+function whoTeachesWhomText() {
+  const by = {};
+  activePairs().forEach(x => { const st = byId(state.students, x.student_id), t = byId(state.tutors, x.tutor_id); if (!st || !t) return;
+    const m = (by[st.id] ||= { st, subj: {} }); const sj = normSubj(x.subject) || 'حصة'; (m.subj[sj] ||= new Set()).add(tutTitle(t)); });
+  const fams = {};
+  Object.values(by).forEach(x => { const f = byId(state.families, x.st.family_id); const k = f ? famGroupName(f).split(' · ')[0] : 'بدون أسرة'; (fams[k] ||= []).push(x); });
+  const d = new Date().toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', year: 'numeric' });
+  return `📌 مين بيدرّس مين — تحديث ${d}\n(اكتب اسم الطالب في بحث واتساب وهتلاقي الرسالة دي)\n\n` +
+    Object.keys(fams).sort((a, b) => a.localeCompare(b, 'ar')).map(fk => `*${fk}*\n` + fams[fk].sort((a, b) => a.st.name.localeCompare(b.st.name, 'ar'))
+      .map(x => `• ${x.st.name}: ${Object.entries(x.subj).map(([sj, ts]) => `${sj} ← ${[...ts].join(' / ')}`).join(' · ')}`).join('\n')).join('\n\n');
+}
+function openGroupNames() {
+  const tuts = state.tutors.filter(t => activePairs().some(x => x.tutor_id === t.id)).sort((a, b) => tutBareName(a).localeCompare(tutBareName(b), 'ar'));
+  const famIds = new Set(activePairs().map(x => byId(state.students, x.student_id)?.family_id).filter(Boolean));
+  const fams = state.families.filter(f => famIds.has(f.id)).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const who = whoTeachesWhomText();
+  window._gnCopy = (kind, id) => copyText(kind === 't' ? tutGroupName(byId(state.tutors, id)) : famGroupName(byId(state.families, id)), 'اتنسخ اسم الجروب ✓');
+  window._gnWho = () => copyText(whoTeachesWhomText(), 'اتنسخت الرسالة ✓ — ابعتها في جروب الإشراف وثبّتها 📌');
+  const row = (kind, x, name) => `<div class="card item"><div class="item-head" style="align-items:center"><div style="min-width:0"><b>${esc(name)}</b></div>
+      <div class="row-gap" style="flex-shrink:0"><button class="btn btn-brand sm" onclick="_gnCopy('${kind}', ${jsq(x.id)})">📋 نسخ</button>${x.whatsapp_group ? `<a class="btn btn-wa sm" href="${esc(x.whatsapp_group)}" target="_blank" rel="noopener">فتح الجروب</a>` : '<span class="sub small">مفيش جروب</span>'}</div></div></div>`;
+  openModal('🏷 أسماء الجروبات', `
+    <p class="sub small mb">الاسم بيتعمل لوحده من الطلاب اللي ليهم حصص (آخر 30 يوم + الجاية). انسخه وغيّر بيه اسم الجروب على واتساب (افتح الجروب ← اضغط على الاسم ← تعديل). لما طالب يمشي أو ييجي، ارجع هنا وانسخ الاسم الجديد.<br>⚠️ جروب الأسرة مفيهوش أسماء معلمات، وجروب المعلمة مفيهوش أسماء أسر.</p>
+    <details open><summary class="section-title" style="cursor:pointer"><h3>📌 رسالة "مين بيدرّس مين" لجروب الإشراف</h3></summary>
+      <pre class="card item small" style="white-space:pre-wrap;max-height:260px;overflow:auto">${esc(who)}</pre>
+      <button class="btn btn-wa mb" onclick="_gnWho()">📋 نسخ الرسالة</button></details>
+    <details open><summary class="section-title" style="cursor:pointer"><h3>👩‍🏫 جروبات المعلمين (${tuts.length})</h3></summary><div class="list">${tuts.map(t => row('t', t, tutGroupName(t))).join('')}</div></details>
+    <details class="mt"><summary class="section-title" style="cursor:pointer"><h3>👨‍👩‍👧 جروبات الأسر (${fams.length})</h3></summary><div class="list">${fams.map(f => row('f', f, famGroupName(f))).join('')}</div></details>`);
+}
+
 function openFamilySchedules() {
   const ws = (state.weekSessions || []).filter(s => !s.status.startsWith('cancelled') && sStart(s) >= Date.now() - 3600e3);
   const byFam = {};
