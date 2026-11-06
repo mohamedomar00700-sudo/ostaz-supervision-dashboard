@@ -38,19 +38,19 @@ Deno.serve(async (req) => {
       avail = (lj.models || []).filter((x: any) => (x.supportedGenerationMethods || []).includes('generateContent')).map((x: any) => String(x.name).replace(/^models\//, ''))
         .filter((n: string) => /^gemini-[\d.]+-flash(-\d+)?$/.test(n)).sort((a: string, b: string) => ver(b) - ver(a));
     } catch { /* */ }
-    const models = [Deno.env.get('GEMINI_MODEL'), ...avail.slice(0, 2), 'gemini-flash-latest'].filter((m, i, a) => m && a.indexOf(m) === i) as string[];
-    let lastErr = '', firstErr = '';
+    const models = [Deno.env.get('GEMINI_MODEL'), 'gemini-flash-latest', ...avail.slice(0, 4)].filter((m, i, a) => m && a.indexOf(m) === i) as string[];
+    let lastErr = ''; const errs: string[] = [];
     for (const m of models) {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
         body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: m0, data: audio } }] }], generationConfig: { temperature: 0 } }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { lastErr = j?.error?.message || `HTTP ${r.status}`; const modelErr = r.status === 404 || /no longer available|is not found|not supported for generateContent/i.test(lastErr); if (!modelErr && !firstErr) firstErr = lastErr; if (modelErr || r.status >= 500) continue; break; }
+      if (!r.ok) { lastErr = j?.error?.message || `HTTP ${r.status}`; const modelErr = r.status === 404 || /no longer available|is not found|not supported for generateContent/i.test(lastErr); if (!modelErr) errs.push(`${m}: ${lastErr.slice(0, 160)}`); if (modelErr || r.status === 429 || r.status >= 500) continue; break; }
       const text = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('').trim();
       return json({ text });
     }
-    return json({ error: /quota|rate|exhaust/i.test(lastErr) ? 'وصلنا للحد المجاني بتاع Gemini دلوقتي — جرّب كمان شوية' : 'Gemini: ' + (firstErr || lastErr) + ` (${m0})` }, 502);
+    return json({ error: errs.length && errs.every(x => /quota|rate|exhaust/i.test(x)) ? 'وصلنا للحد المجاني بتاع Gemini دلوقتي — جرّب كمان شوية' : 'Gemini: ' + (errs.join(' | ') || lastErr) + ` (${m0})` }, 502);
   } catch (e) {
     return json({ error: String((e as any)?.message || e).slice(0, 300) }, 500);
   }
