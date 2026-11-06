@@ -115,7 +115,7 @@ function systemPrompt(now: { date: string; time: string; weekday: string }, extr
 - "تجربة/تجريبية/حصة تجريبية" → kind=trial (مجانية للأسرة والمعلم إلا لو قالت المعلم هيتحاسب — ساعتها حط tutor_rate_egp).
 - "مراجعة" → kind=revision.
 - لو الإخوات واخدين مع بعض في نفس الوقت مع نفس المعلم ("رسمية وحمدان مع فاتن"، "ولاد أم حمدان") → حصة واحدة family_block=true على واحد منهم، والمدة = مدة البلوك كله. ما تعملش حصة لكل واحد.
-- لو الحصة موجودة فعلاً في "حصص الفترة" (نفس الطالب ونفس اليوم وقريب من نفس الوقت) ما تضيفهاش تاني — استخدم updates لو فيه تغيير.
+- لو الحصة موجودة فعلاً في "حصص الفترة" (نفس الطالب ونفس اليوم وقريب من نفس الوقت): لو كل حاجة زي ما هي ما تحطهاش في أي قايمة خالص (هي متسجلة). استخدم updates بس لو فيه حاجة مختلفة فعلاً (الميعاد/المدة/المادة)، وحط في updates الحاجة المختلفة بس. وما تغيّرش المعلم إلا لو المشرفة قالت صراحة إن المعلم اتغيّر.
 - تقرير آخر اليوم: "كله تمام" / "الباقي تمام" → status_changes بـ done لكل حصة "مجدولة" في اليوم ده ما اتذكرتش كملغية. "اتلغت" → cancelled_by_student لو من الطالب/الأسرة (امتحانات، مرض، تعبانة، سفر، مدخلش)، cancelled_by_tutor لو من المعلم، مع cancel_reason مناسب وnote بالتفاصيل.
 - "دخل ساعة ونص بدل ساعة" لحصة موجودة → status_changes بـ done مع actual_minutes. لو حصة مش موجودة واتعملت → add_sessions بـ status=done.
 - اتأجلت لميعاد تاني → updates بالتاريخ/الوقت الجديد (لو الميعاد معروف)، وإلا status_changes بـ cancelled_by_student وcancel_reason "اتأجلت لميعاد تاني".
@@ -277,10 +277,19 @@ Deno.serve(async (req) => {
         if (a.date || a.time) patch.scheduled_at = toIso(a.date || c.date, a.time || c.time);
         if (a.duration_minutes) patch.duration_minutes = Number(a.duration_minutes);
         if (a.actual_minutes) patch.actual_minutes = Number(a.actual_minutes);
-        if (a.tutor && tId.get(a.tutor)) { patch.tutor_id = tId.get(a.tutor); r.new_tutor_name = tutBy.get(patch.tutor_id)?.name; const p = pair.get(s.student_id + '|' + patch.tutor_id); patch.tutor_cost_egp = s.kind === 'trial' ? 0 : Number(p?.rate ?? tutBy.get(patch.tutor_id)?.default_rate_egp ?? 0); }
-        if (a.subject) patch.subject = a.subject;
+        if (a.tutor && tId.get(a.tutor) && tId.get(a.tutor) !== s.tutor_id) {
+          const nt = tId.get(a.tutor)!;
+          // ما نغيّرش لمعلم عمره ما درّس الطالب لو المعلم الحالي هو اللي بيدرّسه (لخبطة أسماء زي فطوم/فاطمة)
+          if (!pair.has(s.student_id + '|' + nt) && pair.has(s.student_id + '|' + s.tutor_id)) warnings.push(`${stuBy.get(s.student_id)?.name}: ما غيّرتش المعلم لـ ${tutBy.get(nt)?.name} لأنها عمرها ما درّستله — فضلت مع ${tutBy.get(s.tutor_id)?.name}. لو فعلاً معلمة جديدة قول "معلمة جديدة".`);
+          else { patch.tutor_id = nt; r.new_tutor_name = tutBy.get(nt)?.name; const p = pair.get(s.student_id + '|' + nt); patch.tutor_cost_egp = s.kind === 'trial' ? 0 : Number(p?.rate ?? tutBy.get(nt)?.default_rate_egp ?? 0); }
+        }
+        if (a.subject && String(a.subject).replace(/\s/g, '') !== String(s.subject || '').replace(/\s/g, '')) patch.subject = a.subject;
         if (a.tutor_rate_egp != null) patch.tutor_cost_egp = Number(a.tutor_rate_egp);
-        if (!Object.keys(patch).length) return null;
+        // نشيل اللي مش بيغيّر حاجة فعلاً
+        if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() === new Date(s.scheduled_at).getTime()) delete patch.scheduled_at;
+        if (patch.duration_minutes && patch.duration_minutes === s.duration_minutes) delete patch.duration_minutes;
+        if (patch.actual_minutes && patch.actual_minutes === (s.actual_minutes || s.duration_minutes)) delete patch.actual_minutes;
+        if (!Object.keys(patch).length) { already.push({ student_name: r.student_name, tutor_name: r.tutor_name, subject: s.subject, date: c.date, time: c.time, minutes: s.actual_minutes || s.duration_minutes, by: supName(s.created_by, s.notes), differs: false }); return null; }
         r.patch = patch; if (patch.scheduled_at) { const n = cairoParts(new Date(patch.scheduled_at)); r.new_date = n.date; r.new_time = n.time; }
         return r;
       }
