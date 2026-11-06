@@ -173,7 +173,7 @@
   // سطر "متسجلة بالفعل" بيتداس عليه → يفتح الحصة من الداتا بيز نفسها (دليل إنها متسجلة بجد)
   function sessLink(id) { const k = 'a' + (++SQ.aid); SQ.actions[k] = () => showSess(id); return `<span data-sq-act="${k}" style="cursor:pointer;display:inline">`; }
   async function showSess(id) {
-    const { data: s, error } = await sb.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,status,subject,kind,family_block,notes,created_at,updated_at,created_by,students(name,families(name)),tutors(name)').eq('id', id).maybeSingle();
+    const { data: s, error } = await sb.from('sessions').select('id,scheduled_at,duration_minutes,actual_minutes,status,subject,kind,family_block,notes,created_at,created_by,students(name,families(name)),tutors(name)').eq('id', id).maybeSingle();
     if (error || !s) { botSay('معلش، مش لاقي الحصة دي في السيستم — ممكن تكون اتمسحت'); return; }
     let by = 'محمد عمر (الإدارة)';
     if (s.created_by) { try { const { data: sp } = await sb.from('supervisors').select('name').eq('id', s.created_by).maybeSingle(); if (sp?.name) by = sp.name; } catch (_) {} }
@@ -192,7 +192,6 @@
       ${row('الحالة', ST[s.status] || s.status)}
       ${row('سجّلها', e(by))}
       ${row('اتسجلت', cairo(s.created_at))}
-      ${s.updated_at && Math.abs(new Date(s.updated_at) - new Date(s.created_at)) > 60e3 ? row('آخر تعديل', cairo(s.updated_at)) : ''}
       ${s.notes ? `<div class="sub" style="margin-top:8px">📝 ${e(s.notes)}</div>` : ''}
       <div class="sub" style="margin-top:8px;font-size:11px">رقم الحصة في السيستم: ${String(s.id).slice(0, 8)}</div>
       <button class="btn btn-brand" style="width:100%;margin-top:12px" id="sq-goday">📅 افتح يوم الحصة في الجدول</button>
