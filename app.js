@@ -2565,6 +2565,25 @@ async function loadAttention() {
   } catch (e) { state.missingReports = []; }
   state.pendingTrials = await q(sb.from('sessions').select('*').eq('kind', 'trial').eq('status', 'done')
     .or('trial_outcome.is.null,trial_outcome.eq.thinking').gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at'));
+  try { // قرروا يكملوا بعد التجريبية ولسه مالهمش ولا حصة عادية (المواعيد لسه بتتنسق) — بعد يوم من التجربة
+    const won = await q(sb.from('sessions').select('*').eq('kind', 'trial').eq('status', 'done').in('trial_outcome', ['converted', 'switched'])
+      .gte('scheduled_at', new Date(now.getTime() - 30 * 864e5).toISOString()).lte('scheduled_at', new Date(now.getTime() - 864e5).toISOString()).order('scheduled_at'));
+    const ids = [...new Set(won.map(x => x.student_id))];
+    const later = ids.length ? await q(sb.from('sessions').select('student_id,tutor_id,subject,scheduled_at').in('student_id', ids).neq('kind', 'trial')
+      .in('status', ['scheduled', 'in_progress', 'done']).gte('scheduled_at', won[0].scheduled_at)) : [];
+    const n = x => String(x || '').replace(/\s/g, '').toLowerCase();
+    state.noScheduleTrials = won.filter(t => { const tutor = t.trial_outcome === 'switched' ? t.trial_switched_to : t.tutor_id;
+      return !later.some(x => x.student_id === t.student_id && x.scheduled_at > t.scheduled_at && (x.tutor_id === tutor || (t.subject && n(x.subject) === n(t.subject)))); });
+  } catch (e) { state.noScheduleTrials = []; }
+}
+function openNoScheduleTrials() {
+  const list = state.noScheduleTrials || [];
+  openModal(`قرروا يكملوا ولسه مالهمش مواعيد (${list.length})`, `<p class="sub">الطلاب دول قالوا هيكملوا بعد الحصة التجريبية، بس لسه مفيش ولا حصة عادية متسجلة ليهم. نسّق المواعيد مع الأسرة والمعلمة وسجّلها.</p>
+    <div class="list">${list.map(s => { const v = sessionView(s); const tid = s.trial_outcome === 'switched' ? s.trial_switched_to : s.tutor_id; const tu = byId(state.tutors, tid);
+      return `<div class="card item"><div class="item-head"><div><b>${esc(v.st?.name || '')}</b> <span class="sub small">${esc(v.fam?.name || '')}</span>
+      <div class="small">${esc(s.subject || '')} · ${esc(tu?.name || '')} · التجربة ${ago(s.scheduled_at)}</div>${s.trial_outcome_note ? `<div class="sub small">📝 ${esc(s.trial_outcome_note)}</div>` : ''}</div></div>
+      <div class="actions"><button class="btn btn-brand sm" onclick="openSessionForm(null, { student_id: ${jsq(s.student_id)}, tutor_id: ${jsq(tid)}, subject: ${jsq(s.subject || '')}, kind: 'regular' })">📅 سجّل المواعيد</button>
+        <button class="btn btn-ghost sm" onclick="openTrialOutcome(${jsq(s.id)})">غيّر النتيجة</button></div></div>`; }).join('') || '<div class="empty">مفيش 👌</div>'}</div>`);
 }
 function renderAttention() {
   const el = document.getElementById('attention'); if (!el) return;
@@ -2586,6 +2605,8 @@ function renderAttention() {
   if (un.length) items.push(`<button class="att att-warn" onclick="openUnrecorded()">⏳ <b>${occurrences(un).length}</b> حصة عدّت ولسه ماتسجلتش</button>`);
   const pt = (state.pendingTrials || []).length;
   if (pt) items.push(`<button class="att att-warn" onclick="openPendingTrials()">🧪 <b>${pt}</b> تجريبية مستنية نتيجة</button>`);
+  const ns2 = (state.noScheduleTrials || []).length;
+  if (ns2) items.push(`<button class="att att-warn" onclick="openNoScheduleTrials()">📅 <b>${ns2}</b> ${ns2 === 1 ? 'طالب قرر يكمل ولسه مالوش' : 'طلاب قرروا يكملوا ولسه مالهمش'} مواعيد</button>`);
   const relay = state.relay.filter(r => r.status !== 'done').length;
   if (relay) items.push(`<button class="att" onclick="switchTab('relay')">🔁 <b>${relay}</b> مهمة ترحيل مفتوحة</button>`);
   const owing = state.families.filter(f => famBalance(f).balance < 0).length;
