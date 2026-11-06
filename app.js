@@ -884,14 +884,14 @@ async function openSessionForm(id, prefill = {}) {
     if (k === 'revision' && !s && Number(durIn.value) === 60) durIn.value = 120;
     const priceIn = $('student_price');
     if (k === 'trial') {
-      if (!s || prevKind !== 'trial') { durIn.value = 30; priceIn.value = 0; }
+      if (!s || prevKind !== 'trial') { durIn.value = 30; priceIn.value = 0; $('tutor_cost_egp').value = 0; } // التجريبية مجانية للطرفين
       priceIn.readOnly = true;
       document.getElementById('hint_student_price').textContent = 'مجانية للأسرة';
       document.getElementById('hint_tutor_cost_egp') || document.getElementById('wrap_tutor_cost_egp').insertAdjacentHTML('beforeend', '<div class="hint" id="hint_tutor_cost_egp"></div>');
-      document.getElementById('hint_tutor_cost_egp').textContent = 'أجر الساعة — بيتحسب على نص ساعة. خليه 0 لو المعلمة مش بتاخد عن التجريبية.';
+      document.getElementById('hint_tutor_cost_egp').textContent = 'التجريبية مجانية للمعلمة كمان (0) — اكتب أجر الساعة بس لو اتفقنا إنها هتتحاسب عليها.';
     } else {
       priceIn.readOnly = false;
-      if (prevKind === 'trial') { const st = byId(state.students, stSel.value); priceIn.value = st?.default_price ?? ''; if (Number(durIn.value) === 30) durIn.value = k === 'revision' ? 120 : 60; }
+      if (prevKind === 'trial') { const st = byId(state.students, stSel.value), t0 = byId(state.tutors, tuSel.value); priceIn.value = st?.default_price ?? ''; if (Number($('tutor_cost_egp').value) === 0 && t0?.default_rate_egp != null) $('tutor_cost_egp').value = t0.default_rate_egp; if (Number(durIn.value) === 30) durIn.value = k === 'revision' ? 120 : 60; }
       const h = document.getElementById('hint_tutor_cost_egp'); if (h) h.textContent = '';
       updateHints(false);
     }
@@ -906,7 +906,8 @@ async function openSessionForm(id, prefill = {}) {
     if (p.tutor_id) {
       tuSel.value = p.tutor_id;
       const t = byId(state.tutors, p.tutor_id);
-      if (p.tutor_rate_egp != null) $('tutor_cost_egp').value = p.tutor_rate_egp;
+      if ($('kind').value === 'trial') $('tutor_cost_egp').value = 0;
+      else if (p.tutor_rate_egp != null) $('tutor_cost_egp').value = p.tutor_rate_egp;
       else if (t && t.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp;
     }
     if (p.meeting_link && !$('meeting_link').value) $('meeting_link').value = p.meeting_link;
@@ -933,12 +934,14 @@ async function openSessionForm(id, prefill = {}) {
   tuSel.addEventListener('change', () => {
     const t = byId(state.tutors, tuSel.value);
     const pr = plansOf(stSel.value).find(p => p.tutor_id === tuSel.value && p.tutor_rate_egp != null);
-    if (pr) $('tutor_cost_egp').value = pr.tutor_rate_egp;
+    if ($('kind').value === 'trial') $('tutor_cost_egp').value = 0;
+    else if (pr) $('tutor_cost_egp').value = pr.tutor_rate_egp;
     else if (t && t.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp;
     totals();
   });
   updateHints(!s && !!prefill.student_id);
   if (!s && prefill.tutor_id) { const t = byId(state.tutors, prefill.tutor_id); if (t?.default_rate_egp != null) $('tutor_cost_egp').value = t.default_rate_egp; totals(); }
+  if (!s && $('kind').value === 'trial') { $('tutor_cost_egp').value = 0; totals(); } // التجريبية مجانية للطرفين
   renderPicks(false);
   if (prefill.plan_id) window._applyPlan(prefill.plan_id);
   if (prefill.duration) durIn.value = prefill.duration;
