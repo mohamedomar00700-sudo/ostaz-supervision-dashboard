@@ -110,7 +110,11 @@
   .sq-body{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:var(--bg,#f4f6f8);scroll-behavior:smooth}
   .sq-msg{max-width:88%;padding:10px 13px;border-radius:16px;font-size:14px;line-height:1.7;animation:sqIn .3s ease-out;word-wrap:break-word}
   .sq-bot{align-self:flex-start;background:var(--card,#fff);border:1px solid var(--border,#e5e7eb);border-top-right-radius:4px}
-  .sq-me{align-self:flex-end;background:var(--brand,#1d4ed8);color:#fff;border-top-left-radius:4px}
+  .sq-me{align-self:flex-end;background:var(--brand,#1d4ed8);color:#fff;border-top-left-radius:4px;white-space:pre-wrap}
+  .sq-msg{-webkit-user-select:text;user-select:text}
+  .sq-mewrap{align-self:flex-end;display:flex;flex-direction:column;align-items:flex-end;gap:3px;max-width:88%}
+  .sq-mewrap .sq-msg{max-width:100%}
+  .sq-cp{border:none;background:transparent;color:var(--muted,#6b7280);font-size:12px;cursor:pointer;font-family:inherit;padding:2px 6px}
   @keyframes sqIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   .sq-row{display:flex;gap:8px;align-items:flex-end}
   .sq-row .sq-mini{width:30px;height:30px;flex:none;border-radius:50%;background:#e0ecff;display:flex;align-items:center;justify-content:center}
@@ -407,7 +411,13 @@
     chips.querySelectorAll('button').forEach(b => b.onclick = () => { const it = kb().find(x => x.id === b.dataset.q); meSay(it.t); runIntent(it); });
   }
   function scroll() { body.scrollTop = body.scrollHeight; }
-  function meSay(t) { body.insertAdjacentHTML('beforeend', `<div class="sq-msg sq-me">${e(t)}</div>`); scroll(); }
+  function cpBtn(text, label) { return act(label || '📋 نسخ', () => copyIt(text), true).replace('class="sq-alt"', 'class="sq-cp"'); }
+  async function copyIt(text) {
+    try { await navigator.clipboard.writeText(text); }
+    catch (_) { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (__) {} ta.remove(); }
+    if (typeof showToast === 'function') showToast('اتنسخ ✓ — الزقه في الواتساب');
+  }
+  function meSay(t) { body.insertAdjacentHTML('beforeend', `<div class="sq-mewrap"><div class="sq-msg sq-me">${e(t)}</div>${cpBtn(String(t).replace(/^🎙️ /, ''))}</div>`); scroll(); }
   function botSay(html, anim) {
     const row = document.createElement('div'); row.className = 'sq-row';
     row.innerHTML = `<div class="sq-mini">${mascot(26)}</div><div class="sq-msg sq-bot">${html}</div>`;
@@ -445,7 +455,7 @@
   function aiWanted(text, ranked, talk) {
     if (mode() !== 'sup') return false;
     const t = String(text);
-    if (/\n/.test(t) || t.length > 45) return true;                                   // جدول أو تقرير
+    if (/\n/.test(t) || t.length > 20 || t.trim().split(/\s+/).length >= 4) return true; // أي جملة حقيقية → الذكاء (الكلمتين القصيرين بس للردود الجاهزة)
     if (/(سجل|سجّل|ضيف|أضف|اضف|الغي|ألغي|لغي|اتلغ|اتأجل|أجّل|اجل|تمت|اتعمل|دخل|دخلت|بكرة|بكره|النهارده|امبارح|كله تمام|الساعة|الساعه|مين بيدرس|مين بتدرس|مدرس|مدرسة|عندنا)/.test(t)) return true;
     if (/\d/.test(t) && t.length > 12) return true;
     return !(talk || (ranked[0] && ranked[0].s >= 2));                               // مافهمش محلياً → نسأل الذكاء
@@ -475,6 +485,15 @@
     if (a.note) h += `<div class="small sub">📝 ${e(a.note)}</div>`;
     return `<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-top:1px solid rgba(0,0,0,.07);cursor:pointer"><input type="checkbox" data-ai="${k}" data-i="${i}" checked style="margin-top:5px"><div style="flex:1;min-width:0">${h}</div></label>`;
   }
+  function actsText(acts, reply) { // نسخة نص عادي من الكارت للواتساب (من غير أسعار)
+    const L = acts.map(a => {
+      const who = `${a.student_name}${a.subject ? ' ' + a.subject : ''} مع ${String(a.tutor_name || '').replace(/^أ\.\s*/, 'مس ').replace(/\s*\(.*?\)/, '')}`;
+      if (a.op === 'add_session') return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)} (${dl(a.duration_minutes)})${a.kind === 'trial' ? ' — تجريبية' : ''}${a.family_block ? ' — حصة أسرة' : ''}${a.status === 'done' ? ' — تمت ✅' : ''}`;
+      if (a.op === 'set_status') return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)}: ${STATUS_AR[a.status] || a.status}${a.cancel_reason ? ' (' + a.cancel_reason + ')' : ''}${a.status === 'done' && a.actual_minutes ? ' — ' + dl(a.actual_minutes) : ''}`;
+      return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)} ← ${a.new_date || a.new_time ? dayLbl(a.new_date) + ' ' + t12(a.new_time) : ''}${a.new_tutor_name ? ' مع ' + a.new_tutor_name : ''}${a.patch?.duration_minutes ? ' ' + dl(a.patch.duration_minutes) : ''}`;
+    });
+    return `🦅 صقّور — ${reply || ''}\n${L.join('\n')}`;
+  }
   async function aiAsk(text) {
     const row = document.createElement('div'); row.className = 'sq-row';
     row.innerHTML = `<div class="sq-mini">${mascot(26)}</div><div class="sq-msg sq-bot sq-typing"><i></i><i></i><i></i></div>`;
@@ -496,9 +515,10 @@
     if (acts.length) {
       const k = 'p' + (++AI.n); AI.pending[k] = { acts, text, reply: data.reply };
       html += `<div style="margin-top:8px">${acts.map((a, i) => actHtml(a, i, k)).join('')}</div>
-        <div class="sq-go">${act(`✅ نفّذ (${acts.length})`, () => aiExec(k))}${act('إلغاء', () => { delete AI.pending[k]; botSay('تمام، ما عملتش حاجة 👍'); }, true)}</div>
+        <div class="sq-go">${act(`✅ نفّذ (${acts.length})`, () => aiExec(k))}${act('📋 نسخ للواتساب', () => copyIt(actsText(acts, data.reply)), true)}${act('إلغاء', () => { delete AI.pending[k]; botSay('تمام، ما عملتش حاجة 👍'); }, true)}</div>
         <div class="small sub" style="margin-top:4px">شيل علامة ✓ من أي سطر مش عايزه — أو اكتبلي التعديل وأنا أعيد.</div>`;
     }
+    if (!acts.length && data.reply) html += `<div style="margin-top:4px">${cpBtn(data.reply)}</div>`;
     botSay(html, acts.length ? 'happy' : null);
   }
   async function aiExec(k) {
