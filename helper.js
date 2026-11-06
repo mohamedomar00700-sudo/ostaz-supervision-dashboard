@@ -466,6 +466,16 @@
     if (date === today) return 'النهارده'; if (date === tm) return 'بكرة'; if (date === ys) return 'امبارح';
     const d = new Date(date + 'T12:00:00'); return d.toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric' });
   }
+  // وقت تسجيل الحصة: "النهارده 9:12 م" / "امبارح 4 م" / "الخميس 5/11 9:12 م"
+  function regAt(iso) {
+    const d = new Date(iso); if (isNaN(d)) return '';
+    const f = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d).reduce((o, p) => (o[p.type] = p.value, o), {});
+    const date = `${f.year}-${f.month}-${f.day}`, hm = `${f.hour === '24' ? '00' : f.hour}:${f.minute}`;
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+    const yest = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(Date.now() - 864e5));
+    const day = date === today ? 'النهارده' : date === yest ? 'امبارح' : `يوم ${new Intl.DateTimeFormat('ar-EG', { timeZone: 'Africa/Cairo', weekday: 'long' }).format(d)} ${Number(f.day)}/${Number(f.month)}`;
+    return `${day} الساعة ${t12(hm)}`;
+  }
   function t12(hm) { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h < 12 ? 'ص' : 'م'; h = h % 12 || 12; return `${h}${m ? ':' + String(m).padStart(2, '0') : ''} ${ap}`; }
   const dl = m => (typeof durLabel === 'function' ? durLabel(m) : m + ' د');
   function actHtml(a, i, k) {
@@ -519,7 +529,7 @@
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
-    if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}`).join('<br>')}</div>`;
+    if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}${x.at ? ' ' + regAt(x.at) : ''}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}`).join('<br>')}</div>`;
     if (acts.length) {
       const k = 'p' + (++AI.n); AI.pending[k] = { acts, text, reply: data.reply };
       html += `<div style="margin-top:8px">${acts.map((a, i) => actHtml(a, i, k)).join('')}</div>
