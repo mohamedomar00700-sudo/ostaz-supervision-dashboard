@@ -4714,7 +4714,7 @@ function renderBusiness() {
     <div class="kpis">
       ${bizKpi('نسبة الالتزام', z.commit == null ? '—' : Math.round(z.commit * 100) + '%', `إلغاء من الأسر ${z.cS} · من المعلمين ${z.cT}`, '', { icon: '📆', vcls: z.commit == null ? '' : z.commit >= .9 ? 'pos' : z.commit >= .75 ? 'warn-txt' : 'neg', click: "state.repView='ops'; renderReports()" })}
       ${bizKpi('تقارير الحصص', repRate == null ? '—' : Math.round(repRate * 100) + '%', repRate == null ? 'لسه مفيش معلمات على البوابة' : `${z.repDone} من ${z.repBase} حصة (آخر أسبوعين، معلمات البوابة)`, '', { icon: '📝', vcls: repRate == null ? '' : repRate >= .8 ? 'pos' : 'neg', click: 'openReports()' })}
-      ${bizKpi('تحويل الحصص التجريبية', z.trialDecided ? Math.round(z.trialWon / z.trialDecided * 100) + '%' : '—', `${z.trials} تجريبية في آخر 3 شهور${z.trialDecided ? ` · ${z.trialWon} كمّلوا` : ''}`, '', { icon: '🧪' })}
+      ${bizKpi('تحويل الحصص التجريبية', z.trialDecided ? Math.round(z.trialWon / z.trialDecided * 100) + '%' : '—', `${z.trials} تجريبية في آخر 3 شهور${z.trialDecided ? ` · ${z.trialWon} من ${z.trialDecided} كمّلوا` : ''}${z.trials - z.trialDecided ? ` · ${z.trials - z.trialDecided} لسه من غير نتيجة` : ''}`, '', { icon: '🧪' })}
       ${bizKpi('فلوس عند الأسر', isAdmin ? fmtK(z.recv) + ' ج' : String(z.owing.length), `${z.owing.length} أسرة عليها مستحقات`, '', { icon: '🧾', vcls: z.owing.length ? 'neg' : 'pos', click: "state.finTab='families'; state.finF_families='owing'; switchTab('fin')" })}
     </div>
     <p class="sub small mt no-print">كل الأرقام محسوبة لحظياً من الحصص المسجلة. "آخر 30 يوم" مقارنة بالـ30 يوم اللي قبلهم.</p>`;
