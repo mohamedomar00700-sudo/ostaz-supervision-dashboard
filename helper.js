@@ -534,7 +534,7 @@
       if (a.op === 'set_status') return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)}: ${STATUS_AR[a.status] || a.status}${a.cancel_reason ? ' (' + a.cancel_reason + ')' : ''}${a.status === 'done' && a.actual_minutes ? ' — ' + dl(a.actual_minutes) : ''}`;
       return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)} ← ${a.new_date || a.new_time ? dayLbl(a.new_date) + ' ' + t12(a.new_time) : ''}${a.new_tutor_name ? ' مع ' + a.new_tutor_name : ''}${a.patch?.duration_minutes ? ' ' + dl(a.patch.duration_minutes) : ''}`;
     });
-    return `🦅 صقّور — ${reply || ''}\n${L.join('\n')}`;
+    return `🦅 صقّور\n${L.join('\n')}`; // من غير كلام Gemini — الأسطر من الداتا نفسها عشان ما ينتقلش كلام غلط للجروب
   }
   async function aiAsk(text) {
     const row = document.createElement('div'); row.className = 'sq-row';
@@ -557,7 +557,9 @@
     AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
     const acts = data.actions || [];
     // لو كله متسجل ومفيش أي تغيير، ما نعرضش كلام Gemini اللي بيقول "هعدّل…" (بيلخبط)
-    if (!acts.length && data.already?.length && !data.questions?.length) data.reply = `كل الحصص دي متسجلة بالفعل ✅ — مفيش حاجة محتاجة تتسجل أو تتعدل.`;
+    // لو السيرفر رفض/صحّح حاجة (زي تغيير معلم غلط)، كلام Gemini ممكن يكون بيقول عكسها → نكتب ملخص من الكارت نفسه
+    if (data.warnings?.length && (acts.length || data.already?.length)) data.reply = acts.length ? `جهزتلك ${acts.length} ${acts.length === 1 ? 'عملية' : 'عمليات'} — راجع الكارت تحت (فيه تنبيهات ⚠️) قبل ما تنفّذ.` : 'مفيش حاجة محتاجة تتسجل — بص على التنبيهات ⚠️ تحت.';
+    if (!acts.length && data.already?.length && !data.questions?.length && !data.warnings?.length) data.reply = `كل الحصص دي متسجلة بالفعل ✅ — مفيش حاجة محتاجة تتسجل أو تتعدل.`;
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
