@@ -255,7 +255,8 @@ Deno.serve(async (req) => {
         });
         // متسجلة بالفعل؟ (نفس الطالب أو حصة أسرة لأخ مع نفس المعلم، في حدود ساعة، ومش ملغية) → ما نقترحهاش تاني
         const near = (win || []).filter(s => (s.student_id === st.id || ((s.family_block || a.family_block) && s.tutor_id === tuF.id && stuBy.get(s.student_id)?.family_id === st.family_id)) && !String(s.status).startsWith('cancelled') && Math.abs(new Date(s.scheduled_at).getTime() - new Date(r.scheduled_at).getTime()) <= 60 * 60e3);
-        const same = near.find(s => s.tutor_id === tuF.id) || near[0];
+        const sn2 = (x: string) => String(x || '').replace(/\s/g, '');
+        const same = near.find(s => s.tutor_id === tuF.id) || near.find(s => subject && sn2(s.subject) === sn2(subject)); // حصة تانية لنفس الطالب بمادة ومعلم مختلفين مش تكرار
         if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), at: same.created_at, session_id: same.id, differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }
         return r;
       }

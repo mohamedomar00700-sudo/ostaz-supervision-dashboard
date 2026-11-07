@@ -556,6 +556,21 @@
     }
     AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
     const acts = data.actions || [];
+    // حارس الأسعار بالمبلغ: سعر الأسرة دايماً صغير (حوالي 15–30 درهم/ريال)، وسعر المعلم بالجنيه (80–200).
+    // لو صقّور حط مبلغ كبير في سعر الأسرة أو مبلغ صغير في سعر المعلم → نصلّحه ونقول
+    const FAM_MAX = 60, TUT_MIN = 50;
+    acts.forEach(a => {
+      if (a.op !== 'add_session' || a.kind === 'trial') return;
+      const st = (typeof state !== 'undefined' && state.students || []).find(s => s.id === a.student_id);
+      const famDef = Number(st?.default_price) || null;
+      if (Number(a.student_price) >= FAM_MAX) {
+        const v = Number(a.student_price); a.tutor_cost_egp = v; if (famDef) a.student_price = famDef;
+        (data.warnings ||= []).push(`${a.student_name}: ${v} ده سعر معلم مش أسرة (مفيش أسرة بتدفع ${v} في الحصة) — حطيته للمعلم ${v} ج${famDef ? ' والأسرة ' + famDef + ' زي العادي' : ''}`);
+      } else if (Number(a.tutor_cost_egp) > 0 && Number(a.tutor_cost_egp) < TUT_MIN) {
+        const v = Number(a.tutor_cost_egp);
+        (data.warnings ||= []).push(`${a.student_name}: سعر المعلم ${v} ج قليل قوي — غالباً ده سعر الأسرة. راجعه قبل التنفيذ.`);
+      }
+    });
     // لو كله متسجل ومفيش أي تغيير، ما نعرضش كلام Gemini اللي بيقول "هعدّل…" (بيلخبط)
     // لو السيرفر رفض/صحّح حاجة (زي تغيير معلم غلط)، كلام Gemini ممكن يكون بيقول عكسها → نكتب ملخص من الكارت نفسه
     if (data.warnings?.length && (acts.length || data.already?.length)) data.reply = acts.length ? `جهزتلك ${acts.length} ${acts.length === 1 ? 'عملية' : 'عمليات'} — راجع الكارت تحت (فيه تنبيهات ⚠️) قبل ما تنفّذ.` : 'مفيش حاجة محتاجة تتسجل — بص على التنبيهات ⚠️ تحت.';
@@ -585,9 +600,11 @@
         if (a.op === 'add_session') {
           // حماية من التكرار: لو حد سجّل نفس الحصة بعد ما الكارت ده طلع (أو الكارت اتضغط مرتين)
           const t0 = new Date(a.scheduled_at).getTime();
-          const { data: ex } = await sb.from('sessions').select('id,status,scheduled_at').eq('student_id', a.student_id)
+          const { data: ex } = await sb.from('sessions').select('id,status,scheduled_at,tutor_id,subject').eq('student_id', a.student_id)
             .gte('scheduled_at', new Date(t0 - 60 * 60e3).toISOString()).lte('scheduled_at', new Date(t0 + 60 * 60e3).toISOString());
-          if ((ex || []).some(x => !String(x.status).startsWith('cancelled'))) { results.push({ op: a.op, ok: false, dup: true, who: a.student_name, err: 'متسجلة بالفعل — ما اتكررتش' }); continue; }
+          // مكررة بس لو نفس المعلم أو نفس المادة — رسمية رياضيات 5 وعلوم 6 حصتين مختلفتين
+          const sn = x => String(x || '').replace(/\s/g, '');
+          if ((ex || []).some(x => !String(x.status).startsWith('cancelled') && (x.tutor_id === a.tutor_id || sn(x.subject) === sn(a.subject)))) { results.push({ op: a.op, ok: false, dup: true, who: a.student_name, err: 'متسجلة بالفعل — ما اتكررتش' }); continue; }
           const row = { student_id: a.student_id, tutor_id: a.tutor_id, scheduled_at: a.scheduled_at, duration_minutes: a.duration_minutes, actual_minutes: a.actual_minutes, status: a.status,
             subject: a.subject, kind: a.kind, family_block: !!a.family_block, student_price: a.student_price, student_currency: a.student_currency, tutor_cost_egp: a.tutor_cost_egp,
             notes: '🦅 صقّور' + (a.note ? ': ' + a.note : ''), created_by: uid };
