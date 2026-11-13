@@ -521,7 +521,7 @@
     } else if (a.op === 'set_status') {
       h = `${a.status === 'done' ? '✅' : '❌'} ${who}<div class="small">${dayLbl(a.date)} ${t12(a.time)} ← <b>${STATUS_AR[a.status] || a.status}</b>${a.status === 'done' && a.actual_minutes && a.actual_minutes !== (a.old?.actual_minutes || a.old?.duration_minutes) ? ` · المدة ${dl(a.actual_minutes)}` : ''}${a.cancel_reason ? ' · ' + e(a.cancel_reason) : ''}</div>`;
     } else if (a.op === 'update_session') {
-      const ch = [a.new_date || a.new_time ? `الميعاد ← ${dayLbl(a.new_date)} ${t12(a.new_time)}` : '', a.patch?.duration_minutes ? `المدة ← ${dl(a.patch.duration_minutes)}` : '', a.new_tutor_name ? `المعلم ← ${e(a.new_tutor_name)}` : '', a.patch?.subject ? `المادة ← ${e(a.patch.subject)}` : ''].filter(Boolean).join(' · ');
+      const ch = [a.new_date || a.new_time ? `الميعاد ← ${dayLbl(a.new_date)} ${t12(a.new_time)}` : '', a.patch?.duration_minutes ? `المدة ← ${dl(a.patch.duration_minutes)}` : '', a.new_tutor_name ? `المعلم ← ${e(a.new_tutor_name)}` : '', a.patch?.subject ? `المادة ← ${e(a.patch.subject)}` : '', a.patch?.family_block ? '👪 تبقى حصة أسرة' : ''].filter(Boolean).join(' · ');
       h = `✏️ ${who}<div class="small">${dayLbl(a.date)} ${t12(a.time)} · ${ch}</div>`;
     }
     if (a.note) h += `<div class="small sub">📝 ${e(a.note)}</div>`;

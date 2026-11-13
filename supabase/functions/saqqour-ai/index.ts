@@ -264,25 +264,39 @@ Deno.serve(async (req) => {
           const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
           if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة. لو فعلاً معلمة جديدة شيل علامة ✓ واكتبها تاني وقول "معلمة جديدة".`); tu2 = alt; } }
         }
-        const tuF = tu2;
-        const fam = famBy.get(st.family_id); const p = pair.get(st.id + '|' + tuF.id);
+        let tuF = tu2, st2 = st;
+        // الطالب غلط؟ (Gemini حط حصة حمدة على رسمية مثلاً): لو الطالب ده عمره ما خد مع المعلم ده، وأخ واحد بس في نفس الأسرة بياخد معاه نفس المادة → نحطها على الأخ
+        if (!pair.has(st.id + '|' + tuF.id)) {
+          const sn0 = (x: string) => String(x || '').replace(/\s/g, '');
+          const sib = (students || []).filter(x => x.family_id === st.family_id && x.id !== st.id && pair.has(x.id + '|' + tuF.id) && (!a.subject || [...pair.get(x.id + '|' + tuF.id)!.subj].some(y => sn0(y) === sn0(a.subject))));
+          if (sib.length === 1 && text.includes(sib[0].name)) { warnings.push(`${tuF.name}: حطيت الحصة على ${sib[0].name} بدل ${st.name} لأن ${sib[0].name} هي اللي بتاخد معاها ${a.subject || ''}.`); st2 = sib[0] as any; }
+        }
+        const fam = famBy.get(st2.family_id); const p = pair.get(st2.id + '|' + tuF.id);
         const kind = a.kind === 'trial' || a.kind === 'revision' ? a.kind : 'regular';
         const dur = Number(a.duration_minutes) || (kind === 'trial' ? 30 : 60);
         const subject = a.subject || (p ? [...p.subj][0] : null) || null;
         const status = a.status === 'done' ? 'done' : 'scheduled';
         Object.assign(r, {
-          student_id: st.id, tutor_id: tuF.id, student_name: st.name, tutor_name: tuF.name, family_name: fam?.name || '',
+          student_id: st2.id, tutor_id: tuF.id, student_name: st2.name, tutor_name: tuF.name, family_name: fam?.name || '',
           subject, kind, family_block: !!a.family_block, scheduled_at: toIso(a.date, a.time), date: a.date, time: a.time,
           duration_minutes: dur, actual_minutes: status === 'done' ? (Number(a.actual_minutes) || dur) : null, status,
           student_currency: fam?.currency || 'AED',
-          student_price: kind === 'trial' ? 0 : (a.student_price != null ? Number(a.student_price) : Number(st.default_price ?? p?.price ?? 0)),
+          student_price: kind === 'trial' ? 0 : (a.student_price != null ? Number(a.student_price) : Number(st2.default_price ?? p?.price ?? 0)),
           tutor_cost_egp: a.tutor_rate_egp != null ? Number(a.tutor_rate_egp) : kind === 'trial' ? 0 : Number(p?.rate ?? tuF.default_rate_egp ?? 0),
         });
         // متسجلة بالفعل؟ (نفس الطالب أو حصة أسرة لأخ مع نفس المعلم، في حدود ساعة، ومش ملغية) → ما نقترحهاش تاني
-        const near = (win || []).filter(s => (s.student_id === st.id || ((s.family_block || a.family_block) && s.tutor_id === tuF.id && stuBy.get(s.student_id)?.family_id === st.family_id)) && !String(s.status).startsWith('cancelled') && Math.abs(new Date(s.scheduled_at).getTime() - new Date(r.scheduled_at).getTime()) <= 30 * 60e3);
+        const near = (win || []).filter(s => (s.student_id === st2.id || ((s.family_block || a.family_block) && s.tutor_id === tuF.id && stuBy.get(s.student_id)?.family_id === st2.family_id)) && !String(s.status).startsWith('cancelled') && Math.abs(new Date(s.scheduled_at).getTime() - new Date(r.scheduled_at).getTime()) <= 30 * 60e3);
         const sn2 = (x: string) => String(x || '').replace(/\s/g, '');
         const same = near.find(s => s.tutor_id === tuF.id) || near.find(s => subject && sn2(s.subject) === sn2(subject)); // حصة تانية لنفس الطالب بمادة ومعلم مختلفين مش تكرار
-        if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), at: same.created_at, session_id: same.id, differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }
+        if (same && same.tutor_id === tuF.id && same.status === 'scheduled' && ((!!a.family_block && !same.family_block) || (Number(a.duration_minutes) && same.duration_minutes !== dur))) {
+          // متسجلة بس ناقصها حاجة (حصة أسرة / المدة) → نقترح تعديلها بدل ما نقول "متسجلة بالفعل"
+          const c2 = cairoParts(new Date(same.scheduled_at)); const patch: any = {};
+          if (!!a.family_block && !same.family_block) patch.family_block = true;
+          if (Number(a.duration_minutes) && same.duration_minutes !== dur) patch.duration_minutes = dur;
+          return { op: 'update_session', note: r.note, session_id: same.id, student_name: stuBy.get(same.student_id)?.name || st2.name, tutor_name: tuF.name, subject: same.subject, date: c2.date, time: c2.time,
+            old: { status: same.status, scheduled_at: same.scheduled_at, duration_minutes: same.duration_minutes, actual_minutes: same.actual_minutes, tutor_id: same.tutor_id, subject: same.subject }, patch };
+        }
+        if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st2.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), at: same.created_at, session_id: same.id, differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }
         return r;
       }
       const sid = xId.get(a.session || ''); const s = sid && winBy.get(sid);
