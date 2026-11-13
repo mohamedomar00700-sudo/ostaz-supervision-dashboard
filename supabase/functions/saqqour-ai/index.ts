@@ -127,6 +127,9 @@ function systemPrompt(now: { date: string; time: string; weekday: string }, extr
 - reply بصيغة اقتراح ("هسجّل…"، "هعدّل…") مش "سجّلت"، لأن مفيش حاجة بتتنفذ قبل ما المشرفة تأكد.
 - في الأسئلة عن "مين بيدرّس" رد بالمعلم الحالي (آخر حصص)، ولو فيه أكتر من واحد قول مين آخر واحد.
 - أسماء الطلاب ممكن تشبه أسماء المعلمات (فطوم/فاطمة، شيماء، مريم…). الاسم اللي بعد "مع/مس/مستر/أ." هو المعلم، واللي في أول السطر هو الطالب. ولو المعلم مش واضح، اختار المعلم اللي بيدرّس الطالب ده المادة دي في "مين بيدرّس مين".
+- لو المادة ليها أكتر من معلم للطالب ده في "مين بيدرّس مين"، خد الأحدث (اللي فوق) من غير ما تسأل، إلا لو المشرفة سمّت معلم تاني.
+- "معلمة جديدة" أو اسم معلم مش في قايمة الطالب ده: لو المعلم موجود في قايمة المعلمين استخدمه عادي.
+- الجروبات: لو اتقال اسم جروب أو "جروب X" أو أسماء أعضاء جروب مع معلم الجروب → حصة واحدة في add_sessions لأي عضو واحد بس (family_block=false) والتطبيق بيسجّل باقي الأعضاء لوحده. ما تسألش مين في الجروب.
 - ممنوع تقول أي حاجة عن إيراد الأكاديمية أو هامش الربح.${extra ? '\n' + extra : ''}`;
 }
 
@@ -163,9 +166,11 @@ Deno.serve(async (req) => {
       admin.from('student_subjects').select('student_id,tutor_id,subject,tutor_rate_egp'),
       admin.from('sessions').select('student_id,tutor_id,subject,tutor_cost_egp,student_price,kind,scheduled_at,status')
         .in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at', { ascending: false }).limit(3000),
-      admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes,tutor_cost_egp,created_at')
+      admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes,tutor_cost_egp,created_at,group_name')
         .gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).neq('status', 'cancelled_by_academy').order('scheduled_at'),
     ]);
+    const { data: groupsRaw } = await admin.from('sessions').select('student_id,tutor_id,group_name,group_rate_egp,scheduled_at').not('group_key', 'is', null)
+      .gte('scheduled_at', new Date(now.getTime() - 400 * 864e5).toISOString()).neq('status', 'cancelled_by_academy').limit(2000);
     const famBy = new Map((families || []).map(f => [f.id, f]));
     const { data: sups } = await admin.from('supervisors').select('id,name');
     const supName = (id: string | null, notes?: string | null) => (id && (sups || []).find((x: any) => x.id === id)?.name) || (/صقّور/.test(notes || '') ? 'صقّور' : 'محمد عمر (الإدارة)');
@@ -175,17 +180,17 @@ Deno.serve(async (req) => {
 
     // أكواد قصيرة بدل الـ UUID (أوفر وما يخترعش)
     const sCode = new Map<string, string>(), sId = new Map<string, string>(), tCode = new Map<string, string>(), tId = new Map<string, string>(), xCode = new Map<string, string>(), xId = new Map<string, string>();
-    const stuList = (students || []).filter(s => activeStu.has(s.id));
+    const stuList = (students || []); // كل الطلاب (حتى اللي لسه ما خدوش حصص زي شيماء)
     stuList.forEach((s, i) => { sCode.set(s.id, 'S' + (i + 1)); sId.set('S' + (i + 1), s.id); });
-    const tutList = (tutors || []).filter(t => activeTut.has(t.id));
+    const tutList = (tutors || []);
     tutList.forEach((t, i) => { tCode.set(t.id, 'T' + (i + 1)); tId.set('T' + (i + 1), t.id); });
     (win || []).forEach((s, i) => { xCode.set(s.id, 'X' + (i + 1)); xId.set('X' + (i + 1), s.id); });
     const stuBy = new Map((students || []).map(s => [s.id, s])), tutBy = new Map((tutors || []).map(t => [t.id, t]));
 
     // مين بيدرّس مين + آخر سعر لكل طالب×معلم
-    const pair = new Map<string, { subj: Set<string>; rate?: number; price?: number }>();
+    const pair = new Map<string, { subj: Set<string>; rate?: number; price?: number; last?: string }>();
     (recent || []).forEach(r => { if (!r.student_id || !r.tutor_id) return; const k = r.student_id + '|' + r.tutor_id; const x = pair.get(k) || { subj: new Set() };
-      if (r.subject) x.subj.add(r.subject); if (x.rate == null && r.kind !== 'trial' && Number(r.tutor_cost_egp) > 0) x.rate = Number(r.tutor_cost_egp);
+      if (r.subject) x.subj.add(r.subject); if (!x.last || r.scheduled_at > x.last) x.last = r.scheduled_at; if (x.rate == null && r.kind !== 'trial' && Number(r.tutor_cost_egp) > 0) x.rate = Number(r.tutor_cost_egp);
       if (x.price == null && r.kind !== 'trial' && Number(r.student_price) > 0) x.price = Number(r.student_price); pair.set(k, x); });
     (plans || []).forEach(p => { if (!p.tutor_id) return; const k = p.student_id + '|' + p.tutor_id; const x = pair.get(k) || { subj: new Set() };
       if (p.subject) x.subj.add(p.subject); if (x.rate == null && p.tutor_rate_egp != null) x.rate = Number(p.tutor_rate_egp); pair.set(k, x); });
@@ -193,12 +198,18 @@ Deno.serve(async (req) => {
     const stuLines = stuList.map(s => `${sCode.get(s.id)}: ${s.name} — ${famBy.get(s.family_id)?.name || ''}${s.grade_level ? ' — ' + s.grade_level : ''}`).join('\n');
     const tutLines = tutList.map(t => `${tCode.get(t.id)}: ${t.name}`).join('\n');
     const pairLines = [...pair.entries()].filter(([k]) => { const [a, b] = k.split('|'); return sCode.has(a) && tCode.has(b); })
-      .map(([k, x]) => { const [a, b] = k.split('|'); return `${sCode.get(a)} ${stuBy.get(a)?.name} ← ${tCode.get(b)} ${tutBy.get(b)?.name}: ${[...x.subj].join('، ') || '؟'}`; }).join('\n');
+      .sort((p1, p2) => String(p2[1].last || '').localeCompare(String(p1[1].last || '')))
+      .map(([k, x]) => { const [a, b] = k.split('|'); return `${sCode.get(a)} ${stuBy.get(a)?.name} ← ${tCode.get(b)} ${tutBy.get(b)?.name}: ${[...x.subj].join('، ') || '؟'}${x.last ? ' — آخر حصة ' + cairoParts(new Date(x.last)).date : ' — (خطة)'}`; }).join('\n');
+    // الجروبات (كل طالب بيدفع لوحده والمعلم بسعر الجروب)
+    const grp = new Map<string, { name: string; tutor: string; members: Set<string>; rate: number; last: string }>();
+    (groupsRaw || []).forEach((g: any) => { const k = (g.group_name || '') + '|' + g.tutor_id; const x = grp.get(k) || { name: g.group_name || 'جروب', tutor: g.tutor_id, members: new Set(), rate: Number(g.group_rate_egp || 0), last: g.scheduled_at };
+      x.members.add(g.student_id); if (g.scheduled_at > x.last) x.last = g.scheduled_at; grp.set(k, x); });
+    const grpLines = [...grp.values()].map(g => `${g.name} مع ${tCode.get(g.tutor) || '?'} ${tutBy.get(g.tutor)?.name || ''}: ${[...g.members].map(m => (sCode.get(m) || '?') + ' ' + (stuBy.get(m)?.name || '')).join(' + ')}`).join('\n');
     const STAT: Record<string, string> = { scheduled: 'مجدولة', done: 'تمت', cancelled_by_student: 'ملغية (طالب)', cancelled_by_tutor: 'ملغية (معلم)', in_progress: 'جارية' };
     const winLines = (win || []).map(s => { const c = cairoParts(new Date(s.scheduled_at));
-      return `${xCode.get(s.id)}: ${c.date} (${AR_DAYS[c.weekday] || ''}) ${c.time} — ${sCode.get(s.student_id) || '?'} ${stuBy.get(s.student_id)?.name || ''} مع ${tCode.get(s.tutor_id) || '?'} ${tutBy.get(s.tutor_id)?.name || ''} — ${s.subject || ''} — ${s.actual_minutes || s.duration_minutes} د — ${STAT[s.status] || s.status}${s.kind === 'trial' ? ' — تجريبية' : ''}${s.family_block ? ' — حصة أسرة' : ''}`; }).join('\n');
+      return `${xCode.get(s.id)}: ${c.date} (${AR_DAYS[c.weekday] || ''}) ${c.time} — ${sCode.get(s.student_id) || '?'} ${stuBy.get(s.student_id)?.name || ''} مع ${tCode.get(s.tutor_id) || '?'} ${tutBy.get(s.tutor_id)?.name || ''} — ${s.subject || ''} — ${s.actual_minutes || s.duration_minutes} د — ${STAT[s.status] || s.status}${s.kind === 'trial' ? ' — تجريبية' : ''}${s.family_block ? ' — حصة أسرة' : ''}${s.group_name ? ' — ' + s.group_name : ''}`; }).join('\n');
 
-    const dataBlock = `# الطلاب\n${stuLines}\n\n# المعلمين\n${tutLines}\n\n# مين بيدرّس مين (آخر 45 يوم + الخطط)\n${pairLines}\n\n# حصص الفترة (من 4 أيام لـ 9 أيام جاية)\n${winLines || '—'}`;
+    const dataBlock = `# الطلاب\n${stuLines}\n\n# المعلمين\n${tutLines}\n\n# مين بيدرّس مين (الأحدث فوق — آخر 45 يوم + الخطط)\n${pairLines}\n\n# الجروبات\n${grpLines || '—'}\n\n# حصص الفترة (من 4 أيام لـ 9 أيام جاية)\n${winLines || '—'}`;
 
     const contents = [
       { role: 'user', parts: [{ text: dataBlock }] },
@@ -206,22 +217,34 @@ Deno.serve(async (req) => {
       ...history.map(h => ({ role: h.role === 'model' ? 'model' : 'user', parts: [{ text: String(h.text || '').slice(0, 3000) }] })),
       { role: 'user', parts: [{ text }] },
     ];
-    const models = [Deno.env.get('GEMINI_MODEL'), 'gemini-flash-latest', ...(await flashModels(key))].filter((m, i, a) => m && a.indexOf(m) === i) as string[];
+    // آخر موديل نجح الأول (متخزن في app_secrets) — الموديلات الأحدث عليها ضغط (503) أو حد مجاني (429)
+    const models = [Deno.env.get('GEMINI_MODEL'), S.saqqour_model, ...(await flashModels(key)), 'gemini-flash-latest'].filter((m, i, a) => m && a.indexOf(m) === i) as string[];
     if (body.list_models) return json({ models });
     let out: any = null, lastErr = '';
-    for (const m of models.slice(0, 4)) {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt(nowC, S.saqqour_rules || '') }] }, contents,
-          generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: SCHEMA } }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { lastErr = j?.error?.message || `HTTP ${r.status}`; if (r.status === 404 || r.status === 429 || r.status >= 500 || /model|not (found|available|supported)/i.test(lastErr)) continue; break; }
+    const t0 = Date.now();
+    for (const m of models.slice(0, 6)) {
+      const left = 120000 - (Date.now() - t0); if (left < 15000) { lastErr = lastErr || 'Gemini بطيء جداً دلوقتي'; break; }
+      const think = /gemini-3/.test(m) || m === 'gemini-flash-latest' ? { thinkingLevel: 'low' } : /2\.5-flash/.test(m) ? { thinkingBudget: 0 } : null;
+      let r: Response, j: any;
+      for (const useThink of think ? [true, false] : [false]) {
+        try {
+          r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, signal: AbortSignal.timeout(Math.min(35000, left)),
+            body: JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt(nowC, S.saqqour_rules || '') }] }, contents,
+              generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: SCHEMA, ...(useThink ? { thinkingConfig: think } : {}) } }),
+          });
+          j = await r.json().catch(() => ({}));
+        } catch (e) { r = new Response(null, { status: 504 }); j = { error: { message: 'timeout ' + m } }; }
+        if (useThink && r.status === 400 && /think/i.test(j?.error?.message || '')) continue; // الموديل مش بيدعم الإعداد ده → جرّب من غيره
+        break;
+      }
+      if (!r!.ok) { lastErr = j?.error?.message || `HTTP ${r!.status}`; console.error('saqqour gemini', m, r!.status, lastErr.slice(0, 200)); if (r!.status === 404 || r!.status === 429 || r!.status >= 500 || /model|not (found|available|supported)|overload|unavailable/i.test(lastErr)) continue; break; }
       const t = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || '';
       try { out = JSON.parse(t); } catch { lastErr = 'رد مش مفهوم من Gemini'; }
+      if (out && m !== S.saqqour_model) admin.from('app_secrets').upsert({ key: 'saqqour_model', value: m }).then(() => {}, () => {});
       break;
     }
-    if (!out) return json({ error: /quota|rate|exhaust/i.test(lastErr) ? 'وصلنا للحد المجاني بتاع Gemini دلوقتي — جرّب كمان شوية' : 'Gemini: ' + lastErr }, 502);
+    if (!out) return json({ error: /quota|rate|exhaust/i.test(lastErr) ? 'وصلنا للحد المجاني بتاع Gemini دلوقتي — جرّب كمان شوية' : /timeout|بطيء|overload|unavailable|high demand/i.test(lastErr) ? 'جوجل (Gemini) مضغوط دلوقتي ومش بيرد — ابعت تاني كمان دقيقة' : 'Gemini: ' + lastErr }, 502);
 
     // ---------- تحقق + تكملة الأسعار والقيم ----------
     const warnings: string[] = []; const already: any[] = [];
@@ -234,7 +257,9 @@ Deno.serve(async (req) => {
         if (!st || !tu || !a.date || !a.time) { warnings.push(`حصة ناقصة بيانات اتشالت (${a.student || '?'} / ${a.tutor || '?'} / ${a.date || '?'} ${a.time || '?'})`); return null; }
         let tu2 = tu;
         // أولوية المعلم اللي متسجل مع الطالب قبل كده: لو المعلم ده عمره ما درّس الطالب وفيه معلم تاني بيدرّسه نفس المادة → نختار المعلم المعتاد
-        if (!pair.has(st.id + '|' + tu.id)) {
+        const tuShort = String(tu.name).replace(/^(أ|د)\.\s*/, '').replace(/\s*\(.*?\)/g, '').trim();
+        const saidNew = /جديد/.test(text) || (tuShort.split(/\s+/).length > 1 && text.includes(tuShort)); // "معلمة جديدة" أو الاسم الكامل اتكتب صراحة
+        if (!pair.has(st.id + '|' + tu.id) && !saidNew) {
           const sn = (x: string) => String(x || '').replace(/\s/g, '');
           const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
           if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة. لو فعلاً معلمة جديدة شيل علامة ✓ واكتبها تاني وقول "معلمة جديدة".`); tu2 = alt; } }
@@ -254,7 +279,7 @@ Deno.serve(async (req) => {
           tutor_cost_egp: a.tutor_rate_egp != null ? Number(a.tutor_rate_egp) : kind === 'trial' ? 0 : Number(p?.rate ?? tuF.default_rate_egp ?? 0),
         });
         // متسجلة بالفعل؟ (نفس الطالب أو حصة أسرة لأخ مع نفس المعلم، في حدود ساعة، ومش ملغية) → ما نقترحهاش تاني
-        const near = (win || []).filter(s => (s.student_id === st.id || ((s.family_block || a.family_block) && s.tutor_id === tuF.id && stuBy.get(s.student_id)?.family_id === st.family_id)) && !String(s.status).startsWith('cancelled') && Math.abs(new Date(s.scheduled_at).getTime() - new Date(r.scheduled_at).getTime()) <= 60 * 60e3);
+        const near = (win || []).filter(s => (s.student_id === st.id || ((s.family_block || a.family_block) && s.tutor_id === tuF.id && stuBy.get(s.student_id)?.family_id === st.family_id)) && !String(s.status).startsWith('cancelled') && Math.abs(new Date(s.scheduled_at).getTime() - new Date(r.scheduled_at).getTime()) <= 30 * 60e3);
         const sn2 = (x: string) => String(x || '').replace(/\s/g, '');
         const same = near.find(s => s.tutor_id === tuF.id) || near.find(s => subject && sn2(s.subject) === sn2(subject)); // حصة تانية لنفس الطالب بمادة ومعلم مختلفين مش تكرار
         if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), at: same.created_at, session_id: same.id, differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }

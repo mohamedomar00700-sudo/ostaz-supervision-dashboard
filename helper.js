@@ -545,13 +545,13 @@
     for (let tryN = 0; tryN < 2; tryN++) { // لو النت/السيرفر وقع مرة نجرّب تاني تلقائي
       data = null; error = null;
       try { ({ data, error } = await sb.functions.invoke('saqqour-ai', { body: { text, history: AI.hist } })); } catch (err) { error = err; }
-      if (!(error && /Failed to send|fetch|network|502|504/i.test(String(error.message || error) + (error.context?.status || '')))) break;
+      if (!(error && (/Failed to send|fetch|network/i.test(String(error.message || error)) || [502, 503, 504, 546].includes(Number(error.context?.status))))) break;
     }
     row.remove(); hs && hs.classList.remove('sq-think');
     if (error || !data || data.error) {
       let msg = data?.error || error?.message || 'حصلت مشكلة';
       try { const j = await error?.context?.json?.(); if (j?.error) msg = j.error; } catch (_) {}
-      if (/Failed to send/i.test(msg)) msg = 'السيرفر ما ردّش المرة دي (غالباً جوجل كان بطيء) — ابعت الرسالة تاني';
+      if (/Failed to send|non-2xx/i.test(msg)) msg = 'جوجل (Gemini) اتأخر في الرد وجرّبت تاني ومنفعش — ابعت الرسالة تاني كمان دقيقة';
       botSay(`معلش 😅 ${e(msg)}`); return;
     }
     AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
@@ -601,7 +601,7 @@
           // حماية من التكرار: لو حد سجّل نفس الحصة بعد ما الكارت ده طلع (أو الكارت اتضغط مرتين)
           const t0 = new Date(a.scheduled_at).getTime();
           const { data: ex } = await sb.from('sessions').select('id,status,scheduled_at,tutor_id,subject').eq('student_id', a.student_id)
-            .gte('scheduled_at', new Date(t0 - 60 * 60e3).toISOString()).lte('scheduled_at', new Date(t0 + 60 * 60e3).toISOString());
+            .gte('scheduled_at', new Date(t0 - 30 * 60e3).toISOString()).lte('scheduled_at', new Date(t0 + 30 * 60e3).toISOString()); // نفس الحصة = نفس المعلم/المادة في حدود نص ساعة (مايد 10 و11 حصتين)
           // مكررة بس لو نفس المعلم أو نفس المادة — رسمية رياضيات 5 وعلوم 6 حصتين مختلفتين
           const sn = x => String(x || '').replace(/\s/g, '');
           if ((ex || []).some(x => !String(x.status).startsWith('cancelled') && (x.tutor_id === a.tutor_id || sn(x.subject) === sn(a.subject)))) { results.push({ op: a.op, ok: false, dup: true, who: a.student_name, err: 'متسجلة بالفعل — ما اتكررتش' }); continue; }
