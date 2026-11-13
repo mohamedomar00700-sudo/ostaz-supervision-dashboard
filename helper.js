@@ -608,8 +608,23 @@
           const row = { student_id: a.student_id, tutor_id: a.tutor_id, scheduled_at: a.scheduled_at, duration_minutes: a.duration_minutes, actual_minutes: a.actual_minutes, status: a.status,
             subject: a.subject, kind: a.kind, family_block: !!a.family_block, student_price: a.student_price, student_currency: a.student_currency, tutor_cost_egp: a.tutor_cost_egp,
             notes: '🦅 صقّور' + (a.note ? ': ' + a.note : ''), created_by: uid };
-          const { data, error } = await sb.from('sessions').insert(row).select('id').single(); if (error) throw error;
-          results.push({ op: a.op, id: data.id, ok: true });
+          // جروب؟ لو آخر حصة للطالب ده مع نفس المعلم كانت جروب → نسجّل الحصة لكل أعضاء الجروب (كل واحد بسعره، والمعلم بسعر الجروب)
+          const { data: lg } = await sb.from('sessions').select('group_key,group_name,group_rate_egp').eq('student_id', a.student_id).eq('tutor_id', a.tutor_id)
+            .not('group_key', 'is', null).neq('status', 'cancelled_by_academy').order('scheduled_at', { ascending: false }).limit(1);
+          if (lg && lg[0] && lg[0].group_rate_egp != null) {
+            const { data: mem } = await sb.from('sessions').select('student_id,student_price,student_currency').eq('group_key', lg[0].group_key);
+            const byStu = new Map(); (mem || []).forEach(m => byStu.set(m.student_id, m)); if (!byStu.has(a.student_id)) byStu.set(a.student_id, { student_id: a.student_id, student_price: a.student_price, student_currency: a.student_currency });
+            const gk = (crypto.randomUUID ? crypto.randomUUID() : ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
+            const n = byStu.size, rate = Number(lg[0].group_rate_egp);
+            const rows = [...byStu.values()].map(m => ({ ...row, student_id: m.student_id, student_price: m.student_price, student_currency: m.student_currency || row.student_currency,
+              family_block: false, group_key: gk, group_name: lg[0].group_name, group_rate_egp: rate, tutor_cost_egp: Math.round(rate / n * 100) / 100,
+              notes: row.notes + ` (${lg[0].group_name || 'جروب'})` }));
+            const { data: ins, error } = await sb.from('sessions').insert(rows).select('id'); if (error) throw error;
+            (ins || []).forEach(x => results.push({ op: a.op, id: x.id, ok: true })); ok += (ins || []).length - 1;
+          } else {
+            const { data, error } = await sb.from('sessions').insert(row).select('id').single(); if (error) throw error;
+            results.push({ op: a.op, id: data.id, ok: true });
+          }
         } else if (a.op === 'set_status') {
           const patch = { status: a.status };
           if (a.status === 'done') patch.actual_minutes = a.actual_minutes;
