@@ -2008,7 +2008,8 @@ function renderFinance() {
     const famPaid = {}; tx.forEach(t => famPaid[t.family_id] = (famPaid[t.family_id] || 0) + (t.type === 'refund' ? -1 : 1) * Number(t.amount));
     const F = state.finF_families || 'active';
     const AK = state.finAsOf || '', asOf = AK ? dueAsOf(AK) : null, asOfWait = !!AK && !asOf;
-    const balOf = f => asOf ? (asOf[f.id] || { paid: 0, consumed: 0, balance: 0 }) : famBalance(f);
+    // في عرض "لحد آخر شهر": الدفعات اللي بعد آخر الشهر بتغطي حصص الشهر الجديد، فما تتحسبش رصيد "ليها" — بس نشوف مين لسه عليه
+    const balOf = f => { if (!asOf) return famBalance(f); const r = asOf[f.id] || { paid: 0, consumed: 0, balance: 0 }; return r.balance > 0 ? { ...r, balance: 0 } : r; };
     const all = state.families.map(f => ({ f, p: famPeriod[f.id] || { charge: 0, mins: 0 }, paid: famPaid[f.id] || 0, b: balOf(f) }));
     const tabByCur = {}; all.filter(x => x.b.balance < -0.01).forEach(x => tabByCur[x.f.currency] = (tabByCur[x.f.currency] || 0) - x.b.balance);
     const tabEgp = Object.entries(tabByCur).reduce((a, [cu, v]) => a + v * fxRate(cu), 0);
