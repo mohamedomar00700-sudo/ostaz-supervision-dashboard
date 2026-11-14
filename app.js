@@ -2683,6 +2683,41 @@ function openTutorSchedules() {
     : '<div class="empty">مفيش حصص مجدولة في اليوم ده.</div>');
 }
 
+// جدول اليوم لكل أسرة (بتوقيت بلدها) — كل حصص الأولاد في رسالة واحدة مع لينك كل حصة
+function familyDayMessage(fam, list) {
+  const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
+  const occ = occurrences([...list].sort((a, b) => sStart(a) - sStart(b)));
+  const lines = occ.map(s => {
+    const who = s._members ? `👥 ${s.group_name || 'مجموعة'} (${groupNames(s._members)})` : s.family_block ? famKids(fam).join(' و') : (byId(state.students, s.student_id)?.name || '');
+    return `• ${fmtTime(s.scheduled_at, c.tz)} — ${who}${s.subject ? ': ' + s.subject : ''} (${durLabel(s.duration_minutes || 60)})${s.kind === 'trial' ? ' — 🧪 تجريبية مجانية' : s.kind === 'revision' ? ' — 📝 مراجعة' : ''}
+   🔗 ${s.meeting_link ? linkHref(s.meeting_link) : 'هنبعت الرابط قبل الحصة'}`;
+  }).join('\n');
+  return `السلام عليكم ورحمة الله 🌷
+جدول حصص ${relDayLabel(occ[0].scheduled_at, c.tz)} (${fmtDate(occ[0].scheduled_at, c.tz)}) بتوقيت ${c.tzName}:
+
+${lines}
+
+برجاء الدخول قبل الموعد بدقيقتين 🙏 ولو فيه أي اعتذار أو تعديل بلّغونا هنا بدري عشان نرتّب مع المعلمة.
+${SIGN_F}`;
+}
+function openFamilySchedules() {
+  const list = state.daySessions.filter(s => s.status === 'scheduled' || s.status === 'in_progress');
+  const byFam = {};
+  list.forEach(s => { const f = sessionView(s).fam; if (f) (byFam[f.id] ||= []).push(s); });
+  const noLink = occurrences(list).filter(s => !s.meeting_link);
+  const dayIso = parseDay(state.day).toISOString();
+  const blocks = Object.entries(byFam).sort((a, b) => Math.min(...a[1].map(sStart)) - Math.min(...b[1].map(sStart))).map(([fid, ss]) => {
+    const f = byId(state.families, fid);
+    return msgBlock(`${f?.name || ''} — ${occurrences(ss).length} حصة`, familyDayMessage(f, ss),
+      { group: f?.whatsapp_group, phone: f?.whatsapp, country: f?.country, editFamily: fid });
+  });
+  openModal(`جداول الأسر — ${fmtDate(dayIso)}`, blocks.length
+    ? `<p class="sub small">رسالة واحدة لكل أسرة فيها كل حصص ولادها في اليوم ده بتوقيت بلدها، ولينك كل حصة — من غير أي اسم أو رقم معلمة. راجع الجدول الأول قبل ما تبعت.</p>
+       ${noLink.length ? `<div class="card item mb neg small">⚠️ ${noLink.length} حصة من غير لينك: ${noLink.map(s => esc(occWho(s))).join('، ')} — الرسالة هتقول "هنبعت الرابط قبل الحصة".</div>` : ''}
+       <div class="list">${blocks.join('')}</div>`
+    : '<div class="empty">مفيش حصص مجدولة في اليوم ده.</div>');
+}
+
 // جدول الأسبوع لكل أسرة (بتوقيت بلدها)
 function familyWeekMessage(fam, list) {
   const c = COUNTRIES[fam.country] || COUNTRIES['مصر'];
