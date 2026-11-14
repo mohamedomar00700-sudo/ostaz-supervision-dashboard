@@ -2700,7 +2700,7 @@ ${lines}
 برجاء الدخول قبل الموعد بدقيقتين 🙏 ولو فيه أي اعتذار أو تعديل بلّغونا هنا بدري عشان نرتّب مع المعلمة.
 ${SIGN_F}`;
 }
-function openFamilySchedules() {
+function openFamilyDaySchedules() {
   const list = state.daySessions.filter(s => s.status === 'scheduled' || s.status === 'in_progress');
   const byFam = {};
   list.forEach(s => { const f = sessionView(s).fam; if (f) (byFam[f.id] ||= []).push(s); });
