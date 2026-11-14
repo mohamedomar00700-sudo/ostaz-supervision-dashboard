@@ -463,6 +463,7 @@ function setDayMode(m) {
 }
 
 function renderDaily() {
+  if (!window._occT || Date.now() - window._occT > 6e5) { window._occT = Date.now(); occBadge(); }
   document.getElementById('day-input').value = state.day;
   const all = state.daySessions;
   document.getElementById('filters').innerHTML = DAY_FILTERS.map(f => {
@@ -724,8 +725,185 @@ ${SIGN_T}`, { group: tu?.whatsapp_group, phone: tu?.phone, editTutor: tu?.id }))
   }
   const makeup = !permanent && cs.party !== 'cancelled_by_student'
     ? `<button class="btn btn-brand" onclick="openSessionForm(null, {student_id:${jsq(s.student_id)}, tutor_id:${jsq(s.tutor_id)}, subject:${jsq(s.subject || '')}, makeup_of:${jsq(s.id)}, duration:${s.duration_minutes || 60}})">📅 احجز حصة تعويضية</button>` : '';
-  openModal(`تم الإلغاء ✓ (${list.length} ${list.length > 1 ? 'حصص' : 'حصة'})`, `<p class="sub">بلّغ الطرف التاني:</p><div class="list">${blocks.join('')}</div>${makeup ? `<div class="modal-foot">${makeup}</div>` : ''}`);
+  const occTarget = cs.party === 'cancelled_by_tutor' ? 'tutor' : cs.party === 'cancelled_by_student' ? 'family' : null;
+  const occKind = cs.reason === 'مرض' ? 'sick' : cs.reason === 'مناسبة عائلية' || cs.reason === 'ظرف طارئ' ? 'custom' : null;
+  const occBtn = occTarget && occKind ? `<button class="btn btn-ghost" onclick="openOccasionForm({target:'${occTarget}', person:${jsq(occTarget === 'tutor' ? tu?.id : fam?.id)}, kind:'${occKind}', session:${jsq(s.id)}, student:${jsq(occTarget === 'family' ? s.student_id : '')}})">💐 ${occKind === 'sick' ? 'ابعت رسالة سلامة' : 'ابعت رسالة للمناسبة'}</button>` : '';
+  openModal(`تم الإلغاء ✓ (${list.length} ${list.length > 1 ? 'حصص' : 'حصة'})`, `<p class="sub">بلّغ الطرف التاني:</p><div class="list">${blocks.join('')}</div>${makeup || occBtn ? `<div class="modal-foot" style="flex-wrap:wrap">${makeup}${occBtn}</div>` : ''}`);
   document.querySelectorAll('.msg-item').forEach(d => d.open = true);
+}
+
+/* ============================================================
+   💐 المناسبات: سلامتك / مبروك / كل سنة وإنتو طيبين
+   - اللي على التطبيق: الكارت بيظهرله أول ما يفتح (مرة واحدة، لحد ما يدوس شكراً)
+   - اللي مش على التطبيق: الرسالة بتظهر هنا جاهزة نبعتها على الجروب
+   ============================================================ */
+const OCC_KINDS = {
+  sick: { l: '🤒 تعب / مرض', emoji: '💐' }, engagement: { l: '💍 خطوبة', emoji: '💍' }, wedding: { l: '💐 جواز', emoji: '💐' },
+  newborn: { l: '👶 مولود', emoji: '👶' }, condolence: { l: '🤍 عزاء', emoji: '🤍' }, success: { l: '🎉 نجاح / تفوق', emoji: '🎉' },
+  exams: { l: '📚 امتحانات', emoji: '📚' }, custom: { l: '✍️ رسالة حرة', emoji: '🌷' },
+};
+function occTpl(kind, target, { male = false, name = '' } = {}) {
+  const g = (f, m) => (target === 'tutor' && male ? m : f);
+  const T = target === 'tutor';
+  const nm = name ? ` ${name}` : '';
+  const t = {
+    sick: T ? { title: `ألف سلامة ${g('عليكي', 'عليك')}${nm ? ' يا' + nm : ''}`, message: `ربنا ${g('يشفيكي ويعافيكي ويقومك', 'يشفيك ويعافيك ويقومك')} لنا بألف سلامة 🤲\nما ${g('تشغليش', 'تشغلش')} بالك خالص بالحصص، إحنا مرتبين كل حاجة مع الأسر، وأهم حاجة صحتك وراحتك.\nمستنيينك ${g('ترجعي', 'ترجع')} بالسلامة 🌷` }
+               : { title: `ألف سلامة على${nm || ' البطل'}`, message: `ربنا يشفي ويعافي ويطمنكم 🤲\nالحصص مش مهمة دلوقتي خالص، أهم حاجة الصحة — ولما يرجع بالسلامة نرتب التعويض براحتكم.` },
+    engagement: { title: 'ألف مبروك الخطوبة', message: T ? `ربنا يتمم${g('لك', 'لك')} على خير ويجعلها بداية سعيدة، وعقبال الفرح يا رب 🎉\nكل فريق أستاذ أونلاين فرحانين جداً ${g('بيكي', 'بيك')} 💐` : `ربنا يتمم على خير ويسعد قلوبكم، وعقبال الفرح يا رب 🎉` },
+    wedding: { title: 'ألف ألف مبروك', message: T ? `بالرفاء والبنين 💐 ربنا يسعدكم ويبارك لكم ويجمع بينكم في خير.\n${g('خدي', 'خد')} وقتك ${g('واتهني', 'واتهنى')}، والحصص إحنا مرتبينها 🌷` : `بالرفاء والبنين 💐 ربنا يتمم فرحتكم على خير ويسعدكم دايماً.` },
+    newborn: { title: 'ألف مبروك المولود', message: `يتربى في عزكم 👶 ربنا يجعله من الذرية الصالحة ويقر عينكم بيه، وحمد الله على السلامة 🤍` },
+    condolence: { title: 'البقاء لله', message: `خالص العزاء 🤍 ربنا يرحم فقيدكم ويغفر له ويسكنه فسيح جناته، ويربط على قلوبكم بالصبر.\n${T ? `ما ${g('تشغليش', 'تشغلش')} بالك بأي حاجة، إحنا جنبك.` : 'ما تشغلوش بالكم بأي حاجة، إحنا جنبكم.'}` },
+    success: { title: `ألف مبروك${nm ? ' يا' + nm : ''}!`, message: T ? `فرحانين جداً بالخبر الحلو ده 🎉 وعقبال كل نجاح يا رب.` : `فرحانين جداً بنجاح${nm || ' البطل'} وتعبه اللي ما راحش هدر 👏\nوعقبال كل خطوة جاية يا رب 🎉` },
+    exams: { title: `بالتوفيق${nm ? ' يا' + nm : ''} في الامتحانات`, message: `ربنا يوفق ويسدد ويفتح عليكم 🤲\nذاكر بهدوء، وإن شاء الله تفرحونا بالنتيجة 📚✨` },
+    custom: { title: '', message: '' },
+  }[kind] || { title: '', message: '' };
+  return { emoji: OCC_KINDS[kind]?.emoji || '🌷', ...t };
+}
+// المناسبات العامة — التواريخ الهجرية تقريبية: راجع التاريخ قبل التجهيز
+const OCC_CAL = [
+  { key: 'uae_national', l: '🇦🇪 عيد الاتحاد الإماراتي', md: '12-02', who: { families: ['الإمارات'] }, emoji: '🇦🇪', title: 'عيد اتحاد سعيد', msg: 'كل عام والإمارات وأهلها بخير 🇦🇪\nربنا يديم عليكم الأمن والخير والفرحة.' },
+  { key: 'ksa_founding', l: '🇸🇦 يوم التأسيس السعودي', md: '02-22', who: { families: ['السعودية'] }, emoji: '🇸🇦', title: 'يوم تأسيس سعيد', msg: 'كل عام والمملكة وأهلها بخير 🇸🇦\nربنا يديم عليكم الأمن والخير والبركة.' },
+  { key: 'ksa_national', l: '🇸🇦 اليوم الوطني السعودي', md: '09-23', who: { families: ['السعودية'] }, emoji: '🇸🇦', title: 'يوم وطني سعيد', msg: 'كل عام والمملكة وأهلها بخير 🇸🇦\nربنا يديم عليكم الأمن والخير والفرحة.' },
+  { key: 'teachers_day', l: '📚 يوم المعلم', md: '10-05', who: { tutors: true }, emoji: '📚', title: 'كل سنة وإنتي طيبة في يوم المعلم', msg: 'شكراً على تعبك ومجهودك وصبرك مع ولادنا 💐\nإنتي سبب كل نجاح بنفرح بيه، وإحنا فخورين إنك معانا 🤍' },
+  { key: 'ramadan', l: '🌙 رمضان', dates: { 2027: '2027-02-08', 2028: '2028-01-28' }, approx: true, who: { tutors: true, families: 'all' }, emoji: '🌙', title: 'رمضان كريم', msg: 'كل سنة وإنتو طيبين 🌙\nربنا يبلغكم رمضان ويتقبل منكم الصيام والقيام، ويعيده عليكم بالخير والبركة.' },
+  { key: 'eid_fitr', l: '🎉 عيد الفطر', dates: { 2027: '2027-03-10', 2028: '2028-02-26' }, approx: true, who: { tutors: true, families: 'all' }, emoji: '🎉', title: 'عيد فطر مبارك', msg: 'كل عام وأنتم بخير 🎉\nتقبل الله منا ومنكم، وأعاده عليكم بالفرحة والصحة والبركة.' },
+  { key: 'eid_adha', l: '🐑 عيد الأضحى', dates: { 2027: '2027-05-16', 2028: '2028-05-05' }, approx: true, who: { tutors: true, families: 'all' }, emoji: '🐑', title: 'عيد أضحى مبارك', msg: 'كل عام وأنتم بخير 🤍\nتقبل الله منا ومنكم، وأعاده عليكم بالخير واليُمن والبركة.' },
+];
+function occUpcoming(days = 75) {
+  const now = new Date(), out = [];
+  for (const c of OCC_CAL) {
+    for (const y of [now.getFullYear(), now.getFullYear() + 1]) {
+      const d = c.md ? `${y}-${c.md}` : c.dates?.[y]; if (!d) continue;
+      const t = new Date(d + 'T00:00:00'); const diff = (t - now) / 864e5;
+      if (diff > -2 && diff <= days) out.push({ ...c, date: d, year: y, campaign: `${c.key}_${y}` });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+const occMale = t => MALE_TUTOR.test(tutBareName(t));
+const occWaText = o => `${o.emoji || '🌷'} *${o.title}*\n\n${o.message}\n\n${o.target === 'tutor' ? SIGN_T : SIGN_F}`;
+const occPerson = o => o.target === 'tutor' ? (byId(state.tutors, o.tutor_id)?.name || '') : (byId(state.families, o.family_id)?.name || '');
+
+async function occBadge() {
+  const b = document.getElementById('btn-occ'); if (!b) return;
+  try { const due = await q(sb.from('occasions').select('id', { count: 'exact' }).lte('follow_up_at', new Date().toISOString()).eq('follow_up_done', false));
+    b.innerHTML = `💐 المناسبات${due.length ? ` <span class="count">${due.length}</span>` : ''}`; } catch (e) {}
+}
+
+async function openOccasions() {
+  openModal('💐 المناسبات', '<div class="empty">بيحمّل…</div>');
+  let rows = [], links = [];
+  try {
+    [rows, links] = await Promise.all([
+      q(sb.from('occasions').select('*').or(`created_at.gte.${new Date(Date.now() - 21 * 864e5).toISOString()},follow_up_done.eq.false`).order('created_at', { ascending: false }).limit(300)),
+      q(sb.from('parent_links').select('family_id').eq('revoked', false)),
+    ]);
+  } catch (e) { return document.getElementById('modal-body').innerHTML = `<div class="err">${esc(dbError(e))}</div>`; }
+  const famOn = new Set(links.map(l => l.family_id));
+  const onApp = o => o.target === 'tutor' ? !!byId(state.tutors, o.tutor_id)?.user_id : famOn.has(o.family_id);
+  window._occ = Object.fromEntries(rows.map(o => [o.id, o]));
+  const due = rows.filter(o => o.follow_up_at && !o.follow_up_done && new Date(o.follow_up_at) <= new Date());
+  const camps = new Set(rows.map(o => o.campaign).filter(Boolean));
+  const up = occUpcoming();
+  const status = o => onApp(o)
+    ? (o.seen_at ? `<span class="pos small">✓ شافتها على التطبيق ${ago(o.seen_at)}</span>` : new Date(o.show_until) < new Date() ? '<span class="sub small">انتهى عرضها من غير ما تتفتح</span>' : '<span class="warn-txt small">⏳ هتظهر أول ما تفتح التطبيق</span>')
+    : (o.sent_at ? `<span class="pos small">✓ اتبعتت واتساب ${ago(o.sent_at)}</span>` : '<span class="neg small">📲 مش على التطبيق — ابعتها واتساب</span>');
+  const oneRow = o => {
+    const tu = o.target === 'tutor' ? byId(state.tutors, o.tutor_id) : null, fam = o.target === 'family' ? byId(state.families, o.family_id) : null;
+    const opts = tu ? { group: tu.whatsapp_group, phone: tu.phone, editTutor: tu.id } : { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id };
+    return `<details class="card item msg-item"><summary><div class="occ-row"><span><b>${esc(o.emoji || '')} ${esc(occPerson(o))}</b> — ${esc(o.title)}</span></div><div>${status(o)}</div></summary>
+      <div class="msg-preview mt">${esc(occWaText(o))}</div>
+      ${!onApp(o) ? msgActionsHtml(occWaText(o), opts) : ''}
+      <div class="actions">${!onApp(o) && !o.sent_at ? `<button class="btn btn-brand sm" onclick="occMark(${jsq(o.id)}, 'sent')">✓ اتبعتت</button>` : ''}
+        <button class="btn btn-ghost sm" onclick="occDelete(${jsq(o.id)})">🗑 مسح</button></div></details>`;
+  };
+  const personal = rows.filter(o => !o.campaign);
+  const byCamp = {}; rows.filter(o => o.campaign).forEach(o => (byCamp[o.campaign] ||= []).push(o));
+  document.getElementById('modal-body').innerHTML = `
+    <p class="sub small">اللي على التطبيق بيظهرله كارت لطيف أول ما يفتح (مرة واحدة). واللي مش على التطبيق رسالته بتظهر هنا جاهزة تبعتها على جروبه.</p>
+    <div class="actions mb"><button class="btn btn-brand" onclick="openOccasionForm()">+ مناسبة لمعلمة أو أسرة</button></div>
+    ${due.length ? `<div class="section-title"><h3>🤍 اطمّن عليهم</h3></div><div class="list mb">${due.map(o => { const tu = byId(state.tutors, o.tutor_id), fam = byId(state.families, o.family_id);
+      const txt = o.target === 'tutor' ? `${greetTutor(tu?.name)}\nطمنينا عليكي، عاملة إيه دلوقتي؟ 🌷 ربنا يتم شفاكي على خير.\n${SIGN_T}` : `السلام عليكم 🌷\nطمنونا على${o.title.replace(/^ألف سلامة على/, '') || ' البطل'}، أحسن دلوقتي إن شاء الله؟ 🤲\n${SIGN_F}`;
+      const opts = tu ? { group: tu.whatsapp_group, phone: tu.phone, editTutor: tu.id } : { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id };
+      return `<div class="card item"><b>${esc(occPerson(o))}</b> <span class="sub small">— ${esc(OCC_KINDS[o.kind]?.l || '')} من ${ago(o.created_at)}</span>
+        <div class="msg-preview mt">${esc(txt)}</div>${msgActionsHtml(txt, opts)}
+        <div class="actions"><button class="btn btn-brand sm" onclick="occMark(${jsq(o.id)}, 'followed')">✓ اطمنت عليها</button></div></div>`; }).join('')}</div>` : ''}
+    <div class="section-title"><h3>📅 مناسبات جاية</h3></div>
+    <div class="list mb">${up.length ? up.map(c => `<div class="card item"><div class="item-head"><div><b>${esc(c.l)}</b><div class="sub small">${fmtDate(c.date + 'T12:00:00')}${c.approx ? ' (تقريبي — حسب رؤية الهلال)' : ''} · ${[c.who.tutors ? 'المعلمين' : '', c.who.families ? (c.who.families === 'all' ? 'كل الأسر' : 'أسر ' + c.who.families.join('/')) : ''].filter(Boolean).join(' + ')}</div></div>
+      ${camps.has(c.campaign) ? `<span class="pos small">✓ اتجهزت (${(byCamp[c.campaign] || []).length})</span>` : `<button class="btn btn-brand sm" onclick="occCampaign(${jsq(c.campaign)})">جهّز الرسايل</button>`}</div></div>`).join('') : '<div class="sub small">مفيش مناسبات عامة في الشهرين الجايين.</div>'}</div>
+    ${Object.entries(byCamp).map(([k, list]) => { const c = OCC_CAL.find(x => k.startsWith(x.key)); const need = list.filter(o => !onApp(o) && !o.sent_at).length;
+      return `<details class="mb"><summary class="section-title" style="cursor:pointer"><h3>${esc(c?.l || k)} — ${list.length}${need ? ` <span class="neg small">(${need} محتاجين واتساب)</span>` : ''}</h3></summary><div class="list">${list.map(oneRow).join('')}</div></details>`; }).join('')}
+    <div class="section-title"><h3>💐 مناسبات شخصية (آخر 3 أسابيع)</h3></div>
+    <div class="list">${personal.length ? personal.map(oneRow).join('') : '<div class="sub small">لسه مفيش.</div>'}</div>`;
+}
+async function occMark(id, what) {
+  try { await q(sb.from('occasions').update(what === 'sent' ? { sent_at: new Date().toISOString() } : { follow_up_done: true }).eq('id', id)); showToast('تمام ✓'); openOccasions(); occBadge(); }
+  catch (e) { showToast(dbError(e), true); }
+}
+async function occDelete(id) {
+  if (!confirm('تمسح الرسالة دي؟')) return;
+  try { await q(sb.from('occasions').delete().eq('id', id)); openOccasions(); occBadge(); } catch (e) { showToast(dbError(e), true); }
+}
+
+function openOccasionForm(pre = {}) {
+  const o = { target: pre.target || 'tutor', person: pre.person || '', kind: pre.kind || 'sick', student: pre.student || '', days: 5, follow: true, session: pre.session || null, title: '', message: '', emoji: '' };
+  window._oc = o;
+  const fill = () => { const t = o.target === 'tutor' ? byId(state.tutors, o.person) : null; const st = byId(state.students, o.student);
+    Object.assign(o, occTpl(o.kind, o.target, { male: t ? occMale(t) : false, name: o.target === 'family' ? (st?.name || '') : '' })); };
+  const render = () => {
+    const people = o.target === 'tutor' ? [...state.tutors].sort((a, b) => a.name.localeCompare(b.name, 'ar')).map(t => ({ v: t.id, l: t.name + (t.user_id ? ' 📱' : '') }))
+      : [...state.families].sort((a, b) => a.name.localeCompare(b.name, 'ar')).map(f => ({ v: f.id, l: f.name }));
+    const kids = o.target === 'family' && o.person ? state.students.filter(s => s.family_id === o.person) : [];
+    document.getElementById('modal-body').innerHTML = `
+      <div class="field"><label>لمين؟</label><div class="chips" style="margin:0">
+        <button type="button" class="chip ${o.target === 'tutor' ? 'active' : ''}" onclick="_oc.target='tutor'; _oc.person=''; _oc.student=''; _ocFill(); _ocRender()">🧑‍🏫 معلمة</button>
+        <button type="button" class="chip ${o.target === 'family' ? 'active' : ''}" onclick="_oc.target='family'; _oc.person=''; _oc.student=''; _ocFill(); _ocRender()">👨‍👩‍👧 أسرة</button></div></div>
+      <div class="field"><select class="input" onchange="_oc.person=this.value; _oc.student=''; _ocFill(); _ocRender()"><option value="">— اختار —</option>${people.map(p => `<option value="${esc(p.v)}" ${p.v === o.person ? 'selected' : ''}>${esc(p.l)}</option>`).join('')}</select>
+        ${o.target === 'tutor' ? '<div class="sub small">📱 = على التطبيق، الكارت هيظهرلها لوحده</div>' : ''}</div>
+      ${kids.length ? `<div class="field"><label>الطالب (لو المناسبة تخص طالب)</label><select class="input" onchange="_oc.student=this.value; _ocFill(); _ocRender()"><option value="">— الأسرة كلها —</option>${kids.map(k => `<option value="${esc(k.id)}" ${k.id === o.student ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></div>` : ''}
+      <div class="field"><label>المناسبة</label><div class="chips" style="margin:0">${Object.entries(OCC_KINDS).map(([k, v]) => `<button type="button" class="chip ${o.kind === k ? 'active' : ''}" onclick="_oc.kind='${k}'; _ocFill(); _ocRender()">${v.l}</button>`).join('')}</div></div>
+      <div class="field"><label>العنوان</label><div class="row-gap"><input class="input" style="width:64px;text-align:center" value="${esc(o.emoji)}" oninput="_oc.emoji=this.value"><input class="input" value="${esc(o.title)}" oninput="_oc.title=this.value"></div></div>
+      <div class="field"><label>الرسالة (عدّل براحتك)</label><textarea class="input" rows="5" oninput="_oc.message=this.value">${esc(o.message)}</textarea></div>
+      <div class="field"><label>تفضل ظاهرة على التطبيق لحد</label><select class="input" onchange="_oc.days=Number(this.value)">${[3, 5, 7, 14].map(d => `<option value="${d}" ${o.days === d ? 'selected' : ''}>${d} أيام</option>`).join('')}</select></div>
+      ${['sick', 'condolence'].includes(o.kind) ? `<label class="radio"><input type="checkbox" ${o.follow ? 'checked' : ''} onchange="_oc.follow=this.checked"> فكّرني أطمّن ${o.target === 'tutor' ? 'عليها' : 'عليهم'} بعد يومين</label>` : ''}
+      <div class="occ-card mt" style="pointer-events:none"><div class="occ-emoji">${esc(o.emoji || '🌷')}</div><div class="occ-title">${esc(o.title || '…')}</div><div class="occ-msg">${esc(o.message || '')}</div><div class="occ-sign">فريق أكاديمية أستاذ أونلاين 🤍</div></div>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_ocSave()">حفظ وإظهار</button><button class="btn btn-ghost" onclick="openOccasions()">رجوع</button></div>`;
+  };
+  window._ocFill = fill; window._ocRender = render;
+  fill(); openModal('💐 مناسبة جديدة', ''); render();
+  window._ocSave = () => runSubmit(async () => {
+    if (!o.person) return formError('اختار المعلمة أو الأسرة');
+    if (!o.title.trim() || !o.message.trim()) return formError('اكتب العنوان والرسالة');
+    const row = { target: o.target, tutor_id: o.target === 'tutor' ? o.person : null, family_id: o.target === 'family' ? o.person : null, kind: o.kind, emoji: o.emoji || null,
+      title: o.title.trim(), message: o.message.trim(), show_until: new Date(Date.now() + o.days * 864e5).toISOString(), source_session: o.session,
+      follow_up_at: ['sick', 'condolence'].includes(o.kind) && o.follow ? new Date(Date.now() + 2 * 864e5).toISOString() : null };
+    await q(sb.from('occasions').insert(row));
+    showToast('اتحفظت ✓'); occBadge(); openOccasions();
+  });
+}
+
+async function occCampaign(campaign) {
+  const c = occUpcoming().find(x => x.campaign === campaign); if (!c) return;
+  if (c.approx && !confirm(`تاريخ ${c.l} تقريبي (${c.date}) — حسب رؤية الهلال. تكمل؟`)) return;
+  try {
+    const since = new Date(Date.now() - 45 * 864e5).toISOString();
+    const act = await q(sb.from('sessions').select('student_id,tutor_id').gte('scheduled_at', since).limit(5000));
+    const tutIds = [...new Set(act.map(r => r.tutor_id).filter(Boolean))];
+    const famIds = [...new Set(act.map(r => byId(state.students, r.student_id)?.family_id).filter(Boolean))]
+      .filter(fid => { const f = byId(state.families, fid); return f && (c.who.families === 'all' || (c.who.families || []).includes(f.country)); });
+    const from = new Date(c.date + 'T00:00:00'); from.setHours(from.getHours() - 12);
+    const until = new Date(c.date + 'T00:00:00'); until.setDate(until.getDate() + (c.key === 'ramadan' ? 4 : 3));
+    const base = { kind: c.key, emoji: c.emoji, campaign, show_from: from.toISOString(), show_until: until.toISOString() };
+    const rows = [
+      ...(c.who.tutors ? tutIds.map(id => { const t = byId(state.tutors, id); const male = t && occMale(t);
+        return { ...base, target: 'tutor', tutor_id: id, title: male ? c.title.replace('وإنتي طيبة', 'وإنت طيب') : c.title, message: male ? c.msg.replace(/إنتي/g, 'إنت').replace('تعبك ومجهودك وصبرك', 'تعبك ومجهودك وصبرك') : c.msg }; }) : []),
+      ...(c.who.families ? famIds.map(id => ({ ...base, target: 'family', family_id: id, title: c.title, message: c.msg })) : []),
+    ];
+    if (!rows.length) return showToast('مفيش حد نشط يتبعتله', true);
+    await q(sb.from('occasions').insert(rows));
+    showToast(`اتجهزت ${rows.length} رسالة ✓ — هتظهر على التطبيق يوم المناسبة`); openOccasions();
+  } catch (e) { showToast(dbError(e), true); }
 }
 
 function deleteSession(id) {

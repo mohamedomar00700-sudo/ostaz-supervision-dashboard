@@ -67,6 +67,7 @@ async function tutorRefresh() {
       try { const rq = await q(sb.from('tutor_requests').select('*').eq('tutor_id', T.preview).order('created_at', { ascending: false }).limit(20));
         T.requests = rq.map(r => ({ ...r, student_name: byId(state.students, r.student_id)?.name || r.new_value, session_at: (w.concat(m).find(x => x.id === r.session_id) || {}).scheduled_at })); } catch (e) { T.requests = []; }
       T.payouts = po.map(p => ({ ...p, paid_at: p.paid_at || p.created_at }));
+      try { const nowI = new Date().toISOString(); T.occ = await q(sb.from('occasions').select('*').eq('target', 'tutor').eq('tutor_id', T.preview).is('seen_at', null).lte('show_from', nowI).gte('show_until', nowI).order('created_at', { ascending: false }).limit(3)); } catch (e) { T.occ = []; }
       try { T.reports = await q(sb.from('session_reports').select('*').eq('tutor_id', T.preview).gte('created_at', new Date(Date.now() - 40 * 864e5).toISOString())); } catch (e) { T.reports = []; }
       T.students = state.plans.filter(p => p.tutor_id === T.preview).map(p => { const st = byId(state.students, p.student_id) || {};
         return { student_id: p.student_id, student_name: st.name, grade: st.grade_level, en: !!st.curriculum && st.curriculum !== 'arabic', subject: p.subject, meeting_link: p.meeting_link, rate: p.tutor_rate_egp ?? byId(state.tutors, T.preview)?.default_rate_egp, weekly: p.weekly_sessions }; })
@@ -79,6 +80,7 @@ async function tutorRefresh() {
     const now = new Date(); const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const to = new Date(from.getTime() + 8 * 864e5);
     const mr = tMonthRange(T.month);
     const rq = await sb.rpc('tutor_requests_mine'); T.requests = rq.data || [];
+    try { const oc = await sb.rpc('tutor_occasions'); T.occ = oc.data || []; } catch (e) { T.occ = []; }
     const [a, b, c, d] = await Promise.all([
       sb.rpc('tutor_sessions', { p_from: new Date(from.getTime() - 7 * 864e5).toISOString(), p_to: to.toISOString() }),
       sb.rpc('tutor_students'), sb.rpc('tutor_payout_list'),
@@ -146,6 +148,11 @@ function tutorSessionCard(s, compact) {
     </div></div>`;
 }
 
+async function tutorOccSeen(id) {
+  occFade(id); T.occ = (T.occ || []).filter(o => o.id !== id);
+  if (T.preview) return showToast('ده معاينة — الكارت هيفضل ظاهر للمعلمة لحد ما هي تدوس شكراً');
+  try { await sb.rpc('tutor_occasion_seen', { p_id: id }); } catch (e) {}
+}
 function tutorRender() {
   const el = document.getElementById('tutor-content'); if (!el) return;
   if (T.tab === 'today') {
@@ -156,7 +163,7 @@ function tutorRender() {
     const todayList = (byDay[todayKey] || []).filter(s => !tCancelled(s));
     const next = occ.find(s => !tCancelled(s) && s.status === 'scheduled' && new Date(s.scheduled_at).getTime() > Date.now());
     const needRep = tOcc(T.week).filter(s => !tCancelled(s) && tStarted(s) && !tRepFor(s) && new Date(s.scheduled_at).getTime() > Date.now() - 7 * 864e5);
-    el.innerHTML = `
+    el.innerHTML = `${(T.occ || []).map(o => occCardHtml(o, `tutorOccSeen(${jsq(o.id)})`)).join('')}
       <div class="stats">
         <div class="card stat"><div class="v num">${fmtU(todayList.reduce((a, s) => a + tDur(s), 0) / 60)}</div><div class="l">حصص النهارده${todayList.length ? ` <span class="small">(${todayList.length} ${todayList.length === 1 ? 'لقاء' : 'لقاءات'})</span>` : ''}</div></div>
         <div class="card stat"><div class="v num">${fmtU(todayList.filter(s => s.status === 'done').reduce((a, s) => a + tDur(s), 0) / 60)}</div><div class="l">اتسجلت تمت</div></div>

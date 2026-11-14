@@ -38,6 +38,22 @@ async function enterParent(token) {
   document.addEventListener('visibilitychange', () => { if (!document.hidden && P.token) parentRefresh(); });
 }
 
+/* ----- كارت المناسبات (سلامتك / مبروك / كل سنة وإنتو طيبين) — مشترك بين بوابة الأسرة والمعلمة ----- */
+function occCardHtml(o, dismissJs) {
+  return `<div class="occ-card" data-occ="${esc(o.id)}">
+    <div class="occ-emoji">${esc(o.emoji || '🌷')}</div>
+    <div class="occ-title">${esc(o.title)}</div>
+    <div class="occ-msg">${esc(o.message)}</div>
+    <div class="occ-sign">فريق أكاديمية أستاذ أونلاين 🤍</div>
+    <button class="btn btn-brand sm occ-btn" onclick="${dismissJs}">شكراً 🤍</button>
+  </div>`;
+}
+function occFade(id) { const el = document.querySelector(`[data-occ="${id}"]`); if (el) { el.classList.add('occ-out'); setTimeout(() => el.remove(), 350); } }
+async function parentOccSeen(id) {
+  occFade(id); P.occ = (P.occ || []).filter(o => o.id !== id);
+  try { await sb.rpc('parent_occasion_seen', { p_token: P.token, p_id: id }); } catch (e) {}
+}
+
 async function parentRefresh() {
   const el = document.getElementById('parent-content');
   try {
@@ -50,6 +66,7 @@ async function parentRefresh() {
       return;
     }
     P.data = data;
+    try { const oc = await sb.rpc('parent_occasions', { p_token: P.token }); P.occ = oc.data || []; } catch (e) { P.occ = []; }
     P.tz = (typeof COUNTRIES !== 'undefined' && COUNTRIES[data.family.country]?.tz) || 'Asia/Dubai';
     if (typeof CURRICULA === 'undefined') window.CURRICULA = {};
     document.getElementById('parent-family').textContent = data.family.name;
@@ -155,7 +172,7 @@ function pHome() {
     <button class="btn btn-brand sm" onclick="parentAlertsPanel()">تفعيل</button></div></div>`;
   const todayK = pDayKey(new Date().toISOString(), P.tz);
   const today = up.filter(s => s !== next && pDayKey(s.scheduled_at, P.tz) === todayK);
-  return `${banner}
+  return `${(P.occ || []).map(o => occCardHtml(o, `parentOccSeen(${jsq(o.id)})`)).join('')}${banner}
     <div class="p-hello"><h2>أهلاً بكم 🌷</h2><div class="sub small">${esc((d.kids || []).map(k => k.name).join(' · '))}</div></div>
     ${next ? pSessCard(next, { hero: true }) : '<div class="card empty">لا توجد حصص قادمة مسجلة حالياً.</div>'}
     ${today.length ? `<h3 class="p-day">باقي حصص اليوم</h3><div class="list">${today.map(s => pSessCard(s)).join('')}</div>` : ''}
