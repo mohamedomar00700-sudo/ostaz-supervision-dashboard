@@ -162,7 +162,7 @@ Deno.serve(async (req) => {
     const [{ data: families }, { data: students }, { data: tutors }, { data: plans }, { data: recent }, { data: win }] = await Promise.all([
       admin.from('families').select('id,name,currency,country'),
       admin.from('students').select('id,name,family_id,grade_level,default_price'),
-      admin.from('tutors').select('id,name,default_rate_egp'),
+      admin.from('tutors').select('id,name,default_rate_egp,subject_label'),
       admin.from('student_subjects').select('student_id,tutor_id,subject,tutor_rate_egp'),
       admin.from('sessions').select('student_id,tutor_id,subject,tutor_cost_egp,student_price,kind,scheduled_at,status')
         .in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at', { ascending: false }).limit(3000),
@@ -172,6 +172,8 @@ Deno.serve(async (req) => {
     const { data: groupsRaw } = await admin.from('sessions').select('student_id,tutor_id,group_name,group_rate_egp,scheduled_at').not('group_key', 'is', null)
       .gte('scheduled_at', new Date(now.getTime() - 400 * 864e5).toISOString()).neq('status', 'cancelled_by_academy').limit(2000);
     const famBy = new Map((families || []).map(f => [f.id, f]));
+    // المادة بقت في خانة لوحدها — نرجّعها جنب الاسم جوه صقور بس عشان يفرّق بين الأسامي المتكررة (إيمان عربي / إيمان علوم)
+    (tutors || []).forEach((t: any) => { if (t.subject_label) t.name = `${t.name} (${t.subject_label})`; });
     const { data: sups } = await admin.from('supervisors').select('id,name');
     const supName = (id: string | null, notes?: string | null) => (id && (sups || []).find((x: any) => x.id === id)?.name) || (/صقّور/.test(notes || '') ? 'صقّور' : 'محمد عمر (الإدارة)');
     const activeStu = new Set((recent || []).map(r => r.student_id)), activeTut = new Set((recent || []).map(r => r.tutor_id));

@@ -144,7 +144,7 @@ const normAr = s => String(s || '').toLowerCase().replace(/[إأآا]/g, 'ا').r
 function tutorOptions() {
   return state.tutors.map(t => {
     const subs = [...new Set(state.subjects.filter(x => x.tutor_id === t.id).map(x => x.subject))].join('، ');
-    return { v: t.id, l: t.name + (subs ? ` — ${subs}` : '') };
+    return { v: t.id, l: t.name + ((t.subject_label || subs) ? ` — ${t.subject_label || subs}` : '') };
   });
 }
 function makeSearchable(sel) {
@@ -742,13 +742,13 @@ const OCC_KINDS = {
   newborn: { l: '👶 مولود', emoji: '👶' }, condolence: { l: '🤍 عزاء', emoji: '🤍' }, success: { l: '🎉 نجاح / تفوق', emoji: '🎉' },
   exams: { l: '📚 امتحانات', emoji: '📚' }, custom: { l: '✍️ رسالة حرة', emoji: '🌷' },
 };
-function occTpl(kind, target, { male = false, name = '' } = {}) {
+function occTpl(kind, target, { male = false, name = '', boy = null } = {}) {
   const g = (f, m) => (target === 'tutor' && male ? m : f);
   const T = target === 'tutor';
   const nm = name ? ` ${name}` : '';
   const t = {
     sick: T ? { title: `ألف سلامة ${g('عليكي', 'عليك')}${nm ? ' يا' + nm : ''}`, message: `ربنا ${g('يشفيكي ويعافيكي ويقومك', 'يشفيك ويعافيك ويقومك')} لنا بألف سلامة 🤲\nما ${g('تشغليش', 'تشغلش')} بالك خالص بالحصص، إحنا مرتبين كل حاجة مع الأسر، وأهم حاجة صحتك وراحتك.\nمستنيينك ${g('ترجعي', 'ترجع')} بالسلامة 🌷` }
-               : { title: `ألف سلامة على${nm || ' البطل'}`, message: `ربنا يشفي ويعافي ويطمنكم 🤲\nالحصص مش مهمة دلوقتي خالص، أهم حاجة الصحة — ولما يرجع بالسلامة نرتب التعويض براحتكم.` },
+               : { title: `ألف سلامة على${nm || (boy === false ? ' البطلة' : ' البطل')}`, message: `ربنا يشفي ويعافي ويطمنكم 🤲\nالحصص مش مهمة دلوقتي خالص، أهم حاجة الصحة — ولما ${boy === false ? 'ترجع' : 'يرجع'} بالسلامة نرتب التعويض براحتكم.` },
     engagement: { title: 'ألف مبروك الخطوبة', message: T ? `ربنا يتمم${g('لك', 'لك')} على خير ويجعلها بداية سعيدة، وعقبال الفرح يا رب 🎉\nكل فريق أستاذ أونلاين فرحانين جداً ${g('بيكي', 'بيك')} 💐` : `ربنا يتمم على خير ويسعد قلوبكم، وعقبال الفرح يا رب 🎉` },
     wedding: { title: 'ألف ألف مبروك', message: T ? `بالرفاء والبنين 💐 ربنا يسعدكم ويبارك لكم ويجمع بينكم في خير.\n${g('خدي', 'خد')} وقتك ${g('واتهني', 'واتهنى')}، والحصص إحنا مرتبينها 🌷` : `بالرفاء والبنين 💐 ربنا يتمم فرحتكم على خير ويسعدكم دايماً.` },
     newborn: { title: 'ألف مبروك المولود', message: `يتربى في عزكم 👶 ربنا يجعله من الذرية الصالحة ويقر عينكم بيه، وحمد الله على السلامة 🤍` },
@@ -780,7 +780,7 @@ function occUpcoming(days = 75) {
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
-const occMale = t => MALE_TUTOR.test(tutBareName(t));
+const occMale = t => isMaleTutor(t);
 const occWaText = o => `${o.emoji || '🌷'} *${o.title}*\n\n${o.message}\n\n${o.target === 'tutor' ? SIGN_T : SIGN_F}`;
 const occPerson = o => o.target === 'tutor' ? (byId(state.tutors, o.tutor_id)?.name || '') : (byId(state.families, o.family_id)?.name || '');
 
@@ -823,7 +823,7 @@ async function openOccasions() {
     <p class="sub small">اللي على التطبيق بيظهرله كارت لطيف أول ما يفتح (مرة واحدة). واللي مش على التطبيق رسالته بتظهر هنا جاهزة تبعتها على جروبه.</p>
     <div class="actions mb"><button class="btn btn-brand" onclick="openOccasionForm()">+ مناسبة لمعلمة أو أسرة</button></div>
     ${due.length ? `<div class="section-title"><h3>🤍 اطمّن عليهم</h3></div><div class="list mb">${due.map(o => { const tu = byId(state.tutors, o.tutor_id), fam = byId(state.families, o.family_id);
-      const txt = o.target === 'tutor' ? `${greetTutor(tu?.name)}\nطمنينا عليكي، عاملة إيه دلوقتي؟ 🌷 ربنا يتم شفاكي على خير.\n${SIGN_T}` : `السلام عليكم 🌷\nطمنونا على${o.title.replace(/^ألف سلامة على/, '') || ' البطل'}، أحسن دلوقتي إن شاء الله؟ 🤲\n${SIGN_F}`;
+      const txt = o.target === 'tutor' ? `${greetTutor(tu?.name)}\n${tg(tu, 'طمنينا عليكي، عاملة إيه دلوقتي؟ 🌷 ربنا يتم شفاكي على خير.', 'طمنّا عليك، عامل إيه دلوقتي؟ 🌷 ربنا يتم شفاك على خير.')}\n${SIGN_T}` : `السلام عليكم 🌷\nطمنونا على${o.title.replace(/^ألف سلامة على/, '') || ' البطل'}، أحسن دلوقتي إن شاء الله؟ 🤲\n${SIGN_F}`;
       const opts = tu ? { group: tu.whatsapp_group, phone: tu.phone, editTutor: tu.id } : { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id };
       return `<div class="card item"><b>${esc(occPerson(o))}</b> <span class="sub small">— ${esc(OCC_KINDS[o.kind]?.l || '')} من ${ago(o.created_at)}</span>
         <div class="msg-preview mt">${esc(txt)}</div>${msgActionsHtml(txt, opts)}
@@ -849,7 +849,7 @@ function openOccasionForm(pre = {}) {
   const o = { target: pre.target || 'tutor', person: pre.person || '', kind: pre.kind || 'sick', student: pre.student || '', days: 5, follow: true, session: pre.session || null, title: '', message: '', emoji: '' };
   window._oc = o;
   const fill = () => { const t = o.target === 'tutor' ? byId(state.tutors, o.person) : null; const st = byId(state.students, o.student);
-    Object.assign(o, occTpl(o.kind, o.target, { male: t ? occMale(t) : false, name: o.target === 'family' ? (st?.name || '') : '' })); };
+    Object.assign(o, occTpl(o.kind, o.target, { male: t ? occMale(t) : false, name: o.target === 'family' ? (st?.name || '') : '', boy: st ? st.gender === 'm' : null })); };
   const render = () => {
     const people = o.target === 'tutor' ? [...state.tutors].sort((a, b) => a.name.localeCompare(b.name, 'ar')).map(t => ({ v: t.id, l: t.name + (t.user_id ? ' 📱' : '') }))
       : [...state.families].sort((a, b) => a.name.localeCompare(b.name, 'ar')).map(f => ({ v: f.id, l: f.name }));
@@ -914,7 +914,7 @@ function deleteSession(id) {
 function buildReminder(s, who) {
   const { st, fam, tu } = sessionView(s);
   const link = s.meeting_link ? linkHref(s.meeting_link) : '(سيتم إرسال الرابط قبل الحصة)';
-  const kindLine = s.kind === 'group' ? `\n👥 حصة مجموعة${s.group_name ? ': ' + s.group_name : ''}` : s.kind === 'revision' ? '\n📝 حصة مراجعة' : s.kind === 'trial' ? `\n🧪 حصة تجريبية${who === 'parent' ? ' مجانية' : ''} — ${who === 'parent' ? 'فرصة تتعرفوا فيها على المعلمة' : 'طالب جديد: ركّزي على التعارف وتحديد المستوى'}` : '';
+  const kindLine = s.kind === 'group' ? `\n👥 حصة مجموعة${s.group_name ? ': ' + s.group_name : ''}` : s.kind === 'revision' ? '\n📝 حصة مراجعة' : s.kind === 'trial' ? `\n🧪 حصة تجريبية${who === 'parent' ? ' مجانية' : ''} — ${who === 'parent' ? 'فرصة تتعرفوا فيها على المعلمة' : `${sg(st, 'طالب جديد', 'طالبة جديدة')}: ${tg(tu, 'ركّزي', 'ركّز')} على التعارف وتحديد المستوى`}` : '';
   const durLine = (s.duration_minutes || 60) !== 60 || s.kind !== 'regular' ? `\n⏳ المدة: ${durLabel(s.duration_minutes || 60)}` : '';
   if (who === 'parent') {
     const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
@@ -928,11 +928,11 @@ function buildReminder(s, who) {
   }
   const tn = tu?.name || '';
   return `أهلاً ${/^(أ\.|أ\/|أستاذ|م\.|د\.)/.test(tn) ? tn : 'أ/ ' + tn} 👋
-تذكير بحصة ${relDayLabel(s.scheduled_at, CAIRO_TZ)} مع الطالب/ة ${st?.name || ''} (${st?.grade_level || ''})${kindLine}
+تذكير بحصة ${relDayLabel(s.scheduled_at, CAIRO_TZ)} مع ${stuWord(st)} ${st?.name || ''} (${st?.grade_level || ''})${kindLine}
 ⏰ الساعة ${fmtTime(s.scheduled_at, CAIRO_TZ)} بتوقيت القاهرة${durLine}${s.subject ? `\n📚 المادة: ${s.subject}${isEN(s.student_id) ? ' (بالإنجليزي)' : ''}` : ''}
 🔗 رابط الحصة: ${link}
 
-برجاء الالتزام بالموعد، ولو الطالب طلب وقت زيادة بلّغينا بعد الحصة بالمدة الفعلية. أي مواد أو ملاحظات للطالب ابعتيها لنا هنا وإحنا نوصّلها.
+برجاء الالتزام بالموعد، ولو ${stuWord(st)} ${sg(st, 'طلب', 'طلبت')} وقت زيادة ${tg(tu, 'بلّغينا', 'بلّغنا')} بعد الحصة بالمدة الفعلية. أي مواد أو ملاحظات ${sg(st, 'للطالب', 'للطالبة')} ${tg(tu, 'ابعتيها', 'ابعتها')} لنا هنا وإحنا نوصّلها.
 فريق الإشراف – أستاذ أونلاين`;
 }
 function openReminder(id, who) {
@@ -1469,7 +1469,8 @@ function openStudentForm(familyId, id) {
   const s = id ? byId(state.students, id) : null;
   const fam = byId(state.families, familyId);
   const fields = [
-    { name: 'name', label: 'اسم الطالب', required: true, value: s?.name },
+    [{ name: 'name', label: 'اسم الطالب', required: true, value: s?.name },
+     { name: 'gender', label: 'ولد ولا بنت؟', type: 'select', value: s?.gender || '', options: [{ v: '', l: 'تلقائي من الاسم' }, { v: 'f', l: '👧 بنت' }, { v: 'm', l: '👦 ولد' }] }],
     [{ name: 'grade_level', label: 'الصف الدراسي', required: true, value: s?.grade_level, list: GRADES },
      { name: 'curriculum', label: 'المنهج', type: 'select', required: true, value: s?.curriculum || 'arabic', options: Object.entries(CURRICULA).map(([v, l]) => ({ v, l })) }],
     [{ name: 'default_price', label: `سعر الساعة برايفت (${fam.currency})`, type: 'number', value: s?.default_price, hint: 'بيتحسب على المدة الفعلية (ساعة ونص = 1.5 × السعر).' },
@@ -1485,7 +1486,7 @@ function openStudentForm(familyId, id) {
   const del = s && isAdmin ? `<button type="button" class="btn btn-danger" style="margin-top:6px" onclick="closeModal(); confirmDelete(${jsq('الطالب ' + s.name)}, () => q(sb.from('students').delete().eq('id', ${jsq(s.id)})))">حذف الطالب</button>` : '';
   openModal(`${s ? 'تعديل طالب' : 'طالب جديد'} — ${fam.name}`, formHtml(fields, 'حفظ', planBlock + del));
   window._formSubmit = () => runSubmit(async () => {
-    const row = { family_id: familyId, name: fv('name'), grade_level: fv('grade_level'), curriculum: fv('curriculum'), default_price: fnum('default_price'), group_price: fnum('group_price'), notes: fv('notes') || null };
+    const row = { family_id: familyId, name: fv('name'), ...(fv('gender') ? { gender: fv('gender') } : {}), grade_level: fv('grade_level'), curriculum: fv('curriculum'), default_price: fnum('default_price'), group_price: fnum('group_price'), notes: fv('notes') || null };
     let sid = s?.id;
     if (s) await q(sb.from('students').update(row).eq('id', s.id));
     else { const [ns] = await q(sb.from('students').insert(row).select()); sid = ns.id; }
@@ -1504,7 +1505,7 @@ function planRowHtml(p = {}) {
   return `<div class="plan-row">
     <input class="input pl-subject" placeholder="المادة" value="${esc(p.subject || '')}" list="subj-list2">
     <input class="input pl-weekly" type="number" min="1" max="14" inputmode="numeric" placeholder="×أسبوع" value="${esc(p.weekly_sessions ?? '')}">
-    <select class="input pl-tutor"><option value="">— بدون —</option>${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === p.tutor_id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+    <select class="input pl-tutor"><option value="">— بدون —</option>${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === p.tutor_id ? 'selected' : ''}>${esc(tutLabel(t))}</option>`).join('')}</select>
     <input class="input pl-rate" type="number" min="0" step="5" inputmode="numeric" placeholder="أجر/س" title="أجر المعلم في الساعة للطالب ده (لو مختلف عن أجره الافتراضي)" value="${esc(p.tutor_rate_egp ?? '')}">
     <button type="button" class="btn btn-ghost icon" onclick="this.parentElement.remove()">✕</button>
   </div>`;
@@ -1820,7 +1821,7 @@ function renderTutors() {
     return `<div class="card item">
       <div class="item-head">
         <div>
-          <div class="item-title">${esc(t.name)}</div>
+          <div class="item-title">${esc(t.name)}${t.subject_label ? ` <span class="sub small">· ${esc(t.subject_label)}</span>` : ''}</div>
           <div class="sub small" dir="ltr" style="text-align:right">${esc(t.phone || '')}</div>
         </div>
         <div style="text-align:left">
@@ -1899,7 +1900,9 @@ function openTutorForm(id) {
   const t = id ? byId(state.tutors, id) : null;
   const subs = t ? state.subjects.filter(s => s.tutor_id === t.id) : [];
   const fields = [
-    { name: 'name', label: 'اسم المعلم', required: true, value: t?.name, placeholder: 'أ. …' },
+    { name: 'name', label: 'اسم المعلم', required: true, value: t?.name, placeholder: 'أ. …', hint: 'الاسم بس من غير المادة — ده اللي بيظهر في الرسايل وللأسر' },
+    [{ name: 'subject_label', label: 'المادة (للعرض عندنا)', value: t?.subject_label, placeholder: 'رياضيات / إنجليزي…', hint: 'بتظهر جنب الاسم في القوايم بس' },
+     { name: 'gender', label: 'الصيغة', type: 'select', value: t?.gender || 'f', options: [{ v: 'f', l: '👩 مس (مؤنث)' }, { v: 'm', l: '👨 مستر (مذكر)' }] }],
     { name: 'whatsapp_group', label: 'لينك جروب واتساب المعلم', type: 'url', value: t?.whatsapp_group, placeholder: 'https://chat.whatsapp.com/…' },
     [{ name: 'phone', label: 'رقم الموبايل / واتساب', type: 'tel', value: t?.phone, placeholder: '01xxxxxxxxx', hint: 'داخلي فقط — لا يظهر لولي الأمر' },
      { name: 'default_rate_egp', label: 'أجر الساعة (EGP)', type: 'number', value: t?.default_rate_egp, hint: 'بيتضرب في مدة الحصة الفعلية' }],
@@ -1916,7 +1919,7 @@ function openTutorForm(id) {
     <button type="button" class="btn btn-ghost sm" onclick="document.getElementById('subj-rows').insertAdjacentHTML('beforeend', subjRowHtml())">+ مادة</button></div>`;
   openModal(t ? 'تعديل معلم' : 'معلم جديد', formHtml(fields, 'حفظ', subjBlock));
   window._formSubmit = () => runSubmit(async () => {
-    const row = { name: fv('name'), phone: fv('phone') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), default_rate_egp: fnum('default_rate_egp'),
+    const row = { name: fv('name').replace(/\s*\([^)]*\)\s*/g, ' ').trim(), subject_label: fv('subject_label').trim() || null, gender: fv('gender') || null, phone: fv('phone') || null, whatsapp_group: cleanGroup(fv('whatsapp_group')), default_rate_egp: fnum('default_rate_egp'),
       vodafone_cash: fv('vodafone_cash') || null, bank_account: fv('bank_account') || null, notes: fv('notes') || null, email: fv('email').toLowerCase() || null, meeting_link: fv('meeting_link').trim() || null };
     if (t && t.user_id && (t.email || '') !== (row.email || '') && !confirm('المعلمة مربوطة بالإيميل القديم — تغيير الإيميل مش هيفصلها. تكمل؟')) return;
     let tutorId = t?.id;
@@ -2919,9 +2922,14 @@ ${SIGN_F}`;
    المعلمة: "مس حنين · إنجليزي · حمدان، رسمية · أستاذ"  (أسماء الطلاب بس، من غير أسماء الأسر)
    الأسرة: "أسرة أم حمدان · حمدان، حمدة، رسمية · أستاذ"  (من غير أي اسم معلمة)
    ============================================================ */
+const isMaleTutor = t => t?.gender ? t.gender === 'm' : MALE_TUTOR.test(tutBareName(t));
+const tg = (t, f, m) => (isMaleTutor(t) ? m : f);              // صيغة الكلام للمعلم/ة
+const sg = (st, m, f) => (st?.gender === 'm' ? m : f);         // صيغة الكلام عن الطالب/ة
+const stuWord = st => sg(st, 'الطالب', 'الطالبة');
+const tutLabel = t => t ? t.name + (t.subject_label ? ` · ${t.subject_label}` : '') : '';
 const MALE_TUTOR = /^(محمود|البيومي|عبد ?الرحمن|أحمد|احمد|محمد|مصطفى|مصطفي|عمر|علي|حسن|حسين|إبراهيم|ابراهيم|خالد|يوسف|كريم|طارق|هشام|عمرو|مستر)/;
 function tutBareName(t) { return String(t?.name || '').replace(/\(.*?\)/g, '').replace(/^\s*(أ\.|أ\/|ا\.|أستاذة?|استاذة?|مس|مستر)\s*/, '').trim(); }
-function tutTitle(t) { const n = String(t?.name || '').trim(); if (/^د\./.test(n)) return 'د. ' + tutBareName(t).replace(/^د\.\s*/, ''); const b = tutBareName(t); return (MALE_TUTOR.test(b) ? 'مستر ' : 'مس ') + b; }
+function tutTitle(t) { const n = String(t?.name || '').trim(); if (/^د\./.test(n)) return 'د. ' + tutBareName(t).replace(/^د\.\s*/, ''); const b = tutBareName(t); return (isMaleTutor(t) ? 'مستر ' : 'مس ') + b; }
 function grpSubj(s) { const x = String(s || '').trim(); if (!x) return ''; if (/physics/i.test(x)) return 'فيزياء'; if (/chem/i.test(x)) return 'كيمياء'; if (/^قرآن/.test(x)) return 'قرآن'; return x; }
 function activePairs() { // حصة الأسرة بتتسجل على طالب واحد — نوزّعها على كل إخواته
   // (إلا الأخ اللي بياخد نفس المادة لوحده مع معلمة تانية — يبقى مش داخل الحصة دي)
@@ -4032,7 +4040,7 @@ async function openReschedule(id, preset = {}) {
         <div class="field"><label>المدة</label><div class="chips" style="margin:0">${[30, 45, 60, 90, 120, 150, 180, 240].map(m => `<button type="button" class="chip ${R.dur === m ? 'active' : ''}" onclick="_rs.dur=${m}; _rsRender()">${durLabel(m)}</button>`).join('')}</div></div>
         ${hmHtml('rs_hm', R.dur)}
         ${tz !== CAIRO_TZ ? `<div class="sub small mb">= ${c.flag} ${fmtTime(new Date(`${R.date}T${R.time}`).toISOString(), tz)} بتوقيت ${c.tzName}</div>` : ''}` : ''}
-      ${R.what !== 'time' ? `<div class="field"><label>المعلمة البديلة</label><select class="input" onchange="_rs.tutor=this.value; _rsRender()">${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === R.tutor ? 'selected' : ''}>${esc(t.name)}${t.id === s.tutor_id ? ' (الحالية)' : ''}</option>`).join('')}</select>
+      ${R.what !== 'time' ? `<div class="field"><label>المعلمة البديلة</label><select class="input" onchange="_rs.tutor=this.value; _rsRender()">${state.tutors.map(t => `<option value="${esc(t.id)}" ${t.id === R.tutor ? 'selected' : ''}>${esc(tutLabel(t))}${t.id === s.tutor_id ? ' (الحالية)' : ''}</option>`).join('')}</select>
         ${tutorChanged ? `<div class="hint">أجرها: ${fmt(tutorRateFor(R.tutor, s.student_id) ?? 0)} ج/ساعة — الحصة بتتحسب للي ادّتها فعلاً.</div>` : ''}</div>` : ''}
       <div class="field"><label>التغيير ده لحد إمتى؟</label>
         <label class="radio"><input type="radio" name="rs-sc" ${R.scope === 'once' ? 'checked' : ''} onchange="_rs.scope='once'; _rsRender()"> الحصة دي بس</label>
@@ -4152,7 +4160,7 @@ function reportFamilyText(r, s, st, fam, absent, q) {
   const c = COUNTRIES[fam?.country] || COUNTRIES['مصر'];
   const subj = s.subject ? ` — ${s.subject}` : '';
   if (absent) return `السلام عليكم ورحمة الله 🌷
-بنبلغكم إن ${st?.name || 'الطالب'} ماحضرش حصة${subj} يوم ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}.
+بنبلغكم إن ${st?.name || stuWord(st)} ${sg(st, 'ماحضرش', 'ماحضرتش')} حصة${subj} يوم ${fmtDate(s.scheduled_at, c.tz)} الساعة ${fmtTime(s.scheduled_at, c.tz)} بتوقيت ${c.tzName}.
 لو فيه ظرف أو حابين نرتب حصة تعويضية بلّغونا 🙏
 ${SIGN_F}`;
   const kidsLine = s.family_block && (r.present_ids || []).length ? (r.present_ids.map(id => byId(state.students, id)?.name).filter(Boolean).join(' و')) : null;
@@ -4517,7 +4525,7 @@ ${SIGN_F}`;
       <div class="field mt"><label>النتيجة</label><div class="seg-wrap">
         ${Object.entries(TRIAL_OUT).map(([k, o]) => `<button type="button" class="chip ${to.out === k ? 'active' : ''}" onclick="_to.out='${k}'; _to.reason=''; _toRender()">${o.l}</button>`).join('')}
       </div></div>
-      ${to.out === 'switched' ? `<div class="field"><label>كمّل مع مين؟</label><select class="input" onchange="_to.other=this.value"><option value="">اختار المعلمة…</option>${state.tutors.filter(t => t.id !== s.tutor_id).map(t => `<option value="${esc(t.id)}" ${to.other === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>` : ''}
+      ${to.out === 'switched' ? `<div class="field"><label>كمّل مع مين؟</label><select class="input" onchange="_to.other=this.value"><option value="">اختار المعلمة…</option>${state.tutors.filter(t => t.id !== s.tutor_id).map(t => `<option value="${esc(t.id)}" ${to.other === t.id ? 'selected' : ''}>${esc(tutLabel(t))}</option>`).join('')}</select></div>` : ''}
       ${reasons.length ? `<div class="field"><label>${to.out === 'lost' ? 'السبب' : to.out === 'switched' ? 'ليه مكمّلش مع المعلمة دي؟' : 'ليه عايز يغيّر؟'}</label><div class="chips" style="margin:0">
         ${reasons.map(r => `<button type="button" class="chip ${to.reason === r ? 'active' : ''}" onclick="_to.reason=${esc(JSON.stringify(r))}; _toRender()">${r}</button>`).join('')}</div></div>` : ''}
       <div class="field"><label>ملاحظة (اختياري)</label><input class="input" id="to-note" value="${esc(to.note)}" oninput="_to.note=this.value" placeholder="مثال: عايز مواعيد بعد 6 مساءً"></div>
