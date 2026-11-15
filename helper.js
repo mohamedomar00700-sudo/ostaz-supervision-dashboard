@@ -529,7 +529,7 @@
   }
   function actsText(acts, reply) { // نسخة نص عادي من الكارت للواتساب (من غير أسعار)
     const L = acts.map(a => {
-      const who = `${a.student_name}${a.subject ? ' ' + a.subject : ''} مع ${String(a.tutor_name || '').replace(/^أ\.\s*/, 'مس ').replace(/\s*\(.*?\)/, '')}`;
+      const who = `${a.student_name}${a.subject ? ' ' + a.subject : ''} مع ${(() => { const t = (state.tutors || []).find(x => x.id === (a.tutor_id || a.old?.tutor_id)); return t ? tutTitle(t) : String(a.tutor_name || '').replace(/^أ\.\s*/, 'مس ').replace(/\s*\(.*?\)/, ''); })()}`;
       if (a.op === 'add_session') return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)} (${dl(a.duration_minutes)})${a.kind === 'trial' ? ' — تجريبية' : ''}${a.family_block ? ' — حصة أسرة' : ''}${a.status === 'done' ? ' — تمت ✅' : ''}`;
       if (a.op === 'set_status') return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)}: ${STATUS_AR[a.status] || a.status}${a.cancel_reason ? ' (' + a.cancel_reason + ')' : ''}${a.status === 'done' && a.actual_minutes ? ' — ' + dl(a.actual_minutes) : ''}`;
       return `• ${who} — ${dayLbl(a.date)} ${t12(a.time)} ← ${a.new_date || a.new_time ? dayLbl(a.new_date) + ' ' + t12(a.new_time) : ''}${a.new_tutor_name ? ' مع ' + a.new_tutor_name : ''}${a.patch?.duration_minutes ? ' ' + dl(a.patch.duration_minutes) : ''}`;
