@@ -130,6 +130,8 @@ function systemPrompt(now: { date: string; time: string; weekday: string }, extr
 - لو المادة ليها أكتر من معلم للطالب ده في "مين بيدرّس مين"، خد الأحدث (اللي فوق) من غير ما تسأل، إلا لو المشرفة سمّت معلم تاني.
 - "معلمة جديدة" أو اسم معلم مش في قايمة الطالب ده: لو المعلم موجود في قايمة المعلمين استخدمه عادي.
 - الجروبات: لو اتقال اسم جروب أو "جروب X" أو أسماء أعضاء جروب مع معلم الجروب → حصة واحدة في add_sessions لأي عضو واحد بس (family_block=false) والتطبيق بيسجّل باقي الأعضاء لوحده. ما تسألش مين في الجروب.
+- ما تعدّلش ولا تنقل حصة طالب اسمه مش مكتوب في رسالة المشرفة (حتى لو مع نفس المعلم في نفس اليوم).
+- لو إخوات مكتوبين في سطر واحد مع نفس المعلم ونفس الوقت ("رسمية وحمدان وحمدة علوم 3 مس سمر") ولهم حصص منفصلة موجودة: حط كل واحدة في updates بالوقت الجديد، والسيستم هيدمجهم لوحده في حصة أسرة واحدة.
 - ممنوع تقول أي حاجة عن إيراد الأكاديمية أو هامش الربح.${extra ? '\n' + extra : ''}`;
 }
 
@@ -164,7 +166,7 @@ Deno.serve(async (req) => {
       admin.from('students').select('id,name,family_id,grade_level,default_price'),
       admin.from('tutors').select('id,name,default_rate_egp,subject_label'),
       admin.from('student_subjects').select('student_id,tutor_id,subject,tutor_rate_egp'),
-      admin.from('sessions').select('student_id,tutor_id,subject,tutor_cost_egp,student_price,kind,scheduled_at,status')
+      admin.from('sessions').select('student_id,tutor_id,subject,tutor_cost_egp,student_price,kind,scheduled_at,status,family_block,duration_minutes,actual_minutes')
         .in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at', { ascending: false }).limit(3000),
       admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes,tutor_cost_egp,created_at,group_name')
         .gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).neq('status', 'cancelled_by_academy').order('scheduled_at'),
@@ -252,7 +254,11 @@ Deno.serve(async (req) => {
     const warnings: string[] = []; const already: any[] = [];
     const winBy = new Map((win || []).map(s => [s.id, s]));
     const raw = [...(out.add_sessions || []).map((a: any) => ({ ...a, op: 'add_session' })), ...(out.status_changes || []).map((a: any) => ({ ...a, op: 'set_status' })), ...(out.updates || []).map((a: any) => ({ ...a, op: 'update_session' }))];
-    const actions = raw.map((a: any) => {
+    const nz = (x: string) => String(x || '').replace(/[ًٌٍَُِّْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, '');
+    const textN = nz(text);
+    const NICK: Record<string, string[]> = { 'فاطمة': ['فطوم', 'فطومة', 'فاطمه'], 'عبد الرحمن': ['عبده', 'بودي'], 'محمد': ['حمودي', 'مودي'], 'عبد الله': ['عبودي'] };
+    const mentioned = (st: any) => !!st && (textN.includes(nz(st.name)) || (NICK[st.name] || []).some(n => textN.includes(nz(n))) || (() => { const f = famBy.get(st.family_id); const fn = nz(String(f?.name || '').replace(/^أسرة\s*/, '').replace(/\(.*?\)/g, '').trim()); return fn.length > 3 && textN.includes(fn); })());
+    let actions = raw.map((a: any) => {
       const r: any = { op: a.op, note: a.note || null };
       if (a.op === 'add_session') {
         const st = stuBy.get(sId.get(a.student) || ''), tu = tutBy.get(tId.get(a.tutor) || '');
@@ -314,6 +320,9 @@ Deno.serve(async (req) => {
         if (r.status === s.status && !(a.status === 'done' && a.actual_minutes && a.actual_minutes !== (s.actual_minutes || s.duration_minutes))) return null; // مفيش تغيير
         return r;
       }
+      if (a.op === 'update_session' && (a.date || a.time || a.tutor) && !mentioned(stuBy.get(s.student_id))) {
+        warnings.push(`ما نقلتش حصة ${stuBy.get(s.student_id)?.name || ''} مع ${tutBy.get(s.tutor_id)?.name || ''} لأن اسمها مش مكتوب في الرسالة.`); return null;
+      }
       if (a.op === 'update_session') {
         const patch: any = {};
         if (a.date || a.time) patch.scheduled_at = toIso(a.date || c.date, a.time || c.time);
@@ -338,6 +347,52 @@ Deno.serve(async (req) => {
       }
       return null;
     }).filter(Boolean);
+
+    // ---------- دمج الإخوات اللي بقوا مع نفس المعلم في نفس الوقت → حصة أسرة واحدة ----------
+    try {
+      const startOf = (x: any) => x.op === 'add_session' ? (x.status === 'scheduled' ? x.scheduled_at : null) : null;
+      type M = { kind: 'exist' | 'add'; s?: any; act?: any; start: number; dur: number; fb: boolean; stu: string };
+      const virt: M[] = [];
+      const byAct = new Map<string, any>(); actions.forEach((x: any) => { if (x.session_id) byAct.set(x.session_id, x); });
+      (win || []).forEach((w: any) => {
+        if (w.status !== 'scheduled' || w.group_name) return;
+        const act = byAct.get(w.id); if (act && act.op === 'set_status') return;
+        const start = new Date(act?.patch?.scheduled_at || w.scheduled_at).getTime();
+        virt.push({ kind: 'exist', s: w, act, start, dur: act?.patch?.duration_minutes || w.duration_minutes, fb: !!(act?.patch?.family_block || w.family_block), stu: w.student_id });
+      });
+      actions.forEach((x: any) => { const t = startOf(x); if (t) virt.push({ kind: 'add', act: x, start: new Date(t).getTime(), dur: x.duration_minutes, fb: !!x.family_block, stu: x.student_id }); });
+      const grpM = new Map<string, M[]>();
+      virt.forEach(v => { const st = stuBy.get(v.stu); const tu = v.s?.tutor_id || v.act?.tutor_id; if (!st || !tu) return; const k = st.family_id + '|' + tu + '|' + v.start; (grpM.get(k) || grpM.set(k, []).get(k)!).push(v); });
+      for (const [k, list] of grpM) {
+        const kids = new Set(list.map(v => v.stu));
+        if (list.length < 2 || kids.size < 2 || !list.some(v => v.act)) continue; // لازم يكون فيه إخوات ومن ضمنهم حاجة من الرسالة دي
+        const [famId, tuId] = k.split('|');
+        const prim = list.find(v => v.kind === 'exist' && v.fb) || list.find(v => v.kind === 'exist') || list[0];
+        const hist = (recent || []).filter((r: any) => r.family_block && r.tutor_id === tuId && stuBy.get(r.student_id)?.family_id === famId && r.status === 'done').sort((a: any, b: any) => String(b.scheduled_at).localeCompare(String(a.scheduled_at)))[0];
+        const dur = Number(hist?.actual_minutes || hist?.duration_minutes) || (prim.fb ? prim.dur : list.reduce((n, v) => n + (Number(v.dur) || 60), 0));
+        const names = [...kids].map(id => stuBy.get(id)?.name).join(' و');
+        const tuN = tutBy.get(tuId)?.name || '';
+        for (const v of list) {
+          if (v === prim) continue;
+          if (v.kind === 'add') { actions = actions.filter((x: any) => x !== v.act); continue; }
+          actions = actions.filter((x: any) => x !== v.act);
+          const c0 = cairoParts(new Date(v.s.scheduled_at));
+          actions.push({ op: 'set_status', session_id: v.s.id, student_name: stuBy.get(v.s.student_id)?.name || '', tutor_name: tuN, subject: v.s.subject, date: c0.date, time: c0.time, status: 'cancelled_by_academy', cancel_reason: 'اتسجلت بالغلط', note: 'اتدمجت في حصة أسرة واحدة',
+            old: { status: v.s.status, scheduled_at: v.s.scheduled_at, duration_minutes: v.s.duration_minutes, actual_minutes: v.s.actual_minutes, tutor_id: v.s.tutor_id, subject: v.s.subject } });
+        }
+        if (prim.kind === 'add') { prim.act.family_block = true; prim.act.duration_minutes = dur; }
+        else {
+          const w = prim.s; let act = prim.act;
+          if (!act) { const c0 = cairoParts(new Date(w.scheduled_at)); act = { op: 'update_session', note: null, session_id: w.id, student_name: stuBy.get(w.student_id)?.name || '', tutor_name: tuN, subject: w.subject, date: c0.date, time: c0.time,
+            old: { status: w.status, scheduled_at: w.scheduled_at, duration_minutes: w.duration_minutes, actual_minutes: w.actual_minutes, tutor_id: w.tutor_id, subject: w.subject }, patch: {} }; actions.push(act); }
+          act.patch = act.patch || {};
+          if (!w.family_block) act.patch.family_block = true;
+          if (w.duration_minutes !== dur) act.patch.duration_minutes = dur;
+          if (!Object.keys(act.patch).length) actions = actions.filter((x: any) => x !== act);
+        }
+        warnings.push(`${names} مع ${tuN}: دمجتهم في حصة أسرة واحدة (${dur} دقيقة${hist ? ' زي آخر مرة' : ''}) بدل حصص منفصلة.`);
+      }
+    } catch (e) { console.error('merge', e); }
 
     return json({ reply: out.reply || '', questions: out.questions || [], actions, warnings, already, ...(body.debug ? { raw: out } : {}) });
   } catch (e) {
