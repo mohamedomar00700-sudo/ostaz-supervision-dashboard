@@ -132,6 +132,7 @@ function systemPrompt(now: { date: string; time: string; weekday: string }, extr
 - الجروبات: لو اتقال اسم جروب أو "جروب X" أو أسماء أعضاء جروب مع معلم الجروب → حصة واحدة في add_sessions لأي عضو واحد بس (family_block=false) والتطبيق بيسجّل باقي الأعضاء لوحده. ما تسألش مين في الجروب.
 - ما تعدّلش ولا تنقل حصة طالب اسمه مش مكتوب في رسالة المشرفة (حتى لو مع نفس المعلم في نفس اليوم).
 - لو إخوات مكتوبين في سطر واحد مع نفس المعلم ونفس الوقت ("رسمية وحمدان وحمدة علوم 3 مس سمر") ولهم حصص منفصلة موجودة: حط كل واحدة في updates بالوقت الجديد، والسيستم هيدمجهم لوحده في حصة أسرة واحدة.
+- لو المشرفة ما قالتش الساعة لحصة إضافية اتعملت، دوّر الأول في حصص الفترة على حصة لنفس الطالب مع نفس المعلم في نفس اليوم: لو موجودة يبقى هي نفسها (عدّل مدتها لو مختلفة)، ما تضيفش واحدة جديدة بوقت من عندك.
 - ممنوع تقول أي حاجة عن إيراد الأكاديمية أو هامش الربح.${extra ? '\n' + extra : ''}`;
 }
 
@@ -303,6 +304,17 @@ Deno.serve(async (req) => {
           if (Number(a.duration_minutes) && same.duration_minutes !== dur) patch.duration_minutes = dur;
           return { op: 'update_session', note: r.note, session_id: same.id, student_name: stuBy.get(same.student_id)?.name || st2.name, tutor_name: tuF.name, subject: same.subject, date: c2.date, time: c2.time,
             old: { status: same.status, scheduled_at: same.scheduled_at, duration_minutes: same.duration_minutes, actual_minutes: same.actual_minutes, tutor_id: same.tutor_id, subject: same.subject }, patch };
+        }
+        // نفس الطالب مع نفس المعلم في نفس اليوم ومتسجلة بالفعل (والمشرفة ما قالتش "حصة تانية") → غالباً نفس الحصة، ما نكررهاش
+        if (!same) {
+          const dayOf = (iso: string) => cairoParts(new Date(iso)).date;
+          const sameDay = (win || []).find(s => s.student_id === st2.id && s.tutor_id === tuF.id && !String(s.status).startsWith('cancelled') && dayOf(s.scheduled_at) === a.date);
+          if (sameDay && !/تان[يىيه]|تاني[هة]|كمان حصه|كمان حصة/.test(text)) {
+            const c3 = cairoParts(new Date(sameDay.scheduled_at));
+            warnings.push(`${st2.name} مع ${tuF.name}: فيه حصة متسجلة بالفعل نفس اليوم الساعة ${c3.time} (${sameDay.actual_minutes || sameDay.duration_minutes} دقيقة) — ما ضفتهاش تاني. لو دي فعلاً حصة تانية اكتب "حصة تانية" والساعة.`);
+            already.push({ student_name: st2.name, tutor_name: tuF.name, subject: sameDay.subject, date: c3.date, time: c3.time, minutes: sameDay.actual_minutes || sameDay.duration_minutes, by: supName(sameDay.created_by, sameDay.notes), at: sameDay.created_at, session_id: sameDay.id, differs: true });
+            return null;
+          }
         }
         if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st2.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), at: same.created_at, session_id: same.id, differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }
         return r;
