@@ -821,7 +821,7 @@ async function openOccasions() {
   const byCamp = {}; rows.filter(o => o.campaign).forEach(o => (byCamp[o.campaign] ||= []).push(o));
   document.getElementById('modal-body').innerHTML = `
     <p class="sub small">اللي على التطبيق بيظهرله كارت لطيف أول ما يفتح (مرة واحدة). واللي مش على التطبيق رسالته بتظهر هنا جاهزة تبعتها على جروبه.</p>
-    <div class="actions mb"><button class="btn btn-brand" onclick="openOccasionForm()">+ مناسبة لمعلمة أو أسرة</button></div>
+    <div class="actions mb"><button class="btn btn-brand" onclick="openOccasionForm()">+ مناسبة لمعلمة أو أسرة</button><button class="btn btn-ghost" onclick="openNewsForm()">📣 خبر / تحديث جديد</button></div>
     ${due.length ? `<div class="section-title"><h3>🤍 اطمّن عليهم</h3></div><div class="list mb">${due.map(o => { const tu = byId(state.tutors, o.tutor_id), fam = byId(state.families, o.family_id);
       const txt = o.target === 'tutor' ? `${greetTutor(tu?.name)}\n${tg(tu, 'طمنينا عليكي، عاملة إيه دلوقتي؟ 🌷 ربنا يتم شفاكي على خير.', 'طمنّا عليك، عامل إيه دلوقتي؟ 🌷 ربنا يتم شفاك على خير.')}\n${SIGN_T}` : `السلام عليكم 🌷\nطمنونا على${o.title.replace(/^ألف سلامة على/, '') || ' البطل'}، أحسن دلوقتي إن شاء الله؟ 🤲\n${SIGN_F}`;
       const opts = tu ? { group: tu.whatsapp_group, phone: tu.phone, editTutor: tu.id } : { group: fam?.whatsapp_group, phone: fam?.whatsapp, country: fam?.country, editFamily: fam?.id };
@@ -831,7 +831,7 @@ async function openOccasions() {
     <div class="section-title"><h3>📅 مناسبات جاية</h3></div>
     <div class="list mb">${up.length ? up.map(c => `<div class="card item"><div class="item-head"><div><b>${esc(c.l)}</b><div class="sub small">${fmtDate(c.date + 'T12:00:00')}${c.approx ? ' (تقريبي — حسب رؤية الهلال)' : ''} · ${[c.who.tutors ? 'المعلمين' : '', c.who.families ? (c.who.families === 'all' ? 'كل الأسر' : 'أسر ' + c.who.families.join('/')) : ''].filter(Boolean).join(' + ')}</div></div>
       ${camps.has(c.campaign) ? `<span class="pos small">✓ اتجهزت (${(byCamp[c.campaign] || []).length})</span>` : `<button class="btn btn-brand sm" onclick="occCampaign(${jsq(c.campaign)})">جهّز الرسايل</button>`}</div></div>`).join('') : '<div class="sub small">مفيش مناسبات عامة في الشهرين الجايين.</div>'}</div>
-    ${Object.entries(byCamp).map(([k, list]) => { const c = OCC_CAL.find(x => k.startsWith(x.key)); const need = list.filter(o => !onApp(o) && !o.sent_at).length;
+    ${Object.entries(byCamp).map(([k, list]) => { const c = OCC_CAL.find(x => k.startsWith(x.key + '_')) || { l: `${list[0].emoji || '📣'} ${list[0].title} (${fmtDate(list[0].created_at)})` }; const need = list.filter(o => !onApp(o) && !o.sent_at).length;
       return `<details class="mb"><summary class="section-title" style="cursor:pointer"><h3>${esc(c?.l || k)} — ${list.length}${need ? ` <span class="neg small">(${need} محتاجين واتساب)</span>` : ''}</h3></summary><div class="list">${list.map(oneRow).join('')}</div></details>`; }).join('')}
     <div class="section-title"><h3>💐 مناسبات شخصية (آخر 3 أسابيع)</h3></div>
     <div class="list">${personal.length ? personal.map(oneRow).join('') : '<div class="sub small">لسه مفيش.</div>'}</div>`;
@@ -843,6 +843,37 @@ async function occMark(id, what) {
 async function occDelete(id) {
   if (!confirm('تمسح الرسالة دي؟')) return;
   try { await q(sb.from('occasions').delete().eq('id', id)); openOccasions(); occBadge(); } catch (e) { showToast(dbError(e), true); }
+}
+
+// 📣 خبر/تحديث للمعلمات أو الأسر اللي على التطبيق: كارت أول ما يفتحوا + إشعار على الموبايل
+function openNewsForm() {
+  const n = { aud: 'tutors', emoji: '✨', title: 'جديد في التطبيق', message: '', push: true };
+  window._nw = n;
+  const render = () => {
+    document.getElementById('modal-body').innerHTML = `
+      <p class="sub small">بيظهر كارت مرة واحدة أول ما يفتحوا التطبيق، ويوصلهم إشعار على الموبايل (للي مفعّل الإشعارات). اكتب اللي يفيدهم بس — مش التفاصيل التقنية.</p>
+      <div class="field"><label>لمين؟</label><div class="chips" style="margin:0">${[['tutors', '🧑‍🏫 المعلمات'], ['families', '👨‍👩‍👧 الأسر'], ['both', 'الاتنين']].map(([k, l]) => `<button type="button" class="chip ${n.aud === k ? 'active' : ''}" onclick="_nw.aud='${k}'; _nwRender()">${l}</button>`).join('')}</div>
+        <div class="sub small">بيروح بس للي على التطبيق</div></div>
+      <div class="field"><label>العنوان</label><div class="row-gap"><input class="input" style="width:64px;text-align:center" value="${esc(n.emoji)}" oninput="_nw.emoji=this.value"><input class="input" value="${esc(n.title)}" oninput="_nw.title=this.value"></div></div>
+      <div class="field"><label>الرسالة</label><textarea class="input" rows="5" placeholder="مثال: لو عملتي حصة ومش ظاهرة في جدولك…" oninput="_nw.message=this.value">${esc(n.message)}</textarea></div>
+      <label class="radio"><input type="checkbox" ${n.push ? 'checked' : ''} onchange="_nw.push=this.checked"> ابعت إشعار على الموبايل كمان</label>
+      <div id="form-error" class="err hidden"></div>
+      <div class="modal-foot"><button class="btn btn-brand" id="form-submit" onclick="_nwSend()">إرسال</button><button class="btn btn-ghost" onclick="openOccasions()">رجوع</button></div>`;
+  };
+  window._nwRender = render; openModal('📣 خبر جديد', ''); render();
+  window._nwSend = () => runSubmit(async () => {
+    if (!n.title.trim() || !n.message.trim()) return formError('اكتب العنوان والرسالة');
+    const campaign = 'news_' + Date.now();
+    const base = { kind: 'news', emoji: n.emoji || '📣', title: n.title.trim(), message: n.message.trim(), campaign, show_until: new Date(Date.now() + 10 * 864e5).toISOString() };
+    const rows = [];
+    if (n.aud !== 'families') state.tutors.filter(t => t.user_id).forEach(t => rows.push({ ...base, target: 'tutor', tutor_id: t.id }));
+    if (n.aud !== 'tutors') { const links = await q(sb.from('parent_links').select('family_id').eq('revoked', false)); [...new Set(links.map(l => l.family_id))].forEach(fid => rows.push({ ...base, target: 'family', family_id: fid })); }
+    if (!rows.length) return formError('مفيش حد على التطبيق من الفئة دي لسه');
+    await q(sb.from('occasions').insert(rows));
+    let pushed = '';
+    if (n.push) { try { const { data } = await sb.functions.invoke('broadcast-push', { body: { campaign } }); pushed = data?.ok ? ` — الإشعار وصل لـ ${data.people_with_push} (${data.devices} جهاز)` : ''; } catch (e) {} }
+    showToast(`اتبعت لـ ${rows.length}${pushed} ✓`); openOccasions();
+  });
 }
 
 function openOccasionForm(pre = {}) {

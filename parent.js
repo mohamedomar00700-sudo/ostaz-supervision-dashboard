@@ -45,7 +45,7 @@ function occCardHtml(o, dismissJs) {
     <div class="occ-title">${esc(o.title)}</div>
     <div class="occ-msg">${esc(o.message)}</div>
     <div class="occ-sign">فريق أكاديمية أستاذ أونلاين 🤍</div>
-    <button class="btn btn-brand sm occ-btn" onclick="${dismissJs}">شكراً 🤍</button>
+    <button class="btn btn-brand sm occ-btn" onclick="${dismissJs}">${o.kind === 'news' ? 'تمام، فهمت 👍' : 'شكراً 🤍'}</button>
   </div>`;
 }
 function occFade(id) { const el = document.querySelector(`[data-occ="${id}"]`); if (el) { el.classList.add('occ-out'); setTimeout(() => el.remove(), 350); } }
