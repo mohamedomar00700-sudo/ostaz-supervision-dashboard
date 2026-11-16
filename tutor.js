@@ -174,6 +174,7 @@ function tutorRender() {
         <div class="sub small">اكتبي تقرير قصير بعد كل حصة (المدة واللي اتشرح والواجب) — الإشراف بيبعته لولي الأمر، وكده حسابك بيتأكد أول بأول.</div>
         ${needRep.filter(s => !occ.some(o => o.id === s.id)).map(s => `<div class="item-head mt" style="gap:8px"><span>${esc(s.group_key ? '👥 ' + (s.group_name || 'مجموعة') : s.student_name)} <span class="sub small">${esc(relDayLabel(s.scheduled_at, CAIRO_TZ))} ${tTime(s.scheduled_at)}</span></span>${tRepBtn(s)}</div>`).join('')}</div>` : ''}
       ${tutorRequestsHtml()}
+      ${(T.students || []).length ? `<div class="actions mb"><button class="btn btn-ghost sm" onclick="tutorPickForAdd()">➕ عملتي حصة مش ظاهرة هنا؟ سجّليها</button></div>` : ''}
       ${days.length ? days.map(k => `<div class="section-title"><h2>${k === todayKey ? 'النهارده' : esc(relDayLabel(byDay[k][0].scheduled_at, CAIRO_TZ))}</h2></div>
         <div class="list">${byDay[k].map(s => tutorSessionCard(s)).join('')}</div>`).join('')
         : '<div class="card empty">مفيش حصص في الأيام الجاية 👌<br><span class="small">أي حصة الإشراف يحجزها هتظهر هنا على طول، ويوصلك تذكير قبلها.</span></div>'}
@@ -295,6 +296,13 @@ function tutorRequestsHtml() {
         <div class="sub small">${r.session_at ? `حصة ${esc(relDayLabel(r.session_at, CAIRO_TZ))} ${tTime(r.session_at)}` : ''}${r.proposed_at ? ` ← ${esc(relDayLabel(r.proposed_at, CAIRO_TZ))} ${tTime(r.proposed_at)}` : ''}${r.proposed_minutes ? ` · ${durLabel(r.proposed_minutes)}` : ''}</div>
         ${r.decision_note ? `<div class="small mt">📝 الإشراف: ${esc(r.decision_note)}</div>` : ''}</div>
       <span class="badge ${T_REQ_ST[r.status][1]}">${T_REQ_ST[r.status][0]}</span></div></div>`).join('')}</div>`;
+}
+// حصة اتعملت (أو هتتعمل) ومش متسجلة → تختار الطالب وتبعت طلب للإشراف يوافق عليه
+function tutorPickForAdd() {
+  if (T.preview) return showToast('ده عرض معاينة — المعلمة هي اللي بتبعت الطلبات من حسابها');
+  const rows = T.students || [];
+  openModal('➕ حصة مش متسجلة', `<p class="sub small">اختاري الطالب، وبعدها اليوم والساعة والمدة (لو الحصة اتعملت خلاص اختاري معادها اللي فات). الطلب بيروح للإشراف يوافق عليه، وبعدها تقدري تكتبي التقرير.</p>
+    <div class="list">${rows.map(r => `<button class="card item" style="text-align:right;width:100%;cursor:pointer" onclick="tutorRequest(null, ${jsq(r.student_id)}, ${jsq(r.subject || '')}, 'add_session')"><b>${esc(r.student_name)}</b> <span class="sub small">· ${esc(r.subject || '')}</span></button>`).join('')}</div>`);
 }
 function tutorRequest(sessionId, studentId, subject, preset) {
   if (T.preview) return showToast('ده عرض معاينة — المعلمة هي اللي بتبعت الطلبات من حسابها');
