@@ -97,8 +97,8 @@ async function flashModels(key: string) {
     const ver = (n: string) => Number((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
     _models = (j.models || []).filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
       .map((m: any) => String(m.name).replace(/^models\//, ''))
-      .filter((n: string) => /^gemini-[\d.]+-flash(-\d+)?$/.test(n))
-      .sort((a: string, b: string) => ver(b) - ver(a));
+      .filter((n: string) => /^gemini-[\d.]+-flash(-lite)?(-\d+)?$/.test(n))
+      .sort((a: string, b: string) => (/-lite/.test(a) ? 1 : 0) - (/-lite/.test(b) ? 1 : 0) || ver(b) - ver(a)); // الـ lite في الآخر كاحتياطي أسرع
   } catch { _models = []; }
   return _models!;
 }
@@ -223,7 +223,10 @@ Deno.serve(async (req) => {
     const winLines = (win || []).map(s => { const c = cairoParts(new Date(s.scheduled_at));
       return `${xCode.get(s.id)}: ${c.date} (${AR_DAYS[c.weekday] || ''}) ${c.time} — ${sCode.get(s.student_id) || '?'} ${stuBy.get(s.student_id)?.name || ''} مع ${tCode.get(s.tutor_id) || '?'} ${tutBy.get(s.tutor_id)?.name || ''} — ${s.subject || ''} — ${s.actual_minutes || s.duration_minutes} د — ${STAT[s.status] || s.status}${s.kind === 'trial' ? ' — تجريبية' : ''}${s.family_block ? ' — حصة أسرة' : ''}${s.group_name ? ' — ' + s.group_name : ''}`; }).join('\n');
 
-    const lwLines = (lastWeek || []).map((s: any) => { const c = cairoParts(new Date(s.scheduled_at));
+    const nz0 = (x: string) => String(x || '').replace(/[ًٌٍَُِّْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, '');
+    const txt0 = nz0(text + ' ' + history.map(h => h.text || '').join(' '));
+    const lwStu = new Set((students || []).filter((s: any) => { const n = nz0(s.name); return n.length > 1 && txt0.includes(n); }).map((s: any) => s.id));
+    const lwLines = (lastWeek || []).filter((s: any) => lwStu.has(s.student_id)).map((s: any) => { const c = cairoParts(new Date(s.scheduled_at));
       return `${c.date} (${AR_DAYS[c.weekday] || ''}) ${c.time} — ${sCode.get(s.student_id) || '?'} ${stuBy.get(s.student_id)?.name || ''} مع ${tCode.get(s.tutor_id) || '?'} ${tutBy.get(s.tutor_id)?.name || ''} — ${s.subject || ''} — ${s.actual_minutes || s.duration_minutes} د${s.family_block ? ' — حصة أسرة' : ''}${s.group_name ? ' — ' + s.group_name : ''}${String(s.status).startsWith('cancelled') ? ' — (اتلغت)' : ''}`; }).join('\n');
     const dataBlock = `# الطلاب\n${stuLines}\n\n# المعلمين\n${tutLines}\n\n# مين بيدرّس مين (الأحدث فوق — آخر 45 يوم + الخطط)\n${pairLines}\n\n# الجروبات\n${grpLines || '—'}\n\n# الأسبوع اللي فات (للمواعيد الثابتة — مش للتعديل)\n${lwLines || '—'}\n\n# حصص الفترة (من 4 أيام لـ 9 أيام جاية)\n${winLines || '—'}`;
 
@@ -238,14 +241,14 @@ Deno.serve(async (req) => {
     if (body.list_models) return json({ models });
     let out: any = null, lastErr = '';
     const t0 = Date.now();
-    for (const m of models.slice(0, 6)) {
+    for (const m of models.slice(0, 9)) {
       const left = 120000 - (Date.now() - t0); if (left < 15000) { lastErr = lastErr || 'Gemini بطيء جداً دلوقتي'; break; }
       const think = /gemini-3/.test(m) || m === 'gemini-flash-latest' ? { thinkingLevel: 'low' } : /2\.5-flash/.test(m) ? { thinkingBudget: 0 } : null;
       let r: Response, j: any;
       for (const useThink of think ? [true, false] : [false]) {
         try {
           r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, signal: AbortSignal.timeout(Math.min(35000, left)),
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, signal: AbortSignal.timeout(Math.min(m === models[0] ? 55000 : 35000, left)),
             body: JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt(nowC, S.saqqour_rules || '') }] }, contents,
               generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: SCHEMA, ...(useThink ? { thinkingConfig: think } : {}) } }),
           });
