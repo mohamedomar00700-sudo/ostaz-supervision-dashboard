@@ -368,6 +368,15 @@ Deno.serve(async (req) => {
         if (patch.actual_minutes && patch.actual_minutes === (s.actual_minutes || s.duration_minutes)) delete patch.actual_minutes;
         if (patch.tutor_cost_egp != null && !patch.tutor_id && Number(patch.tutor_cost_egp) === Number(s.tutor_cost_egp)) delete patch.tutor_cost_egp;
         if (!Object.keys(patch).length) { already.push({ student_name: r.student_name, tutor_name: r.tutor_name, subject: s.subject, date: c.date, time: c.time, minutes: s.actual_minutes || s.duration_minutes, by: supName(s.created_by, s.notes), at: s.created_at, session_id: s.id, differs: false }); return null; }
+        // حصة اتعملت/اتلغت في يوم تاني ما تتنقلش ليوم جديد — دي غالباً حصة جديدة النهارده
+        if (patch.scheduled_at && s.status !== 'scheduled' && cairoParts(new Date(patch.scheduled_at)).date !== c.date) {
+          const n = cairoParts(new Date(patch.scheduled_at)); const st0 = stuBy.get(s.student_id); const fam0 = famBy.get(st0?.family_id); const p0 = pair.get(s.student_id + '|' + s.tutor_id);
+          warnings.push(`${st0?.name || ''} مع ${tutBy.get(s.tutor_id)?.name || ''}: حصة ${c.date} ${s.status === 'done' ? 'اتعملت خلاص' : 'اتقفلت'} فما نقلتهاش — جهزت حصة جديدة يوم ${n.date} بدلها.`);
+          return { op: 'add_session', note: r.note, student_id: s.student_id, tutor_id: s.tutor_id, student_name: st0?.name || '', tutor_name: tutBy.get(s.tutor_id)?.name || '', family_name: fam0?.name || '',
+            subject: patch.subject || s.subject, kind: s.kind === 'trial' ? 'regular' : (s.kind || 'regular'), family_block: !!s.family_block, scheduled_at: patch.scheduled_at, date: n.date, time: n.time,
+            duration_minutes: patch.duration_minutes || s.duration_minutes, actual_minutes: null, status: 'scheduled', student_currency: fam0?.currency || 'AED',
+            student_price: Number(st0?.default_price ?? p0?.price ?? 0), tutor_cost_egp: Number(patch.tutor_cost_egp ?? p0?.rate ?? s.tutor_cost_egp ?? 0) };
+        }
         r.patch = patch; if (patch.scheduled_at) { const n = cairoParts(new Date(patch.scheduled_at)); r.new_date = n.date; r.new_time = n.time; }
         return r;
       }
