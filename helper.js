@@ -609,41 +609,61 @@
     botSay(html, acts.length ? 'happy' : null);
   }
   const inSt = 'width:100%;box-sizing:border-box;margin-top:5px;padding:7px 10px;border-radius:9px;border:1px solid var(--border,#d1d5db);background:var(--card,#fff);color:inherit;font:inherit;font-size:13px';
+  const ntNorm = x => String(x || '').replace(/^(أ|د|م)\.\s*/, '').replace(/^(مس|ميس|مستر|استاذة?|أستاذة?)\s+/, '').replace(/\s*\(.*?\)/g, '').replace(/[ًٌٍَُِّْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, ' ').trim();
+  // معلمة "جديدة" اسمها هو أول اسم لمعلمة موجودة (هبه = أ. هبة حامد) → غالباً هي نفسها
+  const ntSimilar = t => { const n = ntNorm(t.name); if (!n) return [];
+    return (typeof state !== 'undefined' && state.tutors || []).filter(x => { const m = ntNorm(x.name); return m === n || m.split(' ')[0] === n.split(' ')[0]; }).slice(0, 3); };
+  const ntStudents = t => (t.students || []).map(nm => ({ nm, st: (typeof state !== 'undefined' && state.students || []).find(s => ntNorm(s.name) === ntNorm(nm)) }));
   function newTutorCard(t, origText) {
     const id = 'nt' + (++SQ.aid);
     const nm = /^(أ|د|م)\./.test(t.name) ? t.name : 'أ. ' + String(t.name).replace(/^(مس|ميس|مستر)\s*/, '');
     const boy = /^(مستر|م\.)/.test(String(t.name).trim());
-    return `<div id="${id}" style="margin-top:8px;padding:9px;border-radius:10px;background:rgba(37,99,235,.07)">👩‍🏫 <b>${e(nm)}</b> مش متسجلة عندنا${t.students?.length ? ` — حصص <b>${e(t.students.join('، '))}</b> معاها مستنية` : ''}
-      <div class="sq-go" style="flex-wrap:wrap">${act('➕ ضيفها معلمة جديدة', () => ntForm(id, nm, t.subject || '', boy, origText))}${act('لا، دي معلمة موجودة', () => { input && (input.value = `مس ${String(t.name).replace(/^(مس|ميس|مستر)\s*/, '')} قصدي بيها مس `); input && input.focus(); }, true)}</div></div>`;
+    const sim = ntSimilar(t);
+    const pick = x => () => { const b = document.getElementById(id); b && (b.innerHTML = `✅ تمام — ${e(tutLabel0(x))}`); aiAsk(`${origText}\n\n(ملحوظة: "${t.name}" اللي في الرسالة هي ${x.name}${x.subject_label ? ' (' + x.subject_label + ')' : ''} المتسجلة عندنا — مش معلمة جديدة. سجّل حصصها عليها.)`); };
+    return `<div id="${id}" style="margin-top:8px;padding:9px;border-radius:10px;background:rgba(37,99,235,.07)">👩‍🏫 <b>${e(nm)}</b> ${sim.length ? 'مش لاقيها بالاسم ده بالظبط' : 'مش متسجلة عندنا'}${t.students?.length ? ` — حصص <b>${e(t.students.join('، '))}</b> معاها مستنية` : ''}
+      ${sim.length ? `<div style="margin-top:4px">تقصد${sim.length > 1 ? ' واحدة من دول' : ''}؟</div><div class="sq-go" style="flex-wrap:wrap">${sim.map(x => act(`✅ ${e(tutLabel0(x))}`, pick(x))).join('')}</div>` : ''}
+      <div class="sq-go" style="flex-wrap:wrap">${act('➕ ضيفها معلمة جديدة', () => ntForm(id, nm, t.subject || '', boy, origText, t), !!sim.length)}${sim.length ? '' : act('لا، دي معلمة موجودة', () => { input && (input.value = `مس ${String(t.name).replace(/^(مس|ميس|مستر)\s*/, '')} قصدي بيها مس `); input && input.focus(); }, true)}</div></div>`;
   }
-  function ntForm(id, nm, subj, boy, origText) {
+  const tutLabel0 = x => x.name + (x.subject_label ? ` · ${x.subject_label}` : '');
+  function ntForm(id, nm, subj, boy, origText, t) {
     const box = document.getElementById(id); if (!box) return;
+    const sts = ntStudents(t || {});
+    // كل طالب ممكن يكون بسعر مختلف مع نفس المعلمة (معروف 120 / رزان 110) → خانة لكل طالب
+    const rateHtml = sts.length > 1
+      ? `<div class="small" style="margin-top:6px">سعر الساعة للمعلمة بالجنيه — لكل طالب لوحده (سيبه فاضي لو لسه مش معروف):</div>${sts.map((x, i) => `<input style="${inSt}" data-f="rate_${i}" type="number" inputmode="numeric" placeholder="${e(x.nm)} — سعر الساعة">`).join('')}`
+      : `<input style="${inSt}" data-f="rate" type="number" inputmode="numeric" placeholder="سعر الساعة بالجنيه — سيبيه فاضي لو لسه مش معروف">`;
     box.innerHTML = `<b>➕ معلمة جديدة</b>
       <input style="${inSt}" data-f="name" value="${e(nm)}" placeholder="الاسم (أ. …)">
       <input style="${inSt}" data-f="subject" value="${e(subj)}" placeholder="المادة">
       <select style="${inSt}" data-f="gender"><option value="f" ${boy ? '' : 'selected'}>👩 مس</option><option value="m" ${boy ? 'selected' : ''}>👨 مستر</option></select>
-      <input style="${inSt}" data-f="rate" type="number" inputmode="numeric" placeholder="سعر الساعة بالجنيه — سيبيه فاضي لو لسه مش معروف">
+      ${rateHtml}
       <input style="${inSt}" data-f="phone" inputmode="tel" placeholder="رقمها (اختياري)">
       <input style="${inSt}" data-f="group" placeholder="لينك جروب الواتساب (اختياري)">
       <input style="${inSt}" data-f="link" placeholder="لينك زوم/ميت ثابت (اختياري)">
-      <div class="sq-go">${act('💾 حفظ وكمّل تسجيل حصصها', () => ntSave(id, origText))}</div>`;
+      <div class="sq-go">${act('💾 حفظ وكمّل تسجيل حصصها', () => ntSave(id, origText, sts))}</div>`;
   }
-  async function ntSave(id, origText) {
+  async function ntSave(id, origText, sts = []) {
     const box = document.getElementById(id); if (!box) return;
     const v = f => (box.querySelector(`[data-f="${f}"]`)?.value || '').trim();
     let name = v('name').replace(/\s*\([^)]*\)\s*/g, ' ').trim(); if (!name) return botSay('اكتب اسم المعلمة الأول 🙏');
     if (!/^(أ|د|م)\./.test(name)) name = 'أ. ' + name.replace(/^(مس|ميس|مستر)\s*/, '');
-    const rate = Number(v('rate')) || null;
-    const row = { name, subject_label: v('subject') || null, gender: v('gender') || 'f', default_rate_egp: rate, phone: v('phone') || null,
+    const per = sts.length > 1 ? sts.map((x, i) => ({ ...x, rate: Number(v('rate_' + i)) || null })) : [];
+    const rate = per.length ? (per.find(x => x.rate)?.rate || null) : (Number(v('rate')) || null);
+    const subject = v('subject') || null;
+    const row = { name, subject_label: subject, gender: v('gender') || 'f', default_rate_egp: rate, phone: (v('phone') || '').replace(/[^\d+]/g, '') || null,
       whatsapp_group: v('group') ? v('group').replace(/\?.*$/, '') : null, meeting_link: v('link') || null,
       notes: `اتضافت من صقّور ${new Date().toLocaleDateString('ar-EG')}${rate ? '' : ' — السعر لسه ما اتحددش'}` };
     const { data: nt, error } = await sb.from('tutors').insert(row).select().single();
     if (error) return botSay('معلش 😅 ما قدرتش أضيفها: ' + e(error.message));
     if (typeof state !== 'undefined' && Array.isArray(state.tutors)) state.tutors.push(nt);
+    // سعر كل طالب مع المعلمة دي يتحفظ في خطته عشان صقّور ياخده لوحده بعد كده
+    const plans = per.filter(x => x.st && x.rate).map(x => ({ student_id: x.st.id, tutor_id: nt.id, subject: subject || 'عام', tutor_rate_egp: x.rate }));
+    if (plans.length) { const { error: pe } = await sb.from('student_subjects').insert(plans); if (pe) console.warn('plans', pe); }
     // الكارت القديم اللي فوق اتعمل قبل المعلمة ما تتضاف → نقفله عشان ما يتنفذش بالغلط
     const bub = box.closest('.sq-msg'); if (bub) { bub.querySelectorAll('input[data-ai]').forEach(x => { delete AI.pending[x.dataset.ai]; x.disabled = true; }); bub.querySelectorAll('.sq-go').forEach(g => { if (/نفّذ/.test(g.textContent)) g.innerHTML = '<span class="small sub">↓ الكارت الجديد تحت هو اللي هيتنفذ</span>'; }); }
-    box.innerHTML = `✅ ضفت <b>${e(name)}</b>${rate ? ` بسعر ${rate} ج/ساعة` : ' (السعر لسه — حصصها هتتسجل بـ 0 لحد ما يتحدد)'}`;
-    aiAsk(`${origText}\n\n(ملحوظة: ${name}${row.subject_label ? ' (' + row.subject_label + ')' : ''} اتضافت دلوقتي كمعلمة جديدة — سجّل حصصها؛ والحصص التانية لو متسجلة سيبها)`);
+    const rateTxt = per.length ? per.filter(x => x.rate).map(x => `${x.nm} ${x.rate} ج/ساعة`).join('، ') : (rate ? `${rate} ج/ساعة` : '');
+    box.innerHTML = `✅ ضفت <b>${e(name)}</b>${rateTxt ? ` — ${e(rateTxt)}` : ' (السعر لسه — حصصها هتتسجل بـ 0 لحد ما يتحدد)'}`;
+    aiAsk(`${origText}\n\n(ملحوظة: ${name}${subject ? ' (' + subject + ')' : ''} اتضافت دلوقتي كمعلمة جديدة — سجّل حصصها${rateTxt ? '؛ سعر المعلمة: ' + rateTxt + ' (حطه في tutor_rate_egp لكل طالب)' : ''}؛ والحصص التانية لو متسجلة سيبها)`);
   }
   async function aiExec(k) {
     const P = AI.pending[k]; if (!P) return; delete AI.pending[k];
