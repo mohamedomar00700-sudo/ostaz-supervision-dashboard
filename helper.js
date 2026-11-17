@@ -555,10 +555,19 @@
       botSay(`معلش 😅 ${e(msg)}`); return;
     }
     // Gemini ساعات بيقول "هسجّل…" وينسى يبعت العملية نفسها → نعيد السؤال مرة واحدة لوحدنا
-    if (!retried && !(data.actions || []).length && !data.already?.length && !data.choices?.length && !data.questions?.length && !data.warnings?.length && /ه(سج|ضيف|عد|لغ|نقل)/.test(data.reply || ''))
+    if (!retried && !(data.actions || []).length && !data.already?.length && !data.choices?.length && !data.new_tutors?.length && !data.questions?.length && !data.warnings?.length && /ه(سج|ضيف|عد|لغ|نقل)/.test(data.reply || ''))
       return aiAsk(text, true);
     AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
-    const acts = data.actions || [];
+    let acts = data.actions || [];
+    // معلمة جديدة لسه مش متسجلة: Gemini ساعات بيحط حصتها على معلمة تانية (زينة اتحطت على مس روعة بدل مس فداء)
+    // → نشيل حصص طلابها من الكارت ده، وهتيجي صح بعد ما تضيف المعلمة
+    if (data.new_tutors?.length) {
+      const nn = s => String(s || '').replace(/[ًٌٍَُِّْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').trim();
+      const ntStu = new Set(data.new_tutors.flatMap(t => t.students || []).map(nn));
+      const before = acts.length;
+      acts = acts.filter(a => !(a.op === 'add_session' && ntStu.has(nn(a.student_name))));
+      if (acts.length < before) (data.warnings ||= []).push('حصص المعلمة الجديدة هتظهر بعد ما تضيفها من الكارت ده 👇');
+    }
     // حارس الأسعار بالمبلغ: سعر الأسرة دايماً صغير (حوالي 15–30 درهم/ريال)، وسعر المعلم بالجنيه (80–200).
     // لو صقّور حط مبلغ كبير في سعر الأسرة أو مبلغ صغير في سعر المعلم → نصلّحه ونقول
     const FAM_MAX = 60, TUT_MIN = 50;
@@ -581,7 +590,7 @@
     if (data.warnings?.length && (acts.length || data.already?.length)) data.reply = acts.length ? `جهزتلك ${acts.length} ${acts.length === 1 ? 'عملية' : 'عمليات'} — راجع الكارت تحت (فيه تنبيهات ⚠️) قبل ما تنفّذ.` : 'مفيش حاجة محتاجة تتسجل — بص على التنبيهات ⚠️ تحت.';
     if (!acts.length && data.already?.length && !data.questions?.length && !data.warnings?.length) data.reply = `كل الحصص دي متسجلة بالفعل ✅ — مفيش حاجة محتاجة تتسجل أو تتعدل.`;
     if (!acts.length && !data.already?.length && /ه(سج|ضيف|عد|لغ|نقل)/.test(data.reply || '')) // "هسجلها" من غير أي عملية = مستني رد، مش هيسجل لوحده
-      data.reply = (data.choices?.length || data.questions?.length) ? `${data.reply}\n⚠️ لسه ما سجّلتش حاجة — جاوب على السؤال تحت الأول.` : 'ما قدرتش أطلع حصة أسجّلها من الرسالة دي ⚠️ — اكتبها تاني بالمعلم واليوم والساعة.';
+      data.reply = (data.choices?.length || data.questions?.length || data.new_tutors?.length) ? `${data.reply}\n⚠️ لسه ما سجّلتش حاجة — كمّل من تحت الأول.` : 'ما قدرتش أطلع حصة أسجّلها من الرسالة دي ⚠️ — اكتبها تاني بالمعلم واليوم والساعة.';
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     // اختيارات جاهزة لما صقّور يحتار — الضغطة بتتبعت كرسالة
@@ -631,6 +640,8 @@
     const { data: nt, error } = await sb.from('tutors').insert(row).select().single();
     if (error) return botSay('معلش 😅 ما قدرتش أضيفها: ' + e(error.message));
     if (typeof state !== 'undefined' && Array.isArray(state.tutors)) state.tutors.push(nt);
+    // الكارت القديم اللي فوق اتعمل قبل المعلمة ما تتضاف → نقفله عشان ما يتنفذش بالغلط
+    const bub = box.closest('.sq-msg'); if (bub) { bub.querySelectorAll('input[data-ai]').forEach(x => { delete AI.pending[x.dataset.ai]; x.disabled = true; }); bub.querySelectorAll('.sq-go').forEach(g => { if (/نفّذ/.test(g.textContent)) g.innerHTML = '<span class="small sub">↓ الكارت الجديد تحت هو اللي هيتنفذ</span>'; }); }
     box.innerHTML = `✅ ضفت <b>${e(name)}</b>${rate ? ` بسعر ${rate} ج/ساعة` : ' (السعر لسه — حصصها هتتسجل بـ 0 لحد ما يتحدد)'}`;
     aiAsk(`${origText}\n\n(ملحوظة: ${name}${row.subject_label ? ' (' + row.subject_label + ')' : ''} اتضافت دلوقتي كمعلمة جديدة — سجّل حصصها؛ والحصص التانية لو متسجلة سيبها)`);
   }
