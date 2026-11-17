@@ -577,6 +577,8 @@
     // لو السيرفر رفض/صحّح حاجة (زي تغيير معلم غلط)، كلام Gemini ممكن يكون بيقول عكسها → نكتب ملخص من الكارت نفسه
     if (data.warnings?.length && (acts.length || data.already?.length)) data.reply = acts.length ? `جهزتلك ${acts.length} ${acts.length === 1 ? 'عملية' : 'عمليات'} — راجع الكارت تحت (فيه تنبيهات ⚠️) قبل ما تنفّذ.` : 'مفيش حاجة محتاجة تتسجل — بص على التنبيهات ⚠️ تحت.';
     if (!acts.length && data.already?.length && !data.questions?.length && !data.warnings?.length) data.reply = `كل الحصص دي متسجلة بالفعل ✅ — مفيش حاجة محتاجة تتسجل أو تتعدل.`;
+    if (!acts.length && !data.already?.length && /ه(سج|ضيف|عد|لغ|نقل)/.test(data.reply || '')) // "هسجلها" من غير أي عملية = مستني رد، مش هيسجل لوحده
+      data.reply = (data.choices?.length || data.questions?.length) ? `${data.reply}\n⚠️ لسه ما سجّلتش حاجة — جاوب على السؤال تحت الأول.` : 'ما قدرتش أطلع حصة أسجّلها من الرسالة دي ⚠️ — اكتبها تاني بالمعلم واليوم والساعة.';
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     // اختيارات جاهزة لما صقّور يحتار — الضغطة بتتبعت كرسالة
