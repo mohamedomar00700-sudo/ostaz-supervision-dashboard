@@ -566,6 +566,8 @@
       if (Number(a.student_price) >= FAM_MAX) {
         const v = Number(a.student_price); a.tutor_cost_egp = v; if (famDef) a.student_price = famDef;
         (data.warnings ||= []).push(`${a.student_name}: ${v} ده سعر معلم مش أسرة (مفيش أسرة بتدفع ${v} في الحصة) — حطيته للمعلم ${v} ج${famDef ? ' والأسرة ' + famDef + ' زي العادي' : ''}`);
+      } else if (!Number(a.tutor_cost_egp)) {
+        (data.warnings ||= []).push(`${a.student_name} مع ${a.tutor_name}: سعر المعلمة لسه مش متحدد — هتتسجل بـ 0 لحد ما تبعتوا السعر.`);
       } else if (Number(a.tutor_cost_egp) > 0 && Number(a.tutor_cost_egp) < TUT_MIN) {
         const v = Number(a.tutor_cost_egp);
         (data.warnings ||= []).push(`${a.student_name}: سعر المعلم ${v} ج قليل قوي — غالباً ده سعر الأسرة. راجعه قبل التنفيذ.`);
@@ -577,6 +579,10 @@
     if (!acts.length && data.already?.length && !data.questions?.length && !data.warnings?.length) data.reply = `كل الحصص دي متسجلة بالفعل ✅ — مفيش حاجة محتاجة تتسجل أو تتعدل.`;
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
+    // اختيارات جاهزة لما صقّور يحتار — الضغطة بتتبعت كرسالة
+    if (data.choices?.length) html += data.choices.map(c => `<div style="margin-top:8px"><div>❓ ${e(c.question)}</div><div class="sq-go" style="flex-wrap:wrap">${(c.options || []).map(o => act(e(o), () => { meSay(o); aiAsk(o); }, true)).join('')}${act('✍️ حاجة تانية', () => { input && input.focus(); }, true)}</div></div>`).join('');
+    // معلمة مش متسجلة → نضيفها من هنا ونكمّل تسجيل حصصها
+    if (data.new_tutors?.length) html += data.new_tutors.map(t => newTutorCard(t, text)).join('');
     if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
     if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `${x.session_id ? sessLink(x.session_id) : ''}• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}${x.at ? ' ' + regAt(x.at) : ''}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}${x.session_id ? ' <u style="color:#2563eb">👁 شوفها</u></span>' : ''}`).join('<br>')}<div class="sub" style="margin-top:4px">دوسي على أي حصة عشان تشوفها من السيستم نفسه</div></div>`;
     if (acts.length) {
@@ -587,6 +593,41 @@
     }
     if (!acts.length && data.reply) html += `<div style="margin-top:4px">${cpBtn(data.reply)}</div>`;
     botSay(html, acts.length ? 'happy' : null);
+  }
+  const inSt = 'width:100%;box-sizing:border-box;margin-top:5px;padding:7px 10px;border-radius:9px;border:1px solid var(--border,#d1d5db);background:var(--card,#fff);color:inherit;font:inherit;font-size:13px';
+  function newTutorCard(t, origText) {
+    const id = 'nt' + (++SQ.aid);
+    const nm = /^(أ|د|م)\./.test(t.name) ? t.name : 'أ. ' + String(t.name).replace(/^(مس|ميس|مستر)\s*/, '');
+    const boy = /^(مستر|م\.)/.test(String(t.name).trim());
+    return `<div id="${id}" style="margin-top:8px;padding:9px;border-radius:10px;background:rgba(37,99,235,.07)">👩‍🏫 <b>${e(nm)}</b> مش متسجلة عندنا${t.students?.length ? ` — حصص <b>${e(t.students.join('، '))}</b> معاها مستنية` : ''}
+      <div class="sq-go" style="flex-wrap:wrap">${act('➕ ضيفها معلمة جديدة', () => ntForm(id, nm, t.subject || '', boy, origText))}${act('لا، دي معلمة موجودة', () => { input && (input.value = `مس ${String(t.name).replace(/^(مس|ميس|مستر)\s*/, '')} قصدي بيها مس `); input && input.focus(); }, true)}</div></div>`;
+  }
+  function ntForm(id, nm, subj, boy, origText) {
+    const box = document.getElementById(id); if (!box) return;
+    box.innerHTML = `<b>➕ معلمة جديدة</b>
+      <input style="${inSt}" data-f="name" value="${e(nm)}" placeholder="الاسم (أ. …)">
+      <input style="${inSt}" data-f="subject" value="${e(subj)}" placeholder="المادة">
+      <select style="${inSt}" data-f="gender"><option value="f" ${boy ? '' : 'selected'}>👩 مس</option><option value="m" ${boy ? 'selected' : ''}>👨 مستر</option></select>
+      <input style="${inSt}" data-f="rate" type="number" inputmode="numeric" placeholder="سعر الساعة بالجنيه — سيبيه فاضي لو لسه مش معروف">
+      <input style="${inSt}" data-f="phone" inputmode="tel" placeholder="رقمها (اختياري)">
+      <input style="${inSt}" data-f="group" placeholder="لينك جروب الواتساب (اختياري)">
+      <input style="${inSt}" data-f="link" placeholder="لينك زوم/ميت ثابت (اختياري)">
+      <div class="sq-go">${act('💾 حفظ وكمّل تسجيل حصصها', () => ntSave(id, origText))}</div>`;
+  }
+  async function ntSave(id, origText) {
+    const box = document.getElementById(id); if (!box) return;
+    const v = f => (box.querySelector(`[data-f="${f}"]`)?.value || '').trim();
+    let name = v('name').replace(/\s*\([^)]*\)\s*/g, ' ').trim(); if (!name) return botSay('اكتب اسم المعلمة الأول 🙏');
+    if (!/^(أ|د|م)\./.test(name)) name = 'أ. ' + name.replace(/^(مس|ميس|مستر)\s*/, '');
+    const rate = Number(v('rate')) || null;
+    const row = { name, subject_label: v('subject') || null, gender: v('gender') || 'f', default_rate_egp: rate, phone: v('phone') || null,
+      whatsapp_group: v('group') ? v('group').replace(/\?.*$/, '') : null, meeting_link: v('link') || null,
+      notes: `اتضافت من صقّور ${new Date().toLocaleDateString('ar-EG')}${rate ? '' : ' — السعر لسه ما اتحددش'}` };
+    const { data: nt, error } = await sb.from('tutors').insert(row).select().single();
+    if (error) return botSay('معلش 😅 ما قدرتش أضيفها: ' + e(error.message));
+    if (typeof state !== 'undefined' && Array.isArray(state.tutors)) state.tutors.push(nt);
+    box.innerHTML = `✅ ضفت <b>${e(name)}</b>${rate ? ` بسعر ${rate} ج/ساعة` : ' (السعر لسه — حصصها هتتسجل بـ 0 لحد ما يتحدد)'}`;
+    aiAsk(`${origText}\n\n(ملحوظة: ${name}${row.subject_label ? ' (' + row.subject_label + ')' : ''} اتضافت دلوقتي كمعلمة جديدة — سجّل حصصها؛ والحصص التانية لو متسجلة سيبها)`);
   }
   async function aiExec(k) {
     const P = AI.pending[k]; if (!P) return; delete AI.pending[k];

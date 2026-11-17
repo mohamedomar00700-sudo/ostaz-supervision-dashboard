@@ -39,7 +39,11 @@ const SCHEMA = {
   type: 'OBJECT',
   properties: {
     reply: { type: 'STRING', description: 'رد قصير بالعامية المصرية: فهمت إيه وهتعمل إيه' },
-    questions: { type: 'ARRAY', items: { type: 'STRING' }, description: 'أسئلة لو فيه حاجة مش واضحة (اسم مش معروف، وقت ناقص…)' },
+    questions: { type: 'ARRAY', items: { type: 'STRING' }, description: 'أسئلة مفتوحة بس لو مفيش اختيارات واضحة تتعرض' },
+    choices: { type: 'ARRAY', description: 'لما تحتار بين احتمالات: سؤال قصير + من 2 لـ 4 إجابات جاهزة مكتوبة كأن المشرفة هي اللي بتقولها (مثلاً "قصدي مس إيمان بتاعة العلوم"، "ساعتين من 2 لـ 4"). المشرفة هتدوس على واحدة وهتتبعتلك كرسالة.',
+      items: { type: 'OBJECT', properties: { question: { type: 'STRING' }, options: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['question', 'options'] } },
+    new_tutors: { type: 'ARRAY', description: 'معلمين اتذكروا في الرسالة ومش موجودين في قايمة المعلمين خالص (مش اسم قريب من معلم موجود)',
+      items: { type: 'OBJECT', properties: { name: { type: 'STRING', description: 'الاسم زي ما اتكتب من غير مس/مستر' }, subject: { type: 'STRING', nullable: true }, students: { type: 'ARRAY', items: { type: 'STRING' }, description: 'أسامي الطلبة اللي حصصهم معاه في الرسالة' } }, required: ['name', 'students'] } },
     add_sessions: {
       type: 'ARRAY', description: 'حصص جديدة مش موجودة في حصص الفترة — حصة لكل سطر في الجدول',
       items: { type: 'OBJECT', properties: {
@@ -80,7 +84,7 @@ const SCHEMA = {
     },
   },
   required: ['reply', 'questions', 'add_sessions', 'status_changes', 'updates'],
-  propertyOrdering: ['questions', 'add_sessions', 'status_changes', 'updates', 'reply'],
+  propertyOrdering: ['questions', 'choices', 'new_tutors', 'add_sessions', 'status_changes', 'updates', 'reply'],
 };
 
 // موديلات Flash المتاحة على المفتاح ده (الأحدث الأول) — عشان لو جوجل وقفت موديل ما نقعش
@@ -133,6 +137,9 @@ function systemPrompt(now: { date: string; time: string; weekday: string }, extr
 - ما تعدّلش ولا تنقل حصة طالب اسمه مش مكتوب في رسالة المشرفة (حتى لو مع نفس المعلم في نفس اليوم).
 - لو إخوات مكتوبين في سطر واحد مع نفس المعلم ونفس الوقت ("رسمية وحمدان وحمدة علوم 3 مس سمر") ولهم حصص منفصلة موجودة: حط كل واحدة في updates بالوقت الجديد، والسيستم هيدمجهم لوحده في حصة أسرة واحدة.
 - لو المشرفة ما قالتش الساعة لحصة إضافية اتعملت، دوّر الأول في حصص الفترة على حصة لنفس الطالب مع نفس المعلم في نفس اليوم: لو موجودة يبقى هي نفسها (عدّل مدتها لو مختلفة)، ما تضيفش واحدة جديدة بوقت من عندك.
+- لما تحتار بين احتمالات محددة (أنهي معلمة من اتنين بنفس الاسم، ساعة ولا ساعتين، النهارده ولا بكرة…) استخدم choices بإجابات جاهزة بدل questions، وما تسجّلش الحصة اللي فيها الحيرة لحد ما ترد.
+- معلم اسمه مش موجود خالص في قايمة المعلمين → حطه في new_tutors بأسامي طلابه (وما تخترعش له كود ولا تحط حصصه على معلم تاني). باقي الحصص سجّلها عادي.
+- "المواعيد الثابتة": لو سطر من غير ساعة أو المشرفة قالت (الثابت / زي كل أسبوع / جدولهم)، خد المواعيد والمعلمين والمدد من نفس اليوم في "الأسبوع اللي فات" وسجّلها بيها، وقول في reply إنك أخدتها من الأسبوع اللي فات. لو مفيش ليهم حصص في نفس اليوم الأسبوع اللي فات، اسأل في choices.
 - ممنوع تقول أي حاجة عن إيراد الأكاديمية أو هامش الربح.${extra ? '\n' + extra : ''}`;
 }
 
@@ -172,6 +179,8 @@ Deno.serve(async (req) => {
       admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes,tutor_cost_egp,created_at,group_name')
         .gte('scheduled_at', from.toISOString()).lt('scheduled_at', to.toISOString()).neq('status', 'cancelled_by_academy').order('scheduled_at'),
     ]);
+    const { data: lastWeek } = await admin.from('sessions').select('student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,family_block,group_name')
+      .gte('scheduled_at', new Date(now.getTime() - 11 * 864e5).toISOString()).lt('scheduled_at', from.toISOString()).in('status', ['done', 'scheduled', 'cancelled_by_student', 'cancelled_by_tutor']).order('scheduled_at').limit(800);
     const { data: groupsRaw } = await admin.from('sessions').select('student_id,tutor_id,group_name,group_rate_egp,scheduled_at').not('group_key', 'is', null)
       .gte('scheduled_at', new Date(now.getTime() - 400 * 864e5).toISOString()).neq('status', 'cancelled_by_academy').limit(2000);
     const famBy = new Map((families || []).map(f => [f.id, f]));
@@ -214,7 +223,9 @@ Deno.serve(async (req) => {
     const winLines = (win || []).map(s => { const c = cairoParts(new Date(s.scheduled_at));
       return `${xCode.get(s.id)}: ${c.date} (${AR_DAYS[c.weekday] || ''}) ${c.time} — ${sCode.get(s.student_id) || '?'} ${stuBy.get(s.student_id)?.name || ''} مع ${tCode.get(s.tutor_id) || '?'} ${tutBy.get(s.tutor_id)?.name || ''} — ${s.subject || ''} — ${s.actual_minutes || s.duration_minutes} د — ${STAT[s.status] || s.status}${s.kind === 'trial' ? ' — تجريبية' : ''}${s.family_block ? ' — حصة أسرة' : ''}${s.group_name ? ' — ' + s.group_name : ''}`; }).join('\n');
 
-    const dataBlock = `# الطلاب\n${stuLines}\n\n# المعلمين\n${tutLines}\n\n# مين بيدرّس مين (الأحدث فوق — آخر 45 يوم + الخطط)\n${pairLines}\n\n# الجروبات\n${grpLines || '—'}\n\n# حصص الفترة (من 4 أيام لـ 9 أيام جاية)\n${winLines || '—'}`;
+    const lwLines = (lastWeek || []).map((s: any) => { const c = cairoParts(new Date(s.scheduled_at));
+      return `${c.date} (${AR_DAYS[c.weekday] || ''}) ${c.time} — ${sCode.get(s.student_id) || '?'} ${stuBy.get(s.student_id)?.name || ''} مع ${tCode.get(s.tutor_id) || '?'} ${tutBy.get(s.tutor_id)?.name || ''} — ${s.subject || ''} — ${s.actual_minutes || s.duration_minutes} د${s.family_block ? ' — حصة أسرة' : ''}${s.group_name ? ' — ' + s.group_name : ''}${String(s.status).startsWith('cancelled') ? ' — (اتلغت)' : ''}`; }).join('\n');
+    const dataBlock = `# الطلاب\n${stuLines}\n\n# المعلمين\n${tutLines}\n\n# مين بيدرّس مين (الأحدث فوق — آخر 45 يوم + الخطط)\n${pairLines}\n\n# الجروبات\n${grpLines || '—'}\n\n# الأسبوع اللي فات (للمواعيد الثابتة — مش للتعديل)\n${lwLines || '—'}\n\n# حصص الفترة (من 4 أيام لـ 9 أيام جاية)\n${winLines || '—'}`;
 
     const contents = [
       { role: 'user', parts: [{ text: dataBlock }] },
@@ -406,7 +417,10 @@ Deno.serve(async (req) => {
       }
     } catch (e) { console.error('merge', e); }
 
-    return json({ reply: out.reply || '', questions: out.questions || [], actions, warnings, already, ...(body.debug ? { raw: out } : {}) });
+    const tutNames = (tutors || []).map((t: any) => nz(String(t.name).replace(/^(أ|د|م)\.\s*/, '').replace(/\s*\(.*?\)/g, '')));
+    const newTutors = (out.new_tutors || []).filter((t: any) => t?.name && !tutNames.includes(nz(String(t.name).replace(/^(مس|ميس|مستر|أ\.|د\.)\s*/, '')))).slice(0, 5);
+    const choices = (out.choices || []).filter((c: any) => c?.question && Array.isArray(c.options) && c.options.length).slice(0, 4).map((c: any) => ({ question: c.question, options: c.options.slice(0, 4) }));
+    return json({ reply: out.reply || '', questions: out.questions || [], choices, new_tutors: newTutors, actions, warnings, already, ...(body.debug ? { raw: out } : {}) });
   } catch (e) {
     return json({ error: String(e?.message || e).slice(0, 300) }, 500);
   }
