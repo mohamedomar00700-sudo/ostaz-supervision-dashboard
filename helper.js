@@ -536,7 +536,7 @@
     });
     return `🦅 صقّور\n${L.join('\n')}`; // من غير كلام Gemini — الأسطر من الداتا نفسها عشان ما ينتقلش كلام غلط للجروب
   }
-  async function aiAsk(text) {
+  async function aiAsk(text, retried = false) {
     const row = document.createElement('div'); row.className = 'sq-row';
     row.innerHTML = `<div class="sq-mini">${mascot(26)}</div><div class="sq-msg sq-bot sq-typing"><i></i><i></i><i></i></div>`;
     body.appendChild(row); scroll();
@@ -554,6 +554,9 @@
       if (/Failed to send|non-2xx/i.test(msg)) msg = 'جوجل (Gemini) اتأخر في الرد وجرّبت تاني ومنفعش — ابعت الرسالة تاني كمان دقيقة';
       botSay(`معلش 😅 ${e(msg)}`); return;
     }
+    // Gemini ساعات بيقول "هسجّل…" وينسى يبعت العملية نفسها → نعيد السؤال مرة واحدة لوحدنا
+    if (!retried && !(data.actions || []).length && !data.already?.length && !data.choices?.length && !data.questions?.length && !data.warnings?.length && /ه(سج|ضيف|عد|لغ|نقل)/.test(data.reply || ''))
+      return aiAsk(text, true);
     AI.hist.push({ role: 'user', text }, { role: 'model', text: data.reply || '' }); AI.hist = AI.hist.slice(-6);
     const acts = data.actions || [];
     // حارس الأسعار بالمبلغ: سعر الأسرة دايماً صغير (حوالي 15–30 درهم/ريال)، وسعر المعلم بالجنيه (80–200).
