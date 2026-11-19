@@ -59,9 +59,10 @@ const SCHEMA = {
         actual_minutes: { type: 'INTEGER', nullable: true },
         tutor_rate_egp: { type: 'NUMBER', nullable: true, description: 'بس لو اتقال سعر المعلم صراحة' },
         student_price: { type: 'NUMBER', nullable: true, description: 'بس لو اتقال سعر الأسرة صراحة' },
+        report_no: { type: 'INTEGER', nullable: true, description: 'رقم الحصة من تقرير المعلمة (🔢 رقم الحصة) لو الرسالة تقرير' },
         note: { type: 'STRING', nullable: true },
       }, required: ['student', 'tutor', 'date', 'time', 'subject', 'duration_minutes', 'kind', 'family_block', 'status'],
-      propertyOrdering: ['student', 'tutor', 'subject', 'date', 'time', 'duration_minutes', 'kind', 'family_block', 'status', 'actual_minutes', 'tutor_rate_egp', 'student_price', 'note'] },
+      propertyOrdering: ['student', 'tutor', 'subject', 'date', 'time', 'duration_minutes', 'kind', 'family_block', 'status', 'actual_minutes', 'tutor_rate_egp', 'student_price', 'report_no', 'note'] },
     },
     status_changes: {
       type: 'ARRAY', description: 'تغيير حالة حصة موجودة: تمت أو اتلغت',
@@ -70,8 +71,9 @@ const SCHEMA = {
         status: { type: 'STRING', enum: ['done', 'cancelled_by_student', 'cancelled_by_tutor', 'cancelled_by_academy'] },
         actual_minutes: { type: 'INTEGER', nullable: true, description: 'المدة الفعلية لو اختلفت' },
         cancel_reason: { type: 'STRING', enum: CANCEL_REASONS, nullable: true },
+        report_no: { type: 'INTEGER', nullable: true, description: 'رقم الحصة من تقرير المعلمة (🔢 رقم الحصة) لو الرسالة تقرير' },
         note: { type: 'STRING', nullable: true },
-      }, required: ['session', 'status'], propertyOrdering: ['session', 'status', 'actual_minutes', 'cancel_reason', 'note'] },
+      }, required: ['session', 'status'], propertyOrdering: ['session', 'status', 'actual_minutes', 'cancel_reason', 'report_no', 'note'] },
     },
     updates: {
       type: 'ARRAY', description: 'تعديل حصة موجودة: ميعاد/مدة/معلم/مادة',
@@ -158,7 +160,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
-    const text = String(body.text || '').trim().slice(0, 6000);
+    const text = String(body.text || '').trim().slice(0, 14000);
     if (!text) return json({ error: 'اكتب حاجة الأول' }, 400);
     const history: { role: string; text: string }[] = Array.isArray(body.history) ? body.history.slice(-6) : [];
 
@@ -343,7 +345,10 @@ Deno.serve(async (req) => {
         r.status = a.status;
         if (a.status === 'done') r.actual_minutes = Number(a.actual_minutes) || s.actual_minutes || s.duration_minutes;
         if (a.status.startsWith('cancelled')) { r.cancel_reason = CANCEL_REASONS.includes(a.cancel_reason) ? a.cancel_reason : 'أخرى'; }
-        if (r.status === s.status && !(a.status === 'done' && a.actual_minutes && a.actual_minutes !== (s.actual_minutes || s.duration_minutes))) return null; // مفيش تغيير
+        if (r.status === s.status && !(a.status === 'done' && a.actual_minutes && a.actual_minutes !== (s.actual_minutes || s.duration_minutes))) { // مفيش تغيير
+          if (a.report_no) already.push({ student_name: r.student_name, tutor_name: r.tutor_name, subject: s.subject, date: c.date, time: c.time, minutes: s.actual_minutes || s.duration_minutes, by: supName(s.created_by, s.notes), at: s.created_at, session_id: s.id, differs: false });
+          return null;
+        }
         return r;
       }
       if (a.op === 'update_session' && (a.date || a.time || a.tutor) && !mentioned(stuBy.get(s.student_id))) {
@@ -428,6 +433,41 @@ Deno.serve(async (req) => {
         warnings.push(`${names} مع ${tuN}: دمجتهم في حصة أسرة واحدة (${dur} دقيقة${hist ? ' زي آخر مرة' : ''}) بدل حصص منفصلة.`);
       }
     } catch (e) { console.error('merge', e); }
+
+    // ---------- تقارير المعلمات: "رقم الحصة" لازم يساوي عدّنا من بعد آخر حساب للمعلمة ----------
+    try {
+      const rep = raw.filter((a: any) => Number(a.report_no) > 0).map((a: any) => {
+        if (a.op === 'add_session') return { stu: sId.get(a.student), tu: tId.get(a.tutor), date: a.date, n: Number(a.report_no) };
+        const s0 = winBy.get(xId.get(a.session || '') || ''); return s0 ? { stu: s0.student_id, tu: s0.tutor_id, date: cairoParts(new Date(s0.scheduled_at)).date, n: Number(a.report_no) } : null;
+      }).filter((x: any) => x && x.stu && x.tu && x.date);
+      if (rep.length) {
+        const tuIds = [...new Set(rep.map((x: any) => x.tu))];
+        const [{ data: pos }, { data: dn }] = await Promise.all([
+          admin.from('tutor_payouts').select('tutor_id,period_end,paid_at').eq('paid', true).in('tutor_id', tuIds),
+          admin.from('sessions').select('id,student_id,tutor_id,scheduled_at,status').in('tutor_id', tuIds).in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(now.getTime() - 120 * 864e5).toISOString()),
+        ]);
+        const cut: Record<string, string> = {};
+        (pos || []).forEach((p: any) => { const d = p.period_end || (p.paid_at && cairoParts(new Date(p.paid_at)).date); if (d && (!cut[p.tutor_id] || d > cut[p.tutor_id])) cut[p.tutor_id] = d; });
+        const month1 = nowC.date.slice(0, 8) + '01';
+        // الحصص اللي هتبقى "تمت" بعد تنفيذ الكارت ده
+        const willDone = new Set(actions.filter((x: any) => x.op === 'set_status' && x.status === 'done').map((x: any) => x.session_id));
+        const adds = actions.filter((x: any) => x.op === 'add_session');
+        const seen = new Set<string>();
+        for (const x of rep.sort((a: any, b: any) => a.date.localeCompare(b.date) || a.n - b.n)) {
+          const k = x.stu + '|' + x.tu; if (seen.has(k + x.n)) continue; seen.add(k + x.n);
+          const c0 = cut[x.tu];
+          const inRange = (d: string) => (c0 ? d > c0 : d >= month1) && d <= x.date;
+          const have = (dn || []).filter((s: any) => s.student_id === x.stu && s.tutor_id === x.tu && (s.status === 'done' || willDone.has(s.id)) && inRange(cairoParts(new Date(s.scheduled_at)).date)).length
+            + adds.filter((a: any) => a.student_id === x.stu && a.tutor_id === x.tu && inRange(a.date)).length;
+          if (have === x.n) continue;
+          const sn = stuBy.get(x.stu)?.name || '', tn = tutBy.get(x.tu)?.name || '';
+          const from = c0 ? `من بعد آخر حساب (${c0.slice(8)}/${Number(c0.slice(5, 7))})` : 'من أول الشهر';
+          warnings.push(have < x.n
+            ? `🔢 ${sn} مع ${tn}: التقرير بيقول الحصة رقم ${x.n} — وعندنا ${have} بس ${from}. غالباً فيه ${x.n - have === 1 ? 'حصة ناقصة' : (x.n - have) + ' حصص ناقصين'} ما اتسجلتش قبل دي — راجع التقارير اللي فاتت.`
+            : `🔢 ${sn} مع ${tn}: التقرير بيقول الحصة رقم ${x.n} — وعندنا ${have} ${from}. يا إما المعلمة بدأت العدّ من بدري، يا إما فيه حصة متسجلة زيادة.`);
+        }
+      }
+    } catch (e) { console.error('report_no', e); }
 
     const tutNames = (tutors || []).map((t: any) => nz(String(t.name).replace(/^(أ|د|م)\.\s*/, '').replace(/\s*\(.*?\)/g, '')));
     const newTutors = (out.new_tutors || []).filter((t: any) => t?.name && !tutNames.includes(nz(String(t.name).replace(/^(مس|ميس|مستر|أ\.|د\.)\s*/, '')))).slice(0, 5);
