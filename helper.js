@@ -892,6 +892,7 @@
     document.body.appendChild(box); setTimeout(() => box.remove(), 4200);
   }
   function celebrate(msg) { confetti(); if (!SQ.open) showTip(msg, () => { hideTip(); openPanel(); }, 'happy'); }
+  SQ.prefill = t => { openPanel(); setTimeout(() => { if (input) { input.value = t; input.focus(); input.setSelectionRange(t.length, t.length); } }, 400); };
   SQ.openPanel = openPanel; SQ.tour = startTour; SQ.confetti = confetti;
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build); else build();

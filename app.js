@@ -5472,3 +5472,99 @@ function applyFamilyHoliday() {
     await refreshAll();
   });
 }
+
+/* ============================================================
+   🔒 قفل اليوم — مراجعة آخر اليوم قبل التقرير
+   مصدر تاني غير ذاكرة المشرفة: حصص ميعادها عدّى ومفيش حالة،
+   طلاب كان ليهم حصة نفس اليوم الأسبوع اللي فات ومالهمش حاجة النهارده،
+   معلمات اتضافوا ومالهمش حصص، ومعلمات اتدفعلهم أكتر من حصصهم المتسجلة.
+   ============================================================ */
+const CD_DAY = iso => new Date(iso).toLocaleDateString('ar-EG-u-nu-latn', { weekday: 'long', day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' });
+async function openCloseDay() {
+  const day = parseDay(state.day), dayIso = day.toISOString();
+  const lwFrom = new Date(day.getTime() - 7 * 864e5), lwTo = new Date(day.getTime() - 6 * 864e5);
+  const newCut = new Date(Date.now() - 30 * 864e5).toISOString();
+  const fresh = state.tutors.filter(t => t.created_at && t.created_at >= newCut);
+  let lastWeek = [], freshUsed = new Set();
+  try {
+    [lastWeek] = await Promise.all([
+      q(sb.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,family_block,status,group_name')
+        .gte('scheduled_at', lwFrom.toISOString()).lt('scheduled_at', lwTo.toISOString())
+        .in('status', ['done', 'scheduled', 'cancelled_by_student', 'cancelled_by_tutor']).order('scheduled_at')),
+    ]);
+    if (fresh.length) freshUsed = new Set((await q(sb.from('sessions').select('tutor_id').in('tutor_id', fresh.map(t => t.id)).neq('status', 'cancelled_by_academy'))).map(r => r.tutor_id));
+  } catch (e) { showToast(dbError(e), true); return; }
+
+  const today = state.daySessions.filter(s => s.status !== 'cancelled_by_academy');
+  const now = Date.now();
+  // 1) حصص ميعادها خلص ولسه مالهاش حالة
+  const overdue = occurrences(today.filter(s => (s.status === 'scheduled' || s.status === 'in_progress') && sStart(s) + sMins(s) * 60e3 < now));
+  // 2) طلاب الأسبوع اللي فات اللي مالهمش أي حصة النهارده (ولا حتى ملغية)
+  const here = new Set();
+  today.forEach(s => { here.add(s.student_id); if (s.family_block) { const st = byId(state.students, s.student_id); state.students.filter(k => k.family_id === st?.family_id).forEach(k => here.add(k.id)); } });
+  const miss = new Map();
+  lastWeek.forEach(s => {
+    const st = byId(state.students, s.student_id); if (!st) return;
+    const kids = s.family_block ? state.students.filter(k => k.family_id === st.family_id) : [st];
+    if (kids.some(k => here.has(k.id))) return;
+    const k = s.family_block ? 'f' + st.family_id + s.tutor_id : s.student_id + '|' + s.tutor_id;
+    if (!miss.has(k)) miss.set(k, s);
+  });
+  const missList = [...miss.values()];
+  // 3) معلمات جداد مالهمش ولا حصة
+  const idle = fresh.filter(t => !freshUsed.has(t.id));
+  // 4) معلمات اتحوّلهم أكتر من حصصهم المتسجلة (حصة اتنسيت؟) — للإدارة بس
+  const overpaid = isAdmin ? state.tutors.map(t => ({ t, b: tutBalance(t) })).filter(x => x.b.due < -5).sort((a, b) => a.b.due - b.b.due) : [];
+
+  const line = (html, sid) => `<div class="card item small" style="padding:8px 10px">${html}${sid ? ` <button class="btn btn-ghost sm" onclick="closeModal(); openSessionActions(${jsq(sid)})">افتح</button>` : ''}</div>`;
+  const sec = (icon, title, hint, items) => `<h4 style="margin:14px 0 6px">${icon} ${title} <span class="badge">${items.length}</span></h4>${hint ? `<p class="sub small" style="margin:0 0 6px">${hint}</p>` : ''}${items.length ? `<div class="list">${items.join('')}</div>` : '<div class="sub small">✅ مفيش</div>'}`;
+  const tn = id => esc(tutTitle(byId(state.tutors, id)));
+  const html = `
+    <p class="sub small">قبل ما تكتب تقرير آخر اليوم، عدّي على الحاجات دي — دي الحصص اللي غالباً بتسقط وسط الزحمة.</p>
+    ${sec('⏰', 'حصص ميعادها خلص ومالهاش حالة', 'اتعملت؟ اتلغت؟ اتأجلت؟', overdue.map(s => line(`<b>${esc(occWho(s))}</b> — ${s.subject ? esc(s.subject) + ' — ' : ''}${tn(s.tutor_id)} — ${fmtTime(s.scheduled_at)}`, s.id)))}
+    ${sec('🔁', 'كانوا عندهم حصة نفس اليوم الأسبوع اللي فات — ومفيش حاجة متسجلة النهارده', 'لو اتعملت حصة ومش متسجلة سجّلها، ولو مفيش حصة النهارده فعلاً سيبها.', missList.map(s => line(`<b>${esc(s.family_block ? sName(s) : byId(state.students, s.student_id)?.name || '')}</b> — ${s.subject ? esc(s.subject) + ' مع ' : ''}${tn(s.tutor_id)} — كانت ${fmtTime(s.scheduled_at)} ${esc(CD_DAY(s.scheduled_at))}${String(s.status).startsWith('cancelled') ? ' (واتلغت)' : ''}`)))}
+    ${sec('🆕', 'معلمات اتضافوا قريب ومالهمش ولا حصة', 'اتضافت ونسينا نسجّل حصصها؟', idle.map(t => line(`<b>${esc(tutLabel(t))}</b> — اتضافت ${esc(new Date(t.created_at).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' }))}`)))}
+    ${isAdmin ? sec('💸', 'معلمات اتحوّلهم أكتر من حصصهم المتسجلة', 'غالباً فيه حصة اتدفعت ومش متسجلة (للإدارة بس).', overpaid.map(x => line(`<b>${esc(tutLabel(x.t))}</b> — مدفوع زيادة ${fmt(-x.b.due, 2)} ج`))) : ''}
+    <div class="card item mt" style="background:rgba(37,99,235,.06)">
+      <b>❓ فيه معلمة جديدة أو طالب جديد دخل حصة النهارده ومش موجود على التطبيق؟</b>
+      <p class="sub small" style="margin:4px 0 8px">دي الحصص اللي مفيش أي حاجة في التطبيق تفكّرنا بيها — افتكر جروبات الواتساب الجديدة النهارده.</p>
+      <button class="btn btn-brand sm" onclick="closeModal(); window.SQ && SQ.prefill && SQ.prefill('النهارده دخلت حصة ')">🦅 سجّلها مع صقّور</button>
+      <button class="btn btn-ghost sm" onclick="openWeeklyTutorStatements()">🧾 كشوف المعلمات للأسبوع</button>
+    </div>`;
+  openModal(`🔒 قفل اليوم — ${fmtDate(dayIso)}`, html);
+}
+
+/* ----- 🧾 كشف أسبوعي لكل معلمة: "دي حصصك المتسجلة — لو فيه ناقص قوليلنا" (من غير فلوس) ----- */
+async function openWeeklyTutorStatements(back = 0) {
+  const cairo = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' }));
+  const sat = new Date(cairo); sat.setHours(0, 0, 0, 0); sat.setDate(sat.getDate() - ((sat.getDay() + 1) % 7) - 7 * back); // أول الأسبوع = السبت
+  const end = new Date(sat.getTime() + 7 * 864e5);
+  const fromIso = new Date(`${sat.getFullYear()}-${String(sat.getMonth() + 1).padStart(2, '0')}-${String(sat.getDate()).padStart(2, '0')}T00:00:00+02:00`).toISOString();
+  const toIso = new Date(new Date(fromIso).getTime() + 7 * 864e5).toISOString();
+  let ss;
+  try { ss = await q(sb.from('sessions').select('*').eq('status', 'done').gte('scheduled_at', fromIso).lt('scheduled_at', toIso).order('scheduled_at')); }
+  catch (e) { showToast(dbError(e), true); return; }
+  const byT = {}; ss.forEach(s => (byT[s.tutor_id] ||= []).push(s));
+  const dm = d => d.toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' });
+  const label = `من السبت ${dm(sat)} لـ الجمعة ${dm(new Date(end.getTime() - 864e5))}`;
+  const blocks = Object.entries(byT).map(([tid, list]) => ({ t: byId(state.tutors, tid), list: occurrences(list) })).filter(x => x.t)
+    .sort((a, b) => a.t.name.localeCompare(b.t.name, 'ar')).map(({ t, list }) => {
+      const mins = list.reduce((a, s) => a + sMins(s), 0);
+      const lines = list.map(s => `• ${CD_DAY(s.scheduled_at)} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''} — ${durLabel(sMins(s))}${s.kind === 'trial' ? ' — تجريبية' : ''}`).join('\n');
+      const text = `${greetTutor(t.name)}
+دي الحصص المتسجلة ${tg(t, 'ليكي', 'ليك')} الأسبوع ده (${label}):
+
+${lines}
+
+🧮 الإجمالي: ${list.length === 1 ? 'حصة واحدة' : list.length === 2 ? 'حصتين' : list.length + (list.length <= 10 ? ' حصص' : ' حصة')} — ${durLabel(mins)}
+
+لو فيه حصة ${tg(t, 'عملتيها', 'عملتها')} ومش مكتوبة هنا، أو مدة مش مظبوطة، ${tg(t, 'ردي', 'رد')} علينا هنا عشان تتحسب ${tg(t, 'ليكي', 'ليك')} 🙏
+${SIGN_T}`;
+      return msgBlock(`${tutLabel(t)} — ${list.length} حصة`, text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id });
+    });
+  openModal(`🧾 كشوف المعلمات — ${label}`, `
+    <div class="chips"><button class="chip ${back === 0 ? 'active' : ''}" onclick="openWeeklyTutorStatements(0)">الأسبوع ده</button>
+      <button class="chip ${back === 1 ? 'active' : ''}" onclick="openWeeklyTutorStatements(1)">الأسبوع اللي فات</button></div>
+    <p class="sub small">رسالة لكل معلمة فيها الحصص اللي "تمت" عندنا — من غير أسعار. ابعتها في جروبها: لو فيه حصة اتنسيت هي اللي هتقولنا قبل الحساب. أحسن وقت: الخميس بالليل.</p>
+    ${blocks.length ? `<div class="list">${blocks.join('')}</div>` : '<div class="empty">مفيش حصص متسجلة "تمت" في الأسبوع ده.</div>'}`);
+}
