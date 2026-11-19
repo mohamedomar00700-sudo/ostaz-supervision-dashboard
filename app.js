@@ -5534,37 +5534,54 @@ async function openCloseDay() {
   openModal(`🔒 قفل اليوم — ${fmtDate(dayIso)}`, html);
 }
 
-/* ----- 🧾 كشف أسبوعي لكل معلمة: "دي حصصك المتسجلة — لو فيه ناقص قوليلنا" (من غير فلوس) ----- */
-async function openWeeklyTutorStatements(back = 0) {
-  const cairo = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' }));
-  const sat = new Date(cairo); sat.setHours(0, 0, 0, 0); sat.setDate(sat.getDate() - ((sat.getDay() + 1) % 7) - 7 * back); // أول الأسبوع = السبت
-  const end = new Date(sat.getTime() + 7 * 864e5);
-  const fromIso = new Date(`${sat.getFullYear()}-${String(sat.getMonth() + 1).padStart(2, '0')}-${String(sat.getDate()).padStart(2, '0')}T00:00:00+02:00`).toISOString();
-  const toIso = new Date(new Date(fromIso).getTime() + 7 * 864e5).toISOString();
-  let ss;
-  try { ss = await q(sb.from('sessions').select('*').eq('status', 'done').gte('scheduled_at', fromIso).lt('scheduled_at', toIso).order('scheduled_at')); }
-  catch (e) { showToast(dbError(e), true); return; }
-  const byT = {}; ss.forEach(s => (byT[s.tutor_id] ||= []).push(s));
-  const dm = d => d.toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric' });
-  const label = `من السبت ${dm(sat)} لـ الجمعة ${dm(new Date(end.getTime() - 864e5))}`;
-  const blocks = Object.entries(byT).map(([tid, list]) => ({ t: byId(state.tutors, tid), list: occurrences(list) })).filter(x => x.t)
+/* ----- 🧾 كشف لكل معلمة: حصصها متقسمة على كل طالب ومترقّمة (زي ما المعلمات بيعدّوا: "الحصة رقم 3")
+   الافتراضي: من بعد آخر حساب اتدفعلها (العدّ عندهم بيبدأ من 1 بعد كل دفعة) — أو من أول الشهر ----- */
+async function openWeeklyTutorStatements(mode = 'since') { return openTutorStatements(mode); }
+async function openTutorStatements(mode = 'since') {
+  const cairoDay = d => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(d));
+  const dayStartIso = ymd => new Date(`${ymd}T00:00:00+02:00`).toISOString();
+  const nowYmd = cairoDay(Date.now()), monthYmd = nowYmd.slice(0, 8) + '01';
+  const floorYmd = cairoDay(Date.now() - 120 * 864e5);
+  let ss, po;
+  try {
+    [po, ss] = await Promise.all([
+      mode === 'since' ? q(sb.from('tutor_payouts').select('tutor_id,period_end,paid_at').eq('paid', true)) : [],
+      q(sb.from('sessions').select('*').eq('status', 'done').gte('scheduled_at', dayStartIso(mode === 'since' ? floorYmd : monthYmd)).order('scheduled_at')),
+    ]);
+  } catch (e) { showToast(dbError(e), true); return; }
+  // آخر دفعة لكل معلمة → الحصص اللي بعدها بس
+  const cut = {};
+  po.forEach(p => { const d = p.period_end || (p.paid_at && cairoDay(p.paid_at)); if (d && (!cut[p.tutor_id] || d > cut[p.tutor_id])) cut[p.tutor_id] = d; });
+  const byT = {};
+  ss.forEach(s => {
+    const d = cairoDay(s.scheduled_at);
+    if (mode === 'since') { const c = cut[s.tutor_id] || (monthYmd > floorYmd ? monthYmd : floorYmd); if (cut[s.tutor_id] ? d <= c : d < c) return; }
+    (byT[s.tutor_id] ||= []).push(s);
+  });
+  const dm = ymd => { const [y, m, d] = ymd.split('-').map(Number); return `${d}/${m}`; };
+  const nWord = n => n === 1 ? 'حصة واحدة' : n === 2 ? 'حصتين' : n + (n <= 10 ? ' حصص' : ' حصة');
+  const blocks = Object.entries(byT).map(([tid, list]) => ({ t: byId(state.tutors, tid), list: occurrences(list) })).filter(x => x.t && x.list.length)
     .sort((a, b) => a.t.name.localeCompare(b.t.name, 'ar')).map(({ t, list }) => {
+      const from = mode === 'since' ? (cut[t.id] ? `من بعد آخر حساب (${dm(cut[t.id])})` : `من أول الشهر`) : `من أول الشهر (${dm(monthYmd)})`;
+      const groups = new Map();
+      list.forEach(s => { const k = occWho(s) + '|' + (s.subject || ''); (groups.get(k) || groups.set(k, { who: occWho(s), subj: s.subject, items: [] }).get(k)).items.push(s); });
       const mins = list.reduce((a, s) => a + sMins(s), 0);
-      const lines = list.map(s => `• ${CD_DAY(s.scheduled_at)} — ${occWho(s)}${s.subject ? ' (' + s.subject + ')' : ''} — ${durLabel(sMins(s))}${s.kind === 'trial' ? ' — تجريبية' : ''}`).join('\n');
+      const body = [...groups.values()].map(g => `▪️ *${g.who}*${g.subj ? ' (' + g.subj + ')' : ''} — ${nWord(g.items.length)}\n` +
+        g.items.map((s, i) => `   ${i + 1}) ${CD_DAY(s.scheduled_at)} — ${durLabel(sMins(s))}${s.kind === 'trial' ? ' — تجريبية' : ''}`).join('\n')).join('\n\n');
       const text = `${greetTutor(t.name)}
-دي الحصص المتسجلة ${tg(t, 'ليكي', 'ليك')} الأسبوع ده (${label}):
+دي الحصص المتسجلة ${tg(t, 'ليكي', 'ليك')} عندنا ${from}:
 
-${lines}
+${body}
 
-🧮 الإجمالي: ${list.length === 1 ? 'حصة واحدة' : list.length === 2 ? 'حصتين' : list.length + (list.length <= 10 ? ' حصص' : ' حصة')} — ${durLabel(mins)}
+🧮 الإجمالي: ${nWord(list.length)} — ${durLabel(mins)}
 
-لو فيه حصة ${tg(t, 'عملتيها', 'عملتها')} ومش مكتوبة هنا، أو مدة مش مظبوطة، ${tg(t, 'ردي', 'رد')} علينا هنا عشان تتحسب ${tg(t, 'ليكي', 'ليك')} 🙏
+${tg(t, 'راجعي', 'راجع')} العدد لكل طالب مع تقاريرك — لو فيه حصة ناقصة أو زيادة أو مدة مش مظبوطة ${tg(t, 'ردي', 'رد')} علينا هنا قبل الحساب 🙏
 ${SIGN_T}`;
-      return msgBlock(`${tutLabel(t)} — ${list.length} حصة`, text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id });
+      return msgBlock(`${tutLabel(t)} — ${nWord(list.length)}`, text, { group: t.whatsapp_group, phone: t.phone, editTutor: t.id });
     });
-  openModal(`🧾 كشوف المعلمات — ${label}`, `
-    <div class="chips"><button class="chip ${back === 0 ? 'active' : ''}" onclick="openWeeklyTutorStatements(0)">الأسبوع ده</button>
-      <button class="chip ${back === 1 ? 'active' : ''}" onclick="openWeeklyTutorStatements(1)">الأسبوع اللي فات</button></div>
-    <p class="sub small">رسالة لكل معلمة فيها الحصص اللي "تمت" عندنا — من غير أسعار. ابعتها في جروبها: لو فيه حصة اتنسيت هي اللي هتقولنا قبل الحساب. أحسن وقت: الخميس بالليل.</p>
-    ${blocks.length ? `<div class="list">${blocks.join('')}</div>` : '<div class="empty">مفيش حصص متسجلة "تمت" في الأسبوع ده.</div>'}`);
+  openModal('🧾 كشوف المعلمات', `
+    <div class="chips"><button class="chip ${mode === 'since' ? 'active' : ''}" onclick="openTutorStatements('since')">من بعد آخر حساب</button>
+      <button class="chip ${mode === 'month' ? 'active' : ''}" onclick="openTutorStatements('month')">من أول الشهر</button></div>
+    <p class="sub small">رسالة لكل معلمة فيها حصصها اللي "تمت" — متقسمة على كل طالب ومترقّمة 1، 2، 3… زي ما بيعدّوا في تقاريرهم (من غير أسعار). "من بعد آخر حساب" = العدّ بيبدأ من 1 بعد آخر دفعة اتسجلت لها. ابعتها في جروبها قبل الحساب.</p>
+    ${blocks.length ? `<div class="list">${blocks.join('')}</div>` : '<div class="empty">مفيش حصص متسجلة في الفترة دي.</div>'}`);
 }
