@@ -269,6 +269,9 @@ Deno.serve(async (req) => {
 
     // ---------- تحقق + تكملة الأسعار والقيم ----------
     const warnings: string[] = []; const already: any[] = [];
+    const extraChoices: any[] = []; const saidNewAll = /جديد/.test(text);
+    const bare = (n: string) => String(n || '').replace(/^(أ|د|م)\.\s*/, '').replace(/\s*\(.*?\)/g, '').trim();
+    const tTitle = (n: string) => (/^د\./.test(n) ? 'د. ' : 'مس ') + bare(n);
     const winBy = new Map((win || []).map(s => [s.id, s]));
     const raw = [...(out.add_sessions || []).map((a: any) => ({ ...a, op: 'add_session' })), ...(out.status_changes || []).map((a: any) => ({ ...a, op: 'set_status' })), ...(out.updates || []).map((a: any) => ({ ...a, op: 'update_session' }))];
     const nz = (x: string) => String(x || '').replace(/[ًٌٍَُِّْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, '');
@@ -287,7 +290,8 @@ Deno.serve(async (req) => {
         if (!pair.has(st.id + '|' + tu.id) && !saidNew) {
           const sn = (x: string) => String(x || '').replace(/\s/g, '');
           const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
-          if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة. لو فعلاً معلمة جديدة شيل علامة ✓ واكتبها تاني وقول "معلمة جديدة".`); tu2 = alt; } }
+          if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة.`); tu2 = alt;
+            extraChoices.push({ question: `${st.name}${a.subject ? ' ' + a.subject : ''}: مع ${tTitle(alt.name)} (المعتادة) ولا ${tTitle(tu.name)} فعلاً؟`, options: [`${st.name}${a.subject ? ' ' + a.subject : ''} مع ${tTitle(tu.name)} فعلاً — معلمة جديدة معاها، نفس الميعاد`, `تمام، مع ${tTitle(alt.name)} زي ما هي`] }); } }
         }
         let tuF = tu2, st2 = st;
         // الطالب غلط؟ (Gemini حط حصة حمدة على رسمية مثلاً): لو الطالب ده عمره ما خد مع المعلم ده، وأخ واحد بس في نفس الأسرة بياخد معاه نفس المادة → نحطها على الأخ
@@ -362,11 +366,21 @@ Deno.serve(async (req) => {
         if (a.tutor && tId.get(a.tutor) && tId.get(a.tutor) !== s.tutor_id) {
           const nt = tId.get(a.tutor)!;
           // ما نغيّرش لمعلم عمره ما درّس الطالب لو المعلم الحالي هو اللي بيدرّسه (لخبطة أسماء زي فطوم/فاطمة)
-          if (!pair.has(s.student_id + '|' + nt) && pair.has(s.student_id + '|' + s.tutor_id)) warnings.push(`${stuBy.get(s.student_id)?.name}: ما غيّرتش المعلم لـ ${tutBy.get(nt)?.name} لأنها عمرها ما درّستله — فضلت مع ${tutBy.get(s.tutor_id)?.name}. لو فعلاً معلمة جديدة قول "معلمة جديدة".`);
-          else { patch.tutor_id = nt; r.new_tutor_name = tutBy.get(nt)?.name; const p = pair.get(s.student_id + '|' + nt); patch.tutor_cost_egp = s.kind === 'trial' ? 0 : Number(p?.rate ?? tutBy.get(nt)?.default_rate_egp ?? 0); }
+          const sn9 = (x: string) => String(x || '').replace(/\s/g, '');
+          const newSubj = a.subject || s.subject;
+          // نفس المادة كانت مع المعلمة الحالية؟ لو المادة جديدة على الطالب أو قالت "جديدة" → يتغيّر عادي
+          const sameSubjBefore = [...(pair.get(s.student_id + '|' + s.tutor_id)?.subj || [])].some(x => sn9(x) === sn9(newSubj));
+          const sNm = stuBy.get(s.student_id)?.name || '', ntNm = tutBy.get(nt)?.name || '', curNm = tutBy.get(s.tutor_id)?.name || '';
+          if (!pair.has(s.student_id + '|' + nt) && pair.has(s.student_id + '|' + s.tutor_id) && sameSubjBefore && !saidNewAll) {
+            r._blocked = true;
+            warnings.push(`${sNm}: ما غيّرتش المعلمة لـ ${ntNm} لأنها عمرها ما درّستله ${newSubj || ''} — اختار من تحت 👇`);
+            extraChoices.push({ question: `${sNm} ${newSubj || ''} (${c.date.slice(8)}/${Number(c.date.slice(5, 7))}): تتغيّر لـ ${tTitle(ntNm)} ولا تفضل مع ${tTitle(curNm)}؟`, options: [`غيّر حصة ${sNm} ${newSubj || ''} يوم ${c.date} لـ ${tTitle(ntNm)} — معلمة جديدة معاها`, `سيب ${sNm} مع ${tTitle(curNm)}`] });
+          } else {
+            if (!pair.has(s.student_id + '|' + nt)) warnings.push(`${sNm}: أول مرة مع ${ntNm}${newSubj ? ' في ' + newSubj : ''} — اتأكد إنها المعلمة الصح والسعر.`); patch.tutor_id = nt; r.new_tutor_name = tutBy.get(nt)?.name; const p = pair.get(s.student_id + '|' + nt); patch.tutor_cost_egp = s.kind === 'trial' ? 0 : Number(p?.rate ?? tutBy.get(nt)?.default_rate_egp ?? 0); }
         }
         if (a.subject && String(a.subject).replace(/\s/g, '') !== String(s.subject || '').replace(/\s/g, '')) patch.subject = a.subject;
         if (a.tutor_rate_egp != null) patch.tutor_cost_egp = Number(a.tutor_rate_egp);
+        if (r._blocked) return null; // مستنيين المشرفة تختار — ما نغيّرش المادة لوحدها
         // نشيل اللي مش بيغيّر حاجة فعلاً
         if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() === new Date(s.scheduled_at).getTime()) delete patch.scheduled_at;
         if (patch.duration_minutes && patch.duration_minutes === s.duration_minutes) delete patch.duration_minutes;
@@ -471,7 +485,7 @@ Deno.serve(async (req) => {
 
     const tutNames = (tutors || []).map((t: any) => nz(String(t.name).replace(/^(أ|د|م)\.\s*/, '').replace(/\s*\(.*?\)/g, '')));
     const newTutors = (out.new_tutors || []).filter((t: any) => t?.name && !tutNames.includes(nz(String(t.name).replace(/^(مس|ميس|مستر|أ\.|د\.)\s*/, '')))).slice(0, 5);
-    const choices = (out.choices || []).filter((c: any) => c?.question && Array.isArray(c.options) && c.options.length).slice(0, 4).map((c: any) => ({ question: c.question, options: c.options.slice(0, 4) }));
+    const choices = [...extraChoices, ...(out.choices || [])].filter((c: any) => c?.question && Array.isArray(c.options) && c.options.length).slice(0, 4).map((c: any) => ({ question: c.question, options: c.options.slice(0, 4) }));
     return json({ reply: out.reply || '', questions: out.questions || [], choices, new_tutors: newTutors, actions, warnings, already, ...(body.debug ? { raw: out } : {}) });
   } catch (e) {
     return json({ error: String(e?.message || e).slice(0, 300) }, 500);
