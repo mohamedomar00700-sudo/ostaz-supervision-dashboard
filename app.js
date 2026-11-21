@@ -1830,9 +1830,9 @@ function renderTutors() {
     el.innerHTML = `<div class="card empty">لسه مفيش معلمين مسجّلين.<br><button class="btn btn-brand" onclick="openTutorForm()">+ أضف أول معلم</button></div>`;
     return;
   }
-  const TF = { all: () => true, due: t => tutBalance(t).due > 0, norate: t => t.default_rate_egp == null, nogroup: t => !t.whatsapp_group };
+  const TF = { all: () => true, due: t => tutBalance(t).due > 0, norate: t => tutorMissingRates(t).length > 0, nogroup: t => !t.whatsapp_group };
   const tc = Object.fromEntries(Object.entries(TF).map(([k, fn]) => [k, state.tutors.filter(fn).length]));
-  document.getElementById('tutor-chips').innerHTML = [['all', 'الكل'], ['due', '💰 ليه مستحقات'], ['norate', 'بدون أجر ساعة'], ['nogroup', 'بدون جروب']]
+  document.getElementById('tutor-chips').innerHTML = [['all', 'الكل'], ['due', '💰 ليه مستحقات'], ['norate', 'طلاب بدون أجر متفق عليه'], ['nogroup', 'بدون جروب']]
     .filter(([k]) => k === 'all' || tc[k] || state.tutFilter === k)
     .map(([k, l]) => `<button class="chip ${(state.tutFilter || 'all') === k ? 'active' : ''}" onclick="state.tutFilter='${k}'; renderTutors()">${l} (${tc[k]})</button>`).join('');
   { const act = state.act || { tut: new Set() }; const due = state.tutors.filter(t => tutBalance(t).due > 0.01);
@@ -1865,7 +1865,9 @@ function renderTutors() {
         ${t.phone ? `<a class="btn btn-ghost sm" href="https://wa.me/${waNumber(t.phone, 'مصر')}" target="_blank" rel="noopener">واتساب خاص</a>` : ''}
       </div>` : ''}
       <div class="meta">
-        ${t.default_rate_egp != null ? `<span>أجر الساعة: <b>${fmt(t.default_rate_egp)} EGP</b></span>` : `<span><a href="javascript:void(0)" onclick="openTutorForm(${tid})">حدد أجر الساعة</a></span>`}
+        ${(() => { const miss = tutorMissingRates(t); return miss.length
+          ? `<span class="neg">⚠️ ${miss.length === 1 ? 'طالب' : miss.length + ' طلاب'} بدون أجر متفق عليه: <b>${esc(miss.map(p => byId(state.students, p.student_id)?.name || '').join('، '))}</b></span>`
+          : `<span>الأجر: <b>${tutorRateLabel(t)}</b></span>`; })()}
         <span>حصص تمت: <b>${b.count}</b></span>
         <span>البوابة: ${t.user_id ? `<b class="pos">✅ مفعّلة</b>${t.portal_last_seen ? ` <span class="sub small">(آخر دخول ${ago(t.portal_last_seen)})</span>` : ''}` : t.email ? '<b class="warn-txt">مستنية تدخل</b>' : '<span class="sub">مش مفعّلة</span>'}</span>
         ${t.vodafone_cash ? `<span>${/^[^:]+:/.test(t.vodafone_cash) ? 'تحويل' : 'فودافون كاش'}: <b dir="ltr">${esc(t.vodafone_cash)}</b></span>` : ''}
@@ -2263,7 +2265,7 @@ function renderFinance() {
       <div class="card item mb fin-sum"><b>لسه للمعلمين دلوقتي:</b> <span class="num neg">${fmt(tutDue)} ج</span> <span class="sub">(${tutDueN} معلم/ة)</span> · <b>مستحق الفترة:</b> <span class="num">${fmt(cost)} ج</span> · <b>اتحوّل:</b> <span class="num">${fmt(paidOut)} ج</span></div>
       <div class="list" id="fin-tutors-list">${rows.map(x => { const sum = byT[x.t.id] ? tutorStudentSummary(byT[x.t.id]) : [];
         return `<div class="card item fin-row" data-q="${esc(normAr(x.t.name + ' ' + sum.map(r => r.who + ' ' + r.fam).join(' ')))}">
-          <div class="item-head"><div><div class="item-title">${esc(x.t.name)}</div>${x.t.default_rate_egp == null ? '<div class="small neg">بدون أجر ساعة</div>' : `<div class="sub small">${fmt(x.t.default_rate_egp)} ج/ساعة</div>`}</div>
+          <div class="item-head"><div><div class="item-title">${esc(x.t.name)}</div>${tutorMissingRates(x.t).length ? '<div class="small neg">طالب بدون أجر متفق عليه</div>' : `<div class="sub small">${tutorRateLabel(x.t)}</div>`}</div>
             <span class="badge ${x.b.due > 0.01 ? 'b-cancel' : x.b.due < -0.01 ? 'b-done' : 'b-sched'} num">${x.b.due > 0.01 ? 'ليها ' + fmt(x.b.due) + ' ج' : x.b.due < -0.01 ? 'مقدّم ' + fmt(-x.b.due) + ' ج' : 'خالصة ✓'}</span></div>
           <div class="meta"><span>الفترة: <b class="num">${nSess(x.p.h || 0)}</b></span><span>مستحق الفترة: <b class="num">${fmt(x.p.egp)} ج</b></span><span>اتحوّل: <b class="num">${x.paid ? fmt(x.paid) + ' ج' : '—'}</b></span></div>
           ${sum.length ? `<details class="mt"><summary class="sub small" style="cursor:pointer">حصص كل طالب (${sum.length})</summary><div class="scrollx mt"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>للمعلم</th></tr></thead><tbody>
@@ -2829,8 +2831,8 @@ function renderAttention() {
   if (empty) items.push(`<button class="att" onclick="openFamFilter('empty')">🔴 <b>${empty}</b> ${empty === 1 ? 'باقة خلصت' : 'باقات خلصت'} — محتاجة تجديد</button>`);
   const low = state.families.filter(lowPrepaid).length;
   if (low) items.push(`<button class="att att-warn" onclick="openFamFilter('low')">🪫 <b>${low}</b> ${low === 1 ? 'باقة قربت تخلص' : 'باقات قربت تخلص'}</button>`);
-  const noRate = state.tutors.filter(t => t.default_rate_egp == null).length;
-  if (noRate) items.push(`<button class="att" onclick="switchTab('tutors')">🧑‍🏫 <b>${noRate}</b> معلم بدون أجر ساعة</button>`);
+  const noRate = state.tutors.filter(t => tutorMissingRates(t).length).length;
+  if (noRate) items.push(`<button class="att" onclick="state.tutFilter='norate'; switchTab('tutors'); renderTutors()">🧑‍🏫 <b>${noRate}</b> معلم عنده طالب بدون أجر متفق عليه</button>`);
   const noPrice = state.students.filter(s => s.default_price == null).length;
   if (noPrice) items.push(`<button class="att" onclick="switchTab('families')">🏷️ <b>${noPrice}</b> طالب بدون سعر ساعة</button>`);
   el.innerHTML = items.join('');
@@ -4043,6 +4045,12 @@ async function slotSeries(s) {
     .gt('scheduled_at', s.scheduled_at).order('scheduled_at').limit(60));
   return rows.filter(r => !r.group_key && norm(r.subject) === norm(s.subject) && (() => { const p = tzParts(r.scheduled_at, tz); return p.wd === p0.wd && p.time === p0.time; })());
 }
+// الأجر بيتحدد لكل طالب (student_subjects.tutor_rate_egp)، وأجر المعلم العام مجرد احتياطي.
+// المعلم "ناقصه أجر" بس لو عنده طالب مفيش له أجر متفق عليه ولا أجر عام يغطيه.
+function tutorMissingRates(t) {
+  return state.plans.filter(p => p.tutor_id === t.id && tutorRateFor(t.id, p.student_id) == null);
+}
+const tutorRateLabel = t => t.default_rate_egp != null ? `${fmt(t.default_rate_egp)} ج/ساعة` : 'أجر حسب الطالب';
 function tutorRateFor(tutorId, studentId) {
   const pl = state.plans.find(p => p.student_id === studentId && p.tutor_id === tutorId && p.tutor_rate_egp != null);
   return pl ? pl.tutor_rate_egp : byId(state.tutors, tutorId)?.default_rate_egp ?? null;
