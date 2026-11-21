@@ -95,6 +95,8 @@
   .sq-tip .sq-x{position:absolute;top:6px;right:8px;border:none;background:none;color:var(--sub,#6b7280);font-size:16px;cursor:pointer}
   @media (max-width:700px){.sq-tip{left:78px;bottom:calc(92px + env(safe-area-inset-bottom,0px))}}
   @keyframes sqPop{from{transform:scale(.4);opacity:0}to{transform:scale(1);opacity:1}}
+  .sq-panel.sq-practice{box-shadow:0 0 0 3px #f59e0b,0 20px 50px rgba(0,0,0,.25)}.sq-panel.sq-practice .sq-head{background:linear-gradient(135deg,#d97706,#f59e0b)}
+  .sq-trainbar{background:#fef3c7;color:#92400e;font-size:12.5px;padding:6px 10px;text-align:center;border-bottom:1px solid #fcd34d}
   .sq-panel{position:fixed;left:16px;bottom:calc(96px + env(safe-area-inset-bottom,0px));z-index:48;width:min(400px,calc(100vw - 32px));height:min(600px,calc(100vh - 140px));
     background:var(--card,#fff);color:var(--text,#111);border:1px solid var(--border,#e5e7eb);border-radius:22px;box-shadow:0 20px 60px rgba(0,0,0,.25);
     display:flex;flex-direction:column;overflow:hidden;transform-origin:left bottom;animation:sqPop .4s cubic-bezier(.34,1.56,.64,1)}
@@ -408,7 +410,7 @@
     if (!panel) {
       panel = document.createElement('div'); panel.className = 'sq-panel'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'صقّور');
       panel.innerHTML = `<div class="sq-head"><div class="sq-av">${mascot(44, 'sq-headsvg')}</div><div><b>صقّور</b><div class="sq-st"><span class="sq-dot"></span>مساعدك في أستاذ أونلاين</div></div>
-        <div class="sq-hb"><button data-x="tour" title="جولة في التطبيق">🧭</button><button data-x="close" title="إغلاق">✕</button></div></div>
+        <div class="sq-hb">${mode() === 'sup' ? '<button data-x="train" title="وضع التدريب">🎓</button>' : ''}<button data-x="tour" title="جولة في التطبيق">🧭</button><button data-x="close" title="إغلاق">✕</button></div></div>
         <div class="sq-body"></div><div class="sq-chips"></div>
         <form class="sq-foot"><textarea rows="1" placeholder="${mode() === 'sup' ? 'اكتبلي زي الواتساب: جدول بكرة، تقرير النهارده، إلغاء، سؤال…' : 'اسألني أي حاجة…'}" autocomplete="off"></textarea>${mode() === 'sup' && navigator.mediaDevices && (window.AudioContext || window.webkitAudioContext) ? '<button type="button" class="sq-mic" aria-label="فويس" title="اتكلم بدل ما تكتب">🎙️</button>' : ''}<button type="submit" aria-label="إرسال">➤</button></form>`;
       document.body.appendChild(panel);
@@ -418,6 +420,7 @@
       input.addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.shiftKey && window.innerWidth > 700) { ev.preventDefault(); panel.querySelector('form').requestSubmit(); } });
       panel.querySelector('[data-x=close]').onclick = closePanel;
       panel.querySelector('[data-x=tour]').onclick = () => { closePanel(); setTimeout(startTour, 250); };
+      const tr = panel.querySelector('[data-x=train]'); if (tr) tr.onclick = () => togglePractice();
       const mic = panel.querySelector('.sq-mic'); if (mic) mic.onclick = () => voiceToggle(mic);
       panel.querySelector('form').onsubmit = ev => { ev.preventDefault(); const v = input.value.trim(); if (!v) return; input.value = ''; input.style.height = 'auto'; ask(v); };
     } else panel.style.display = '';
@@ -611,7 +614,7 @@
     if (acts.length) {
       const k = 'p' + (++AI.n); AI.pending[k] = { acts, text, reply: data.reply };
       html += `<div style="margin-top:8px">${acts.map((a, i) => actHtml(a, i, k)).join('')}</div>
-        <div class="sq-go">${act(`✅ نفّذ (${acts.length})`, () => aiExec(k))}${act('📋 نسخ للواتساب', () => copyIt(actsText(acts, data.reply)), true)}${act('إلغاء', () => { delete AI.pending[k]; botSay('تمام، ما عملتش حاجة 👍'); }, true)}</div>
+        <div class="sq-go">${act(`✅ نفّذ (${acts.length})${SQ.practice ? ' — تدريب' : ''}`, () => aiExec(k))}${act('📋 نسخ للواتساب', () => copyIt(actsText(acts, data.reply)), true)}${act('إلغاء', () => { delete AI.pending[k]; botSay('تمام، ما عملتش حاجة 👍'); }, true)}</div>
         <div class="small sub" style="margin-top:4px">شيل علامة ✓ من أي سطر مش عايزه — أو اكتبلي التعديل وأنا أعيد.</div>`;
     }
     if (!acts.length && data.reply) html += `<div style="margin-top:4px">${cpBtn(data.reply)}</div>`;
@@ -655,6 +658,7 @@
     const box = document.getElementById(id); if (!box) return;
     const v = f => (box.querySelector(`[data-f="${f}"]`)?.value || '').trim();
     let name = v('name').replace(/\s*\([^)]*\)\s*/g, ' ').trim(); if (!name) return botSay('اكتب اسم المعلمة الأول 🙏');
+    if (SQ.practice) { box.innerHTML = '🎓 في وضع التدريب مش بنضيف معلمين بجد — بس كده بالظبط الخطوات لما تيجي معلمة جديدة ✓'; return; }
     if (!/^(أ|د|م)\./.test(name)) name = 'أ. ' + name.replace(/^(مس|ميس|مستر)\s*/, '');
     const per = sts.length > 1 ? sts.map((x, i) => ({ ...x, rate: Number(v('rate_' + i)) || null })) : [];
     const rate = per.length ? (per.find(x => x.rate)?.rate || null) : (Number(v('rate')) || null);
@@ -679,6 +683,11 @@
     const sel = [...document.querySelectorAll(`input[data-ai="${k}"]`)].filter(x => x.checked).map(x => P.acts[+x.dataset.i]);
     document.querySelectorAll(`input[data-ai="${k}"]`).forEach(x => x.disabled = true);
     if (!sel.length) { botSay('ما اخترتش حاجة، فما عملتش حاجة 👍'); return; }
+    if (SQ.practice) { // وضع التدريب: ولا حاجة بتتكتب في قاعدة البيانات
+      const nAdd = sel.filter(a => a.op === 'add_session').length, nSt = sel.filter(a => a.op === 'set_status').length, nUp = sel.filter(a => a.op === 'update_session').length;
+      botSay(`🎓 <b>تدريب — ما اتسجلش حاجة بجد.</b><br>لو ده كان بجد، كان اتنفذ: ${[nAdd && nAdd + ' إضافة', nSt && nSt + ' تغيير حالة (تمت/اتلغت)', nUp && nUp + ' تعديل ميعاد/مدة/معلم'].filter(Boolean).join('، ')} ✓<br><span class="small sub">برافو 👏 كده عرفتي تراجعي الكارت وتنفّذيه. جرّبي مهمة تانية من تحت، أو دوسي 🎓 فوق عشان تخرجي من التدريب.</span>`, 'happy');
+      practiceMissions(); return;
+    }
     const uid = (typeof currentSupervisor !== 'undefined' && currentSupervisor) ? currentSupervisor.id : null;
     const results = []; let ok = 0;
     for (const a of sel) {
@@ -808,6 +817,7 @@
 
   async function ask(text) {
     meSay(text);
+    if (mode() === 'sup' && /^\s*(وضع ال)?(تدريب|اتدرب|عايز(ة)? اتدرب|عاوز(ة)? اتدرب)\s*[؟?!.]*\s*$/.test(text)) { togglePractice(true); return; }
     const voice = /^🎙️ /.test(text); if (voice) text = text.replace(/^🎙️ /, '');
     const q = N(text).replace(/[؟?!.,،]/g, ' ').replace(/\s+/g, ' ').trim();
     const talk = TALK.find(t => t.k.some(k => (' ' + q + ' ').includes(' ' + N(k))));
@@ -826,6 +836,42 @@
     botSay(`مش متأكد فهمتك 🤔 تقصد حاجة من دول؟<div class="sq-list">${fallback.map(it => act(e(it.t), () => { meSay(it.t); runIntent(it); })).join('')}</div>
       <div class="small sub" style="margin-top:6px">جرّب تكتب بكلمات بسيطة زي: "إلغاء حصة" أو "فاتورة أبو معروف".</div>`);
   }
+
+  /* ---------------- 🎓 وضع التدريب ----------------
+     صقّور بيقرا الداتا الحقيقية ويطلّع الكارت عادي، بس "نفّذ" ما بيكتبش حاجة.
+     المهام بتتبني من أسامي طلاب ومعلمات حقيقيين عشان التدريب يبقى زي الشغل بالظبط. */
+  function practicePairs() {
+    const P = (typeof state !== 'undefined' && state.actPairs || []).filter(x => x.student_id && x.tutor_id);
+    const seen = new Set(), out = [];
+    for (const x of P) { const k = x.student_id + x.tutor_id; if (seen.has(k)) continue; seen.add(k);
+      const st = (state.students || []).find(y => y.id === x.student_id), tu = (state.tutors || []).find(y => y.id === x.tutor_id);
+      if (st && tu) out.push({ st: st.name, tu: (typeof tutTitle === 'function' ? tutTitle(tu) : tu.name), subj: x.subject || tu.subject_label || '' }); }
+    return out.sort(() => Math.random() - .5);
+  }
+  function practiceMissions() {
+    const p = practicePairs(); if (p.length < 3) { botSay('محتاج حصص في التطبيق الأول عشان أعمل مهام تدريب 🙏'); return; }
+    const [a, b, c, d] = [p[0], p[1], p[2], p[3] || p[0]];
+    const M = [
+      ['📅 سجّلي جدول بكرة', `جدول بكرة\n${a.st} ${a.subj} مع ${a.tu} الساعة 4\n${b.st} ${b.subj} مع ${b.tu} الساعة 5`],
+      ['❌ إلغاء حصة', `${c.st} مش هتدخل ${c.subj} النهارده عشان تعبانة`],
+      ['✅ تقرير آخر اليوم', `تقرير النهارده: كله تمام ما عدا ${a.st} اتلغت من المعلمة`],
+      ['📝 الزقي تقرير معلمة', `🌟 تقرير الحصة اليومية 🌟\n👤 الطالب: ${d.st}\n📚 المادة: ${d.subj}\n🔢 رقم الحصة: 2\n📅 التاريخ (يوم/شهر): ${new Date().getDate()}/${new Date().getMonth() + 1}\n⏱️ مدة الحصة: ساعة ونص\n📝 ما تم إنجازه في الحصة: مراجعة الوحدة\n🎯 تقييم أداء الطالب اليوم: جيد جداً`],
+      ['❓ اسألي سؤال', `مين بتدرّس ${b.st} ${b.subj}؟`],
+    ];
+    botSay(`🎯 <b>مهام التدريب</b> — دوسي على أي مهمة، هكتبهالك في الخانة تحت، راجعيها وابعتيها. وبعدين راجعي الكارت اللي هيطلع ودوسي <b>نفّذ</b> (مش هيتسجل حاجة):<div class="sq-list">${M.map(([t, msg]) => act(e(t), () => { input.value = msg; input.dispatchEvent(new Event('input')); input.focus(); }, true)).join('')}</div>`);
+  }
+  function togglePractice(on = !SQ.practice) {
+    SQ.practice = on;
+    if (!SQ.open) openPanel();
+    panel.classList.toggle('sq-practice', on);
+    let bar = panel.querySelector('.sq-trainbar');
+    if (on && !bar) { bar = document.createElement('div'); bar.className = 'sq-trainbar'; bar.textContent = '🎓 وضع التدريب — جرّبي براحتك، مفيش أي حاجة بتتسجل بجد'; panel.querySelector('.sq-head').after(bar); }
+    if (!on && bar) bar.remove();
+    AI.hist = []; Object.keys(AI.pending).forEach(k => delete AI.pending[k]);
+    if (on) { botSay(`🎓 <b>أهلاً بيكي في وضع التدريب!</b><br>هنا تقدري تجرّبي كل حاجة بتعمليها في الشغل: تسجيل جدول، إلغاء، تقرير آخر اليوم، لزق تقرير معلمة… صقّور هيشتغل على الداتا الحقيقية ويطلّعلك الكارت عادي، بس زرار <b>نفّذ</b> مش هيسجّل حاجة.`, 'wave'); practiceMissions(); }
+    else botSay('✅ خرجنا من وضع التدريب — من دلوقتي أي <b>نفّذ</b> بيتسجل بجد.');
+  }
+  SQ.practice = false; SQ.train = () => togglePractice(true);
 
   /* ---------------- الجولة ---------------- */
   const TOUR = {
@@ -883,7 +929,7 @@
     hole && hole.remove(); card && card.remove(); hole = card = null;
     window.removeEventListener('resize', showStep);
     LSset('tour_' + mode(), '1');
-    if (done) { confetti(); setTimeout(() => showTip(`تمام كده 🎉 لو احتجت أي حاجة دوس عليّا 🦅`, () => { hideTip(); openPanel(); }, 'happy'), 600); }
+    if (done) { confetti(); const sup = mode() === 'sup'; setTimeout(() => showTip(sup ? `تمام كده 🎉 تحبي تجرّبي صقّور في <b>وضع التدريب</b>؟ تسجّلي حصص وتقارير على سبيل التجربة من غير ما يتسجل حاجة بجد 🎓` : `تمام كده 🎉 لو احتجت أي حاجة دوس عليّا 🦅`, () => { hideTip(); sup ? togglePractice(true) : openPanel(); }, 'happy'), 600); }
   }
 
   /* ---------------- احتفال ---------------- */
