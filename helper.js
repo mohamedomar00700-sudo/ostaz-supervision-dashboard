@@ -591,6 +591,15 @@
     if (!acts.length && data.already?.length && !data.questions?.length && !data.warnings?.length) data.reply = `كل الحصص دي متسجلة بالفعل ✅ — مفيش حاجة محتاجة تتسجل أو تتعدل.`;
     if (!acts.length && !data.already?.length && /ه(سج|ضيف|عد|لغ|نقل)/.test(data.reply || '')) // "هسجلها" من غير أي عملية = مستني رد، مش هيسجل لوحده
       data.reply = (data.choices?.length || data.questions?.length || data.new_tutors?.length) ? `${data.reply}\n⚠️ لسه ما سجّلتش حاجة — كمّل من تحت الأول.` : 'ما قدرتش أطلع حصة أسجّلها من الرسالة دي ⚠️ — اكتبها تاني بالمعلم واليوم والساعة.';
+    // صقّور يفتكر اللي اتعرض في الكارت (مش الرد بس) — عشان "اتعدل ميعادها" / "خليها 3" تتفهم على الحصة اللي فوق
+    try {
+      const ctx = [data.reply || ''];
+      if (acts.length) ctx.push('اقترحت:\n' + actsText(acts, '').trim());
+      (data.already || []).forEach(x => ctx.push(`متسجلة بالفعل: ${x.student_name}${x.subject ? ' ' + x.subject : ''} مع ${x.tutor_name} يوم ${x.date} الساعة ${x.time} (${x.minutes} دقيقة)`));
+      (data.warnings || []).forEach(w => ctx.push('تنبيه: ' + w));
+      (data.choices || []).forEach(c => ctx.push('سألت: ' + c.question));
+      const last = AI.hist[AI.hist.length - 1]; if (last && last.role === 'model') last.text = ctx.join('\n').slice(0, 2500);
+    } catch (_) {}
     let html = e(data.reply || '');
     if (data.questions?.length) html += `<div style="margin-top:6px">${data.questions.map(q => `❓ ${e(q)}`).join('<br>')}</div>`;
     // اختيارات جاهزة لما صقّور يحتار — الضغطة بتتبعت كرسالة
@@ -598,7 +607,7 @@
     // معلمة مش متسجلة → نضيفها من هنا ونكمّل تسجيل حصصها
     if (data.new_tutors?.length) html += data.new_tutors.map(t => newTutorCard(t, text)).join('');
     if (data.warnings?.length) html += `<div class="small" style="margin-top:6px;color:#b45309">${data.warnings.map(w => '⚠️ ' + e(w)).join('<br>')}</div>`;
-    if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `${x.session_id ? sessLink(x.session_id) : ''}• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}${x.at ? ' ' + regAt(x.at) : ''}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}${x.session_id ? ' <u style="color:#2563eb">👁 شوفها</u></span>' : ''}`).join('<br>')}<div class="sub" style="margin-top:4px">دوسي على أي حصة عشان تشوفها من السيستم نفسه</div></div>`;
+    if (data.already?.length) html += `<div class="small" style="margin-top:8px;padding:8px;border-radius:10px;background:rgba(22,163,74,.08)"><b>✅ متسجلة بالفعل (مش هتتكرر):</b><br>${data.already.map(x => `${x.session_id ? sessLink(x.session_id) : ''}• ${e(x.student_name)}${x.subject ? ' · ' + e(x.subject) : ''} · ${e(x.tutor_name)} — ${dayLbl(x.date)} ${t12(x.time)} (${dl(x.minutes)}) <span class="sub">— سجّلها ${e(x.by)}${x.at ? ' ' + regAt(x.at) : ''}</span>${x.differs ? ' <span style="color:#b45309">⚠️ فيه اختلاف في الميعاد/المعلم/المدة عن كلامك — راجع الحصة دي</span>' : ''}${x.differs && x.session_id ? ' ' + act('✏️ عدّلها', () => { input && (input.value = `عدّل حصة ${x.student_name}${x.subject ? ' ' + x.subject : ''} مع ${String(x.tutor_name).replace(/\s*\(.*?\)/, '')} يوم ${x.date} (اللي الساعة ${x.time}) — خليها الساعة `); input && input.focus(); }, true) : ''}${x.session_id ? ' <u style="color:#2563eb">👁 شوفها</u></span>' : ''}`).join('<br>')}<div class="sub" style="margin-top:4px">دوسي على أي حصة عشان تشوفها من السيستم نفسه</div></div>`;
     if (acts.length) {
       const k = 'p' + (++AI.n); AI.pending[k] = { acts, text, reply: data.reply };
       html += `<div style="margin-top:8px">${acts.map((a, i) => actHtml(a, i, k)).join('')}</div>
