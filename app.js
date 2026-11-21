@@ -5585,3 +5585,71 @@ ${SIGN_T}`;
     <p class="sub small">رسالة لكل معلمة فيها حصصها اللي "تمت" — متقسمة على كل طالب ومترقّمة 1، 2، 3… زي ما بيعدّوا في تقاريرهم (من غير أسعار). "من بعد آخر حساب" = العدّ بيبدأ من 1 بعد آخر دفعة اتسجلت لها. ابعتها في جروبها قبل الحساب.</p>
     ${blocks.length ? `<div class="list">${blocks.join('')}</div>` : '<div class="empty">مفيش حصص متسجلة في الفترة دي.</div>'}`);
 }
+
+/* ============================================================
+   📥 تصدير الشهر — ملف Excel بكل حصص الشهر (نسخة احتياطية برا التطبيق)
+   الأسعار بتظهر للإدارة بس (المشرفين يشوفوا الحصص والمدد من غير فلوس)
+   ============================================================ */
+function openMonthExport() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' }));
+  const ym = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  openModal('📥 تصدير الشهر (Excel)', `
+    <p class="sub small">ملف Excel فيه كل حصص الشهر: التاريخ، الطالب، المعلمة، المدة، الحالة — وملخص لكل معلمة ولكل أسرة. احفظه آخر كل شهر على جهازك أو Google Drive كنسخة احتياطية.</p>
+    <div class="row-gap mt"><input type="month" id="exp-month" class="input" value="${ym(now)}" style="max-width:180px">
+      <button class="btn btn-brand" onclick="exportMonth(document.getElementById('exp-month').value)">⬇️ نزّل الملف</button></div>
+    <div class="chips mt"><button class="chip" onclick="document.getElementById('exp-month').value='${ym(now)}'">الشهر ده</button>
+      <button class="chip" onclick="document.getElementById('exp-month').value='${ym(prev)}'">الشهر اللي فات</button></div>`);
+}
+async function loadXLSX() {
+  if (window.XLSX) return window.XLSX;
+  await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+  return window.XLSX;
+}
+async function exportMonth(ymStr) {
+  if (!/^\d{4}-\d{2}$/.test(ymStr || '')) return showToast('اختار الشهر الأول', true);
+  const [y, m] = ymStr.split('-').map(Number);
+  const pad = n => String(n).padStart(2, '0');
+  const fromIso = new Date(`${y}-${pad(m)}-01T00:00:00+02:00`).toISOString();
+  const toIso = new Date(`${m === 12 ? y + 1 : y}-${pad(m === 12 ? 1 : m + 1)}-01T00:00:00+02:00`).toISOString();
+  let ss, XLSX;
+  try {
+    showToast('بجهّز الملف…');
+    [ss, XLSX] = await Promise.all([
+      q(sb.from('sessions').select('*').gte('scheduled_at', fromIso).lt('scheduled_at', toIso).neq('status', 'cancelled_by_academy').order('scheduled_at')),
+      loadXLSX(),
+    ]);
+  } catch (e) { showToast(e?.message ? dbError(e) : 'ما قدرتش أحمّل مكتبة Excel — جرّب تاني', true); return; }
+  const C = { timeZone: 'Africa/Cairo' };
+  const d = iso => new Date(iso).toLocaleDateString('en-GB', { ...C, day: '2-digit', month: '2-digit', year: 'numeric' });
+  const wd = iso => new Date(iso).toLocaleDateString('ar-EG', { ...C, weekday: 'long' });
+  const tm = iso => new Date(iso).toLocaleTimeString('en-GB', { ...C, hour: '2-digit', minute: '2-digit' });
+  const hrs = n => Math.round(n / 60 * 100) / 100;
+  const rows = ss.map(s => {
+    const st = byId(state.students, s.student_id), tu = byId(state.tutors, s.tutor_id), fam = st && byId(state.families, st.family_id);
+    const mins = s.status === 'done' ? sMins(s) : 0;
+    const r = { 'التاريخ': d(s.scheduled_at), 'اليوم': wd(s.scheduled_at), 'الساعة (مصر)': tm(s.scheduled_at), 'الطالب': st?.name || '', 'الأسرة': fam?.name || '',
+      'المادة': s.subject || '', 'المعلم/ة': tu?.name || '', 'المدة المجدولة (دقيقة)': s.duration_minutes || '', 'المدة الفعلية (دقيقة)': mins || '',
+      'الساعات': mins ? hrs(mins) : '', 'الحالة': STATUS[s.status]?.label || s.status, 'سبب الإلغاء': s.cancel_reason || '',
+      'النوع': s.kind === 'regular' ? '' : kindWord(s), 'حصة أسرة': s.family_block ? 'نعم' : '', 'جروب': s.group_name || '', 'ملاحظات': s.notes || '' };
+    if (isAdmin) Object.assign(r, { 'سعر الأسرة/ساعة': Number(s.student_price) || '', 'العملة': s.student_currency || '', 'سعر المعلم/ساعة (ج)': Number(s.tutor_cost_egp) || '' });
+    return r;
+  });
+  // ملخصات: الحصص اللي "تمت" بس — الجروب وحصة الأسرة بيتحسبوا مرة واحدة للمعلمة
+  const done = ss.filter(s => s.status === 'done');
+  const byT = {};
+  occurrences(done).forEach(o => { const x = byT[o.tutor_id] ||= { n: 0, m: 0, e: 0 }; x.n++; x.m += sMins(o); x.e += occTutExact(o); });
+  const tSheet = Object.entries(byT).map(([id, x]) => ({ 'المعلم/ة': byId(state.tutors, id)?.name || '', 'عدد الحصص': x.n, 'الساعات': hrs(x.m), ...(isAdmin ? { 'المستحق (ج)': Math.round(x.e * 100) / 100 } : {}) }))
+    .sort((a, b) => b['الساعات'] - a['الساعات']);
+  const byF = {};
+  done.forEach(s => { const st = byId(state.students, s.student_id); const f = st && byId(state.families, st.family_id); if (!f) return; const x = byF[f.id] ||= { n: 0, m: 0, kids: new Set() }; x.n++; x.m += sMins(s); x.kids.add(st.name); });
+  const fSheet = Object.entries(byF).map(([id, x]) => ({ 'الأسرة': byId(state.families, id)?.name || '', 'الطلاب': [...x.kids].join('، '), 'عدد الحصص': x.n, 'الساعات': hrs(x.m) }))
+    .sort((a, b) => b['الساعات'] - a['الساعات']);
+  const wb = XLSX.utils.book_new(); wb.Workbook = { Views: [{ RTL: true }] };
+  const add = (data, name, widths) => { const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ '—': 'مفيش بيانات' }]); ws['!cols'] = widths.map(w => ({ wch: w })); ws['!views'] = [{ RTL: true }]; XLSX.utils.book_append_sheet(wb, ws, name); };
+  add(rows, 'الحصص', [12, 10, 9, 14, 22, 12, 20, 10, 10, 8, 12, 16, 10, 8, 14, 30, 10, 8, 10]);
+  add(tSheet, 'ملخص المعلمين', [24, 10, 10, 12]);
+  add(fSheet, 'ملخص الأسر', [26, 26, 10, 10]);
+  XLSX.writeFile(wb, `حصص-${ymStr}.xlsx`);
+  showToast(`✅ نزل الملف: ${rows.length} حصة`);
+}
