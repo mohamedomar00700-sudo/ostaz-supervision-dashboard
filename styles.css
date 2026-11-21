@@ -440,3 +440,18 @@ body.hide-profit .owner-only{display:none!important}
 :root[data-theme="dark"] .occ-card{background:linear-gradient(160deg,#2a1820,#251f14 55%,#141c2b);border-color:#5b2d3f;box-shadow:none}
 :root[data-theme="dark"] .occ-title{color:#f9a8d4}
 .occ-row{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+
+/* تبويب الطلاب: فلاتر بعدّادات + جدول */
+.sf-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;min-width:0}
+.sf-lbl{font-size:12px;color:var(--sub);flex:0 0 46px}
+.sf-scroll{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;flex:1;min-width:0}
+.sf-scroll::-webkit-scrollbar{display:none}
+.sf-scroll .chip{white-space:nowrap;flex:0 0 auto}
+.sf-n{opacity:.55;font-size:11px;margin-inline-start:2px}
+.chip.active .sf-n{opacity:.8}
+.sf-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:10px 0 4px;font-size:14px}
+.sf-pill{border:1px solid var(--border);background:var(--card,transparent);color:var(--text);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer}
+.sf-th{cursor:pointer;user-select:none;white-space:nowrap}
+.sf-tags{display:flex;flex-wrap:wrap;gap:4px}
+.sf-tag{font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:2px 7px;white-space:nowrap}
+#students-view mark{background:rgba(250,204,21,.45);color:inherit;border-radius:3px;padding:0 1px}

@@ -5170,13 +5170,16 @@ function renderFamSwitch() {
   const el = document.getElementById('fam-switch'); if (!el) return;
   const v = state.famView || 'fams', due = (state.leads || []).filter(leadDue).length;
   el.innerHTML = `<button class="chip ${v === 'fams' ? 'active' : ''}" onclick="setFamView('fams')">👨‍👩‍👧 الأسر</button>
+    <button class="chip ${v === 'stus' ? 'active' : ''}" onclick="setFamView('stus')">🎓 الطلاب</button>
     <button class="chip ${v === 'leads' ? 'active' : ''}" onclick="setFamView('leads')">📥 الاستفسارات${due ? ` <span class="badge b-cancel">${due}</span>` : ''}</button>`;
 }
 function setFamView(v) {
   state.famView = v; renderFamSwitch();
   document.getElementById('fam-main').classList.toggle('hidden', v !== 'fams');
   document.getElementById('leads-view').classList.toggle('hidden', v !== 'leads');
+  document.getElementById('students-view').classList.toggle('hidden', v !== 'stus');
   if (v === 'leads') { if (!state.leads) loadLeads(); else renderLeads(); }
+  if (v === 'stus') loadStudentView();
 }
 async function loadLeads() {
   const el = document.getElementById('leads-view'); if (!state.leads) el.innerHTML = '<div class="card empty">بيحمّل…</div>';
@@ -5672,64 +5675,91 @@ function subjNorm(x) {
   if (/إسلام|اسلام|islam/.test(s)) return 'تربية إسلامية'; if (/قرآن|قران/.test(s)) return 'قرآن'; if (/عربي|arab/.test(s)) return 'عربي';
   if (/سوشيال|social|دراسات/.test(s)) return 'سوشيال'; if (/ict|كمبيوتر|حاسب/.test(s)) return 'ICT'; return String(x || '').trim() || '—';
 }
-const SF = { grade: 'all', subj: 'all', tutor: 'all', act: 'active', country: 'all', data: null };
-async function openStudentFilter() {
-  try {
-    SF.data = await q(sb.from('sessions').select('student_id,tutor_id,subject,scheduled_at,status,family_block')
-      .gte('scheduled_at', new Date(Date.now() - 60 * 864e5).toISOString()).in('status', ['done', 'scheduled']).order('scheduled_at'));
-  } catch (e) { showToast(dbError(e), true); return; }
-  renderStudentFilter();
+/* ----- تبويب "🎓 الطلاب" جوه قسم الأسر: بحث ذكي + فلاتر متعددة الاختيار بعدّاداتها + جدول قابل للترتيب ----- */
+const SF = (() => { const d = { q: '', act: 'active', grades: [], subjs: [], countries: [], sort: 'grade', dir: 1, data: null, at: 0 };
+  try { return Object.assign(d, JSON.parse(localStorage.getItem('sf') || '{}'), { data: null, at: 0 }); } catch (_) { return d; } })();
+const sfSave = () => { try { const { data, at, ...rest } = SF; localStorage.setItem('sf', JSON.stringify(rest)); } catch (_) {} };
+function openStudentFilter() { switchTab('families'); setFamView('stus'); }
+async function loadStudentView(force) {
+  const el = document.getElementById('students-view'); if (!el) return;
+  if (!SF.data || force || Date.now() - SF.at > 5 * 60e3) {
+    if (!SF.data) el.innerHTML = '<div class="card empty">بيحمّل…</div>';
+    try { SF.data = await q(sb.from('sessions').select('student_id,tutor_id,subject,scheduled_at,status,family_block')
+      .gte('scheduled_at', new Date(Date.now() - 60 * 864e5).toISOString()).in('status', ['done', 'scheduled']).order('scheduled_at')); SF.at = Date.now(); }
+    catch (e) { el.innerHTML = `<div class="card empty">${esc(dbError(e))}</div>`; return; }
+  }
+  renderStudents();
 }
-function sfSet(k, v) { SF[k] = v; renderStudentFilter(); }
-function renderStudentFilter() {
-  const now = Date.now(), d30 = now - 30 * 864e5;
-  // لكل طالب: المواد والمعلمين (آخر 60 يوم + الجاي)، وآخر حصة تمت
-  const info = {};
+function sfToggle(k, v) { const a = SF[k], i = a.indexOf(v); i < 0 ? a.push(v) : a.splice(i, 1); sfSave(); renderStudents(); }
+function sfSet(k, v) { SF[k] = v; sfSave(); renderStudents(); }
+function sfClear() { Object.assign(SF, { q: '', grades: [], subjs: [], countries: [], act: 'active' }); sfSave(); const i = document.getElementById('sf-q'); if (i) i.value = ''; renderStudents(); }
+function sfSort(k) { SF.dir = SF.sort === k ? -SF.dir : 1; SF.sort = k; sfSave(); renderStudents(); }
+function sfOpenFamily(name) { setFamView('fams'); const fs = document.getElementById('family-search'); if (fs) fs.value = name; state.famFilter = null; renderFamilies(); }
+function sfRows() {
+  const now = Date.now(), d30 = now - 30 * 864e5, info = {};
   (SF.data || []).forEach(s => {
     const st = byId(state.students, s.student_id); if (!st) return;
     const kids = s.family_block ? state.students.filter(k => k.family_id === st.family_id) : [st];
-    kids.forEach(k => { const x = info[k.id] ||= { subj: new Set(), tut: new Set(), pairs: new Set(), last: 0, next: 0 };
+    kids.forEach(k => { const x = info[k.id] ||= { subj: new Set(), tut: new Set(), pairs: new Map(), last: 0, next: 0 };
       const sj = subjNorm(s.subject), t = new Date(s.scheduled_at).getTime();
-      x.subj.add(sj); x.tut.add(s.tutor_id); x.pairs.add(sj + '|' + s.tutor_id);
+      x.subj.add(sj); x.tut.add(s.tutor_id); x.pairs.set(sj + '|' + s.tutor_id, { sj, tid: s.tutor_id });
       if (s.status === 'done' && t > x.last) x.last = t; if (s.status === 'scheduled' && t > now && (!x.next || t < x.next)) x.next = t; });
   });
-  const isActive = st => { const x = info[st.id]; return !!x && (x.last >= d30 || x.next > 0); };
-  const all = state.students.map(st => ({ st, fam: byId(state.families, st.family_id), g: gradeNum(st.grade_level), x: info[st.id] }));
-  const pass = (r, skip) => (skip === 'act' || SF.act === 'all' || (SF.act === 'active' ? isActive(r.st) : !isActive(r.st)))
-    && (skip === 'grade' || SF.grade === 'all' || String(r.g) === SF.grade)
-    && (skip === 'subj' || SF.subj === 'all' || (r.x && r.x.subj.has(SF.subj)))
-    && (skip === 'tutor' || SF.tutor === 'all' || (r.x && r.x.tut.has(SF.tutor)))
-    && (skip === 'country' || SF.country === 'all' || (r.fam?.country || '') === SF.country);
-  const rows = all.filter(r => pass(r)).sort((a, b) => (a.g ?? 99) - (b.g ?? 99) || a.st.name.localeCompare(b.st.name, 'ar'));
-  const cnt = (key, fn) => { const m = {}; all.filter(r => pass(r, key)).forEach(r => [].concat(fn(r)).forEach(v => { if (v != null && v !== '') m[v] = (m[v] || 0) + 1; })); return m; };
-  const gC = cnt('grade', r => r.g == null ? null : String(r.g)), sC = cnt('subj', r => r.x ? [...r.x.subj] : []), tC = cnt('tutor', r => r.x ? [...r.x.tut] : []), cC = cnt('country', r => r.fam?.country || '');
-  const chip = (k, v, label, n) => `<button class="chip ${SF[k] === v ? 'active' : ''}" onclick="sfSet('${k}', ${jsq(v)})">${esc(label)}${n != null ? ` <span class="sub">${n}</span>` : ''}</button>`;
+  return state.students.map(st => { const x = info[st.id], fam = byId(state.families, st.family_id);
+    const tuts = x ? [...x.tut].map(id => byId(state.tutors, id)).filter(Boolean) : [];
+    return { st, fam, x, g: gradeNum(st.grade_level), active: !!x && (x.last >= d30 || x.next > 0), country: fam?.country || '',
+      hay: normAr([st.name, fam?.name, st.grade_level, ...tuts.map(t => t.name + ' ' + (t.subject_label || '')), ...(x ? [...x.subj] : [])].join(' ')) }; });
+}
+function renderStudents() {
+  const el = document.getElementById('students-view'); if (!el || !SF.data) return;
+  const all = sfRows();
+  const terms = normAr(SF.q).split(' ').filter(Boolean).map(t => t.replace(/^(ا\.|مس|مستر|ميس|استاذ|استاذه)$/, '')).filter(Boolean);
+  const ok = (r, skip) => (skip === 'act' || SF.act === 'all' || (SF.act === 'active') === r.active)
+    && (skip === 'q' || terms.every(t => r.hay.includes(t)))
+    && (skip === 'grades' || !SF.grades.length || SF.grades.includes(String(r.g)))
+    && (skip === 'subjs' || !SF.subjs.length || (r.x && SF.subjs.some(s => r.x.subj.has(s))))
+    && (skip === 'countries' || !SF.countries.length || SF.countries.includes(r.country));
+  const rows = all.filter(r => ok(r));
+  const key = { name: r => r.st.name, grade: r => r.g ?? 99, last: r => -(r.x?.last || 0), fam: r => r.fam?.name || '' }[SF.sort] || (r => r.g ?? 99);
+  rows.sort((a, b) => { const A = key(a), B = key(b); return (typeof A === 'number' ? A - B : String(A).localeCompare(String(B), 'ar')) * SF.dir || a.st.name.localeCompare(b.st.name, 'ar'); });
+  const count = (k, fn) => { const m = {}; all.filter(r => ok(r, k)).forEach(r => [].concat(fn(r)).forEach(v => { if (v != null && v !== '') m[v] = (m[v] || 0) + 1; })); return m; };
+  const gC = count('grades', r => r.g == null ? null : String(r.g)), sC = count('subjs', r => r.x ? [...r.x.subj] : []), cC = count('countries', r => r.country);
   const gLabel = g => g === '0' ? 'روضة' : 'صف ' + g;
-  const gradeChips = Object.keys(gC).sort((a, b) => a - b).map(g => chip('grade', g, gLabel(g), gC[g])).join('');
-  const subjChips = Object.entries(sC).sort((a, b) => b[1] - a[1]).map(([s, n]) => chip('subj', s, s, n)).join('');
-  const tutOpts = Object.entries(tC).map(([id, n]) => ({ id, n, t: byId(state.tutors, id) })).filter(x => x.t).sort((a, b) => b.n - a.n)
-    .map(x => `<option value="${esc(x.id)}" ${SF.tutor === x.id ? 'selected' : ''}>${esc(tutLabel(x.t))} (${x.n})</option>`).join('');
-  // جدول الصف × المادة (للطلاب اللي في الفلتر من غير فلتر الصف والمادة) — يبيّن فين ينفع جروب
-  const base = all.filter(r => pass(r, 'grade') && pass(r, 'subj') && r.g != null && r.x);
-  const subjs = [...new Set(base.flatMap(r => [...r.x.subj]))].sort((a, b) => base.filter(r => r.x.subj.has(b)).length - base.filter(r => r.x.subj.has(a)).length).slice(0, 8);
-  const grades = [...new Set(base.map(r => r.g))].sort((a, b) => a - b);
-  const mtx = grades.length && subjs.length ? `<details class="mt"><summary class="small"><b>📊 جدول الصف × المادة</b> — الخانة اللي فيها 3 أو أكتر ممكن تبقى جروب</summary>
-    <div style="overflow-x:auto"><table class="table small mt"><thead><tr><th>الصف</th>${subjs.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>
-    ${grades.map(g => `<tr><td><b>${esc(gLabel(String(g)))}</b></td>${subjs.map(s => { const n = base.filter(r => r.g === g && r.x.subj.has(s)).length;
-      return `<td style="text-align:center;${n >= 3 ? 'background:rgba(22,163,74,.15);font-weight:700' : ''}">${n ? `<a href="#" onclick="event.preventDefault(); SF.grade='${g}'; SF.subj=${esc(JSON.stringify(s))}; renderStudentFilter()">${n}</a>` : ''}</td>`; }).join('')}</tr>`).join('')}
-    </tbody></table></div></details>` : '';
+  const facet = (k, entries, label) => `<div class="sf-row"><span class="sf-lbl">${label}</span><div class="sf-scroll">${entries.map(([v, n, t]) =>
+    `<button class="chip ${SF[k].includes(v) ? 'active' : ''}" onclick="sfToggle('${k}', ${jsq(v)})">${esc(t || v)} <span class="sf-n">${n}</span></button>`).join('')}</div></div>`;
+  // الفلاتر المختارة كـ pills تتشال بدوسة
+  const pills = [...SF.grades.map(g => ['grades', g, gLabel(g)]), ...SF.subjs.map(s => ['subjs', s, s]), ...SF.countries.map(c => ['countries', c, c])];
+  const anyF = pills.length || SF.q || SF.act !== 'active';
   const fmtD = t => t ? new Date(t).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' }) : '—';
-  const list = rows.map(r => { const pairs = r.x ? [...r.x.pairs].map(p => { const [sj, tid] = p.split('|'); return `${sj} (${tutBareName(byId(state.tutors, tid)) || '؟'})`; }) : [];
-    return `<tr><td><b>${esc(r.st.name)}</b><div class="sub">${esc(r.fam?.name || '')}</div></td><td>${esc(r.g == null ? (r.st.grade_level || '—') : gLabel(String(r.g)))}${gradeTrack(r.st.grade_level) ? `<div class="sub">${esc(gradeTrack(r.st.grade_level))}</div>` : ''}</td>
-      <td class="small">${esc(pairs.join('، ') || '—')}</td><td class="small">${fmtD(r.x?.last)}${r.x?.next ? `<div class="sub">الجاية ${fmtD(r.x.next)}</div>` : ''}</td></tr>`; }).join('');
+  const hi = txt => { let h = esc(txt); terms.forEach(t => { if (t.length > 1) h = h.replace(new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), m => `<mark>${m}</mark>`); }); return h; };
+  const th = (k, label) => `<th class="sf-th" onclick="sfSort('${k}')">${label}${SF.sort === k ? (SF.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  const list = rows.map(r => {
+    const pairs = r.x ? [...r.x.pairs.values()].map(p => `<span class="sf-tag">${esc(p.sj)} · ${hi(tutBareName(byId(state.tutors, p.tid)) || '؟')}</span>`).join('') : '<span class="sub">—</span>';
+    return `<tr onclick='sfOpenFamily(${jsq(r.fam?.name || r.st.name)})' style="cursor:pointer"><td><b>${hi(r.st.name)}</b>${r.active ? '' : ' <span class="sub small">(مش نشط)</span>'}<div class="sub small">${hi(r.fam?.name || '')}</div></td>
+      <td class="num">${esc(r.g == null ? (r.st.grade_level || '—') : gLabel(String(r.g)))}${gradeTrack(r.st.grade_level) ? `<div class="sub small">${esc(gradeTrack(r.st.grade_level))}</div>` : ''}</td>
+      <td><div class="sf-tags">${pairs}</div></td><td class="small num">${fmtD(r.x?.last)}${r.x?.next ? `<div class="sub">الجاية ${fmtD(r.x.next)}</div>` : ''}</td></tr>`; }).join('');
+  // الصف × المادة: فين ممكن نعمل جروب (على الطلاب بعد البحث والحالة والبلد)
+  const base = all.filter(r => ok(r, 'grades') && ok(r, 'subjs') && r.g != null && r.x);
+  const subjs = Object.entries(base.reduce((m, r) => { r.x.subj.forEach(s => m[s] = (m[s] || 0) + 1); return m; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
+  const grades = [...new Set(base.map(r => r.g))].sort((a, b) => a - b);
+  const mtx = grades.length && subjs.length ? `<details class="card mt" style="padding:10px 12px"><summary class="small"><b>📊 الصف × المادة</b> — الأخضر = 3 طلاب أو أكتر (ممكن جروب). دوسة على الرقم بتفلتر.</summary>
+    <div class="scrollx"><table class="small mt"><thead><tr><th>الصف</th>${subjs.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>
+    ${grades.map(g => `<tr><td><b>${esc(gLabel(String(g)))}</b></td>${subjs.map(s => { const n = base.filter(r => r.g === g && r.x.subj.has(s)).length;
+      return `<td style="text-align:center;${n >= 3 ? 'background:rgba(22,163,74,.15);font-weight:700' : ''}">${n ? `<a href="javascript:void(0)" onclick='SF.grades=["${g}"]; SF.subjs=[${jsq(s)}]; sfSave(); renderStudents()'>${n}</a>` : ''}</td>`; }).join('')}</tr>`).join('')}
+    </tbody></table></div></details>` : '';
   const copyTxt = rows.map(r => `• ${r.st.name} — ${r.g == null ? (r.st.grade_level || '') : gLabel(String(r.g))}${gradeTrack(r.st.grade_level) ? ' ' + gradeTrack(r.st.grade_level) : ''} — ${r.fam?.name || ''}`).join('\n');
-  openModal(`🎓 فلتر الطلاب — ${rows.length} طالب`, `
-    <div class="chips">${chip('act', 'active', 'نشط (آخر 30 يوم أو ليه حصة جاية)')}${chip('act', 'inactive', 'مش نشط')}${chip('act', 'all', 'الكل')}</div>
-    <div class="small sub mt">الصف:</div><div class="chips">${chip('grade', 'all', 'كل الصفوف')}${gradeChips}</div>
-    <div class="small sub">المادة:</div><div class="chips">${chip('subj', 'all', 'كل المواد')}${subjChips}</div>
-    <div class="row-gap mt"><select class="input" style="max-width:260px" onchange="sfSet('tutor', this.value)"><option value="all">كل المعلمين</option>${tutOpts}</select>
-      <select class="input" style="max-width:160px" onchange="sfSet('country', this.value)"><option value="all">كل البلاد</option>${Object.entries(cC).map(([c, n]) => `<option value="${esc(c)}" ${SF.country === c ? 'selected' : ''}>${esc(c || '—')} (${n})</option>`).join('')}</select>
-      <button class="btn btn-ghost sm" onclick='copyText(${jsq(copyTxt)}, "اتنسخت القايمة ✓")'>📋 نسخ القايمة</button></div>
+  const focus = document.activeElement?.id === 'sf-q', caret = focus ? document.activeElement.selectionStart : null;
+  el.innerHTML = `
+    <div class="toolbar"><input class="input search" id="sf-q" placeholder="🔍 ابحث: اسم طالب، أسرة، معلمة، مادة… (مثلاً: سمر كيمياء)" value="${esc(SF.q)}" oninput="SF.q=this.value; sfSave(); renderStudents()"></div>
+    <div class="chips seg" style="margin-bottom:8px">${[['active', 'نشط'], ['inactive', 'مش نشط'], ['all', 'الكل']].map(([v, t]) => `<button class="chip ${SF.act === v ? 'active' : ''}" onclick="sfSet('act','${v}')">${t}</button>`).join('')}</div>
+    ${facet('grades', Object.keys(gC).sort((a, b) => a - b).map(g => [g, gC[g], gLabel(g)]), 'الصف')}
+    ${facet('subjs', Object.entries(sC).sort((a, b) => b[1] - a[1]).map(([s, n]) => [s, n]), 'المادة')}
+    ${Object.keys(cC).length > 1 ? facet('countries', Object.entries(cC).map(([c, n]) => [c, n]), 'البلد') : ''}
+    <div class="sf-bar"><b>${rows.length}</b>&nbsp;طالب${pills.map(([k, v, t]) => ` <button class="sf-pill" onclick="sfToggle('${k}', ${jsq(v)})">${esc(t)} ✕</button>`).join('')}
+      ${anyF ? '<button class="btn btn-ghost sm" onclick="sfClear()">مسح الفلاتر</button>' : ''}
+      <span style="margin-inline-start:auto"></span><button class="btn btn-ghost sm" onclick='copyText(${jsq(copyTxt)}, "اتنسخت القايمة ✓")'>📋 نسخ</button></div>
     ${mtx}
-    <div style="overflow-x:auto" class="mt"><table class="table"><thead><tr><th>الطالب</th><th>الصف</th><th>المواد (المعلم)</th><th>آخر حصة</th></tr></thead><tbody>${list || '<tr><td colspan="4" class="empty">مفيش طلاب بالفلتر ده</td></tr>'}</tbody></table></div>`);
+    <div class="card mt" style="padding:0"><div class="scrollx"><table><thead><tr>${th('name', 'الطالب')}${th('grade', 'الصف')}<th>المواد · المعلم/ة</th>${th('last', 'آخر حصة')}</tr></thead>
+      <tbody>${list || `<tr><td colspan="4" class="empty">مفيش طلاب بالفلتر ده${anyF ? ' — <a href="javascript:void(0)" onclick="sfClear()">امسح الفلاتر</a>' : ''}</td></tr>`}</tbody></table></div></div>`;
+  if (focus) { const i = document.getElementById('sf-q'); i.focus(); try { i.setSelectionRange(caret, caret); } catch (_) {} }
 }
