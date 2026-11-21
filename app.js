@@ -5653,3 +5653,83 @@ async function exportMonth(ymStr) {
   XLSX.writeFile(wb, `حصص-${ymStr}.xlsx`);
   showToast(`✅ نزل الملف: ${rows.length} حصة`);
 }
+
+/* ============================================================
+   🎓 فلتر الطلاب — بالصف والمادة والمعلم والحالة والبلد
+   عشان تعرف عندك كام طالب في كل صف/مادة (مثلاً لعمل جروب وقت الضغط)
+   ============================================================ */
+const GRADE_ORD = [['الحادي عشر', 11], ['الثاني عشر', 12], ['الأول', 1], ['الاول', 1], ['الثاني', 2], ['الثالث', 3], ['الرابع', 4], ['الخامس', 5], ['السادس', 6], ['السابع', 7], ['الثامن', 8], ['التاسع', 9], ['العاشر', 10]];
+function gradeNum(g) {
+  const s = String(g || ''); const m = s.match(/(\d{1,2})/); if (m && +m[1] >= 1 && +m[1] <= 12) return +m[1];
+  for (const [w, n] of GRADE_ORD) if (s.includes(w)) return n;
+  if (/kg|روضة|تمهيدي/i.test(s)) return 0; return null;
+}
+const gradeTrack = g => (String(g || '').split(/\s*-\s*/)[1] || '').trim();
+function subjNorm(x) {
+  const s = String(x || '').toLowerCase();
+  if (/رياض|ماث|math/.test(s)) return 'رياضيات'; if (/انجليز|إنجليز|english/.test(s)) return 'إنجليزي'; if (/كيمي|chem/.test(s)) return 'كيمياء';
+  if (/فيزي|physic/.test(s)) return 'فيزياء'; if (/أحياء|احياء|bio/.test(s)) return 'أحياء'; if (/علوم|science/.test(s)) return 'علوم';
+  if (/إسلام|اسلام|islam/.test(s)) return 'تربية إسلامية'; if (/قرآن|قران/.test(s)) return 'قرآن'; if (/عربي|arab/.test(s)) return 'عربي';
+  if (/سوشيال|social|دراسات/.test(s)) return 'سوشيال'; if (/ict|كمبيوتر|حاسب/.test(s)) return 'ICT'; return String(x || '').trim() || '—';
+}
+const SF = { grade: 'all', subj: 'all', tutor: 'all', act: 'active', country: 'all', data: null };
+async function openStudentFilter() {
+  try {
+    SF.data = await q(sb.from('sessions').select('student_id,tutor_id,subject,scheduled_at,status,family_block')
+      .gte('scheduled_at', new Date(Date.now() - 60 * 864e5).toISOString()).in('status', ['done', 'scheduled']).order('scheduled_at'));
+  } catch (e) { showToast(dbError(e), true); return; }
+  renderStudentFilter();
+}
+function sfSet(k, v) { SF[k] = v; renderStudentFilter(); }
+function renderStudentFilter() {
+  const now = Date.now(), d30 = now - 30 * 864e5;
+  // لكل طالب: المواد والمعلمين (آخر 60 يوم + الجاي)، وآخر حصة تمت
+  const info = {};
+  (SF.data || []).forEach(s => {
+    const st = byId(state.students, s.student_id); if (!st) return;
+    const kids = s.family_block ? state.students.filter(k => k.family_id === st.family_id) : [st];
+    kids.forEach(k => { const x = info[k.id] ||= { subj: new Set(), tut: new Set(), pairs: new Set(), last: 0, next: 0 };
+      const sj = subjNorm(s.subject), t = new Date(s.scheduled_at).getTime();
+      x.subj.add(sj); x.tut.add(s.tutor_id); x.pairs.add(sj + '|' + s.tutor_id);
+      if (s.status === 'done' && t > x.last) x.last = t; if (s.status === 'scheduled' && t > now && (!x.next || t < x.next)) x.next = t; });
+  });
+  const isActive = st => { const x = info[st.id]; return !!x && (x.last >= d30 || x.next > 0); };
+  const all = state.students.map(st => ({ st, fam: byId(state.families, st.family_id), g: gradeNum(st.grade_level), x: info[st.id] }));
+  const pass = (r, skip) => (skip === 'act' || SF.act === 'all' || (SF.act === 'active' ? isActive(r.st) : !isActive(r.st)))
+    && (skip === 'grade' || SF.grade === 'all' || String(r.g) === SF.grade)
+    && (skip === 'subj' || SF.subj === 'all' || (r.x && r.x.subj.has(SF.subj)))
+    && (skip === 'tutor' || SF.tutor === 'all' || (r.x && r.x.tut.has(SF.tutor)))
+    && (skip === 'country' || SF.country === 'all' || (r.fam?.country || '') === SF.country);
+  const rows = all.filter(r => pass(r)).sort((a, b) => (a.g ?? 99) - (b.g ?? 99) || a.st.name.localeCompare(b.st.name, 'ar'));
+  const cnt = (key, fn) => { const m = {}; all.filter(r => pass(r, key)).forEach(r => [].concat(fn(r)).forEach(v => { if (v != null && v !== '') m[v] = (m[v] || 0) + 1; })); return m; };
+  const gC = cnt('grade', r => r.g == null ? null : String(r.g)), sC = cnt('subj', r => r.x ? [...r.x.subj] : []), tC = cnt('tutor', r => r.x ? [...r.x.tut] : []), cC = cnt('country', r => r.fam?.country || '');
+  const chip = (k, v, label, n) => `<button class="chip ${SF[k] === v ? 'active' : ''}" onclick="sfSet('${k}', ${jsq(v)})">${esc(label)}${n != null ? ` <span class="sub">${n}</span>` : ''}</button>`;
+  const gLabel = g => g === '0' ? 'روضة' : 'صف ' + g;
+  const gradeChips = Object.keys(gC).sort((a, b) => a - b).map(g => chip('grade', g, gLabel(g), gC[g])).join('');
+  const subjChips = Object.entries(sC).sort((a, b) => b[1] - a[1]).map(([s, n]) => chip('subj', s, s, n)).join('');
+  const tutOpts = Object.entries(tC).map(([id, n]) => ({ id, n, t: byId(state.tutors, id) })).filter(x => x.t).sort((a, b) => b.n - a.n)
+    .map(x => `<option value="${esc(x.id)}" ${SF.tutor === x.id ? 'selected' : ''}>${esc(tutLabel(x.t))} (${x.n})</option>`).join('');
+  // جدول الصف × المادة (للطلاب اللي في الفلتر من غير فلتر الصف والمادة) — يبيّن فين ينفع جروب
+  const base = all.filter(r => pass(r, 'grade') && pass(r, 'subj') && r.g != null && r.x);
+  const subjs = [...new Set(base.flatMap(r => [...r.x.subj]))].sort((a, b) => base.filter(r => r.x.subj.has(b)).length - base.filter(r => r.x.subj.has(a)).length).slice(0, 8);
+  const grades = [...new Set(base.map(r => r.g))].sort((a, b) => a - b);
+  const mtx = grades.length && subjs.length ? `<details class="mt"><summary class="small"><b>📊 جدول الصف × المادة</b> — الخانة اللي فيها 3 أو أكتر ممكن تبقى جروب</summary>
+    <div style="overflow-x:auto"><table class="table small mt"><thead><tr><th>الصف</th>${subjs.map(s => `<th>${esc(s)}</th>`).join('')}</tr></thead><tbody>
+    ${grades.map(g => `<tr><td><b>${esc(gLabel(String(g)))}</b></td>${subjs.map(s => { const n = base.filter(r => r.g === g && r.x.subj.has(s)).length;
+      return `<td style="text-align:center;${n >= 3 ? 'background:rgba(22,163,74,.15);font-weight:700' : ''}">${n ? `<a href="#" onclick="event.preventDefault(); SF.grade='${g}'; SF.subj=${esc(JSON.stringify(s))}; renderStudentFilter()">${n}</a>` : ''}</td>`; }).join('')}</tr>`).join('')}
+    </tbody></table></div></details>` : '';
+  const fmtD = t => t ? new Date(t).toLocaleDateString('ar-EG-u-nu-latn', { day: 'numeric', month: 'numeric', timeZone: 'Africa/Cairo' }) : '—';
+  const list = rows.map(r => { const pairs = r.x ? [...r.x.pairs].map(p => { const [sj, tid] = p.split('|'); return `${sj} (${tutBareName(byId(state.tutors, tid)) || '؟'})`; }) : [];
+    return `<tr><td><b>${esc(r.st.name)}</b><div class="sub">${esc(r.fam?.name || '')}</div></td><td>${esc(r.g == null ? (r.st.grade_level || '—') : gLabel(String(r.g)))}${gradeTrack(r.st.grade_level) ? `<div class="sub">${esc(gradeTrack(r.st.grade_level))}</div>` : ''}</td>
+      <td class="small">${esc(pairs.join('، ') || '—')}</td><td class="small">${fmtD(r.x?.last)}${r.x?.next ? `<div class="sub">الجاية ${fmtD(r.x.next)}</div>` : ''}</td></tr>`; }).join('');
+  const copyTxt = rows.map(r => `• ${r.st.name} — ${r.g == null ? (r.st.grade_level || '') : gLabel(String(r.g))}${gradeTrack(r.st.grade_level) ? ' ' + gradeTrack(r.st.grade_level) : ''} — ${r.fam?.name || ''}`).join('\n');
+  openModal(`🎓 فلتر الطلاب — ${rows.length} طالب`, `
+    <div class="chips">${chip('act', 'active', 'نشط (آخر 30 يوم أو ليه حصة جاية)')}${chip('act', 'inactive', 'مش نشط')}${chip('act', 'all', 'الكل')}</div>
+    <div class="small sub mt">الصف:</div><div class="chips">${chip('grade', 'all', 'كل الصفوف')}${gradeChips}</div>
+    <div class="small sub">المادة:</div><div class="chips">${chip('subj', 'all', 'كل المواد')}${subjChips}</div>
+    <div class="row-gap mt"><select class="input" style="max-width:260px" onchange="sfSet('tutor', this.value)"><option value="all">كل المعلمين</option>${tutOpts}</select>
+      <select class="input" style="max-width:160px" onchange="sfSet('country', this.value)"><option value="all">كل البلاد</option>${Object.entries(cC).map(([c, n]) => `<option value="${esc(c)}" ${SF.country === c ? 'selected' : ''}>${esc(c || '—')} (${n})</option>`).join('')}</select>
+      <button class="btn btn-ghost sm" onclick='copyText(${jsq(copyTxt)}, "اتنسخت القايمة ✓")'>📋 نسخ القايمة</button></div>
+    ${mtx}
+    <div style="overflow-x:auto" class="mt"><table class="table"><thead><tr><th>الطالب</th><th>الصف</th><th>المواد (المعلم)</th><th>آخر حصة</th></tr></thead><tbody>${list || '<tr><td colspan="4" class="empty">مفيش طلاب بالفلتر ده</td></tr>'}</tbody></table></div>`);
+}
