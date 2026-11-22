@@ -269,7 +269,7 @@ Deno.serve(async (req) => {
 
     // ---------- تحقق + تكملة الأسعار والقيم ----------
     const warnings: string[] = []; const already: any[] = [];
-    const extraChoices: any[] = []; const saidNewAll = /جديد/.test(text);
+    const extraChoices: any[] = []; const seenRateQ = new Set<string>(); const saidNewAll = /جديد/.test(text);
     const bare = (n: string) => String(n || '').replace(/^(أ|د|م)\.\s*/, '').replace(/\s*\(.*?\)/g, '').trim();
     const tTitle = (n: string) => (/^د\./.test(n) ? 'د. ' : 'مس ') + bare(n);
     const winBy = new Map((win || []).map(s => [s.id, s]));
@@ -292,6 +292,15 @@ Deno.serve(async (req) => {
           const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
           if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة.`); tu2 = alt;
             extraChoices.push({ question: `${st.name}${a.subject ? ' ' + a.subject : ''}: مع ${tTitle(alt.name)} (المعتادة) ولا ${tTitle(tu.name)} فعلاً؟`, options: [`${st.name}${a.subject ? ' ' + a.subject : ''} مع ${tTitle(tu.name)} فعلاً — معلمة جديدة معاها، نفس الميعاد`, `تمام، مع ${tTitle(alt.name)} زي ما هي`] }); } }
+          // نفس الاسم الأول (مس سمر = أ. سمر / سمر صلاح / سمر حمادة): لو المختارة عمرها ما درّست الطالب ومعلمة تانية بنفس الاسم الأول بتدرّسه (أي مادة) → نختارها هي
+          if (tu2 === tu) {
+            const first = (n: string) => nz(bare(n).split(/\s+/)[0]);
+            const f0 = first(tu.name);
+            const nameSakes = tutList.filter((x: any) => x.id !== tu.id && first(x.name) === f0 && pair.has(st.id + '|' + x.id));
+            if (nameSakes.length === 1) { const alt = nameSakes[0];
+              warnings.push(`${st.name}: "${tTitle(tu.name)}" فيه أكتر من معلمة بالاسم ده — حطيت ${alt.name} لأنها اللي بتدرّسله.`); tu2 = alt;
+              extraChoices.push({ question: `${st.name}${a.subject ? ' ' + a.subject : ''}: مع ${tTitle(alt.name)} ولا ${tTitle(tu.name)}؟`, options: [`${st.name}${a.subject ? ' ' + a.subject : ''} مع ${tTitle(tu.name)} فعلاً، نفس الميعاد`, `تمام، مع ${tTitle(alt.name)} زي ما هي`] }); }
+          }
         }
         let tuF = tu2, st2 = st;
         // الطالب غلط؟ (Gemini حط حصة حمدة على رسمية مثلاً): لو الطالب ده عمره ما خد مع المعلم ده، وأخ واحد بس في نفس الأسرة بياخد معاه نفس المادة → نحطها على الأخ
@@ -337,6 +346,17 @@ Deno.serve(async (req) => {
           }
         }
         if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st2.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), at: same.created_at, session_id: same.id, differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }
+        // أول مرة الطالب ده مع المعلمة دي ومفيش سعر متقال → ما نخمّنش في صمت: نعلّم السعر ونسأل المشرفة
+        if (kind !== 'trial' && a.tutor_rate_egp == null && p?.rate == null) {
+          r.rate_unconfirmed = true;
+          const k9 = 'rate|' + st2.id + '|' + tuF.id;
+          if (!seenRateQ.has(k9)) { seenRateQ.add(k9);
+            const others = [...new Set([...pair.entries()].filter(([k, v]) => k.endsWith('|' + tuF.id) && v.rate != null).map(([, v]) => Number(v.rate)))].sort((x, y) => x - y);
+            const opts = [...new Set([...others, Number(tuF.default_rate_egp || 0)].filter(x => x > 0))].slice(0, 3);
+            warnings.push(`💰 ${st2.name} مع ${tuF.name}: أول حصة ليهم مع بعض ومفيش سعر متفق عليه — حطيت ${r.tutor_cost_egp} مؤقتاً (السعر الافتراضي للمعلمة). اختار السعر الصح من تحت 👇`);
+            extraChoices.unshift({ question: `سعر ${tTitle(tuF.name)} مع ${st2.name}${subject ? ' (' + subject + ')' : ''} كام؟`, options: [...opts.map(x => `سعر ${tTitle(tuF.name)} مع ${st2.name}${subject ? ' ' + subject : ''} ${x} جنيه`), `السعر لسه مش متحدد — هبلغك`] });
+          }
+        }
         return r;
       }
       const sid = xId.get(a.session || ''); const s = sid && winBy.get(sid);
