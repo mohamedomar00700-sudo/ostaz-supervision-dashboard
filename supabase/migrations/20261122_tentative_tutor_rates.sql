@@ -29,3 +29,19 @@ begin
   return n;
 end $$;
 grant execute on function public.confirm_pair_rate(uuid, uuid, numeric) to authenticated;
+
+-- سعر الأسرة المؤقت (للطالب)
+alter table public.students add column if not exists price_tentative boolean not null default false;
+create or replace function public.confirm_student_price(p_student uuid, p_price numeric) returns integer
+language plpgsql security invoker set search_path = public as $$
+declare n integer; old numeric;
+begin
+  select default_price into old from students where id = p_student;
+  update students set default_price = p_price, price_tentative = false where id = p_student;
+  update sessions set student_price = p_price
+   where student_id = p_student and kind <> 'trial' and group_key is null
+     and status in ('scheduled','in_progress','done') and student_price is not distinct from old;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+grant execute on function public.confirm_student_price(uuid, numeric) to authenticated;
