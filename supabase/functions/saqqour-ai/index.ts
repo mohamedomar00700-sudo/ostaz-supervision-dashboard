@@ -175,7 +175,7 @@ Deno.serve(async (req) => {
       admin.from('families').select('id,name,currency,country'),
       admin.from('students').select('id,name,family_id,grade_level,default_price'),
       admin.from('tutors').select('id,name,default_rate_egp,subject_label'),
-      admin.from('student_subjects').select('student_id,tutor_id,subject,tutor_rate_egp'),
+      admin.from('student_subjects').select('student_id,tutor_id,subject,tutor_rate_egp,rate_confirmed'),
       admin.from('sessions').select('student_id,tutor_id,subject,tutor_cost_egp,student_price,kind,scheduled_at,status,family_block,duration_minutes,actual_minutes')
         .in('status', ['done', 'scheduled']).gte('scheduled_at', new Date(now.getTime() - 45 * 864e5).toISOString()).order('scheduled_at', { ascending: false }).limit(3000),
       admin.from('sessions').select('id,student_id,tutor_id,subject,scheduled_at,duration_minutes,actual_minutes,status,kind,family_block,created_by,notes,tutor_cost_egp,created_at,group_name')
@@ -204,12 +204,12 @@ Deno.serve(async (req) => {
     const stuBy = new Map((students || []).map(s => [s.id, s])), tutBy = new Map((tutors || []).map(t => [t.id, t]));
 
     // مين بيدرّس مين + آخر سعر لكل طالب×معلم
-    const pair = new Map<string, { subj: Set<string>; rate?: number; price?: number; last?: string }>();
+    const pair = new Map<string, { subj: Set<string>; rate?: number; price?: number; last?: string; tent?: boolean }>();
     (recent || []).forEach(r => { if (!r.student_id || !r.tutor_id) return; const k = r.student_id + '|' + r.tutor_id; const x = pair.get(k) || { subj: new Set() };
       if (r.subject) x.subj.add(r.subject); if (!x.last || r.scheduled_at > x.last) x.last = r.scheduled_at; if (x.rate == null && r.kind !== 'trial' && Number(r.tutor_cost_egp) > 0) x.rate = Number(r.tutor_cost_egp);
       if (x.price == null && r.kind !== 'trial' && Number(r.student_price) > 0) x.price = Number(r.student_price); pair.set(k, x); });
     (plans || []).forEach(p => { if (!p.tutor_id) return; const k = p.student_id + '|' + p.tutor_id; const x = pair.get(k) || { subj: new Set() };
-      if (p.subject) x.subj.add(p.subject); if (x.rate == null && p.tutor_rate_egp != null) x.rate = Number(p.tutor_rate_egp); pair.set(k, x); });
+      if (p.subject) x.subj.add(p.subject); if (x.rate == null && p.tutor_rate_egp != null) x.rate = Number(p.tutor_rate_egp); if (p.rate_confirmed === false) x.tent = true; pair.set(k, x); });
 
     const stuLines = stuList.map(s => `${sCode.get(s.id)}: ${s.name} — ${famBy.get(s.family_id)?.name || ''}${s.grade_level ? ' — ' + s.grade_level : ''}`).join('\n');
     const tutLines = tutList.map(t => `${tCode.get(t.id)}: ${t.name}`).join('\n');
@@ -342,7 +342,7 @@ Deno.serve(async (req) => {
             if (regular.length && !/جديد/.test(text)) {
               const alts = regular.map(([k]) => tutBy.get(k.split('|')[1])).filter(Boolean).slice(0, 2) as any[];
               return ask(`${st.name}: ${tTitle(tu.name)} عمرها ما درّستله${subjTxt}`, `${st.name}${subjTxt} ${when}: مع ${tTitle(tu.name)} ولا المعتادة؟`,
-                [...alts.map((x: any) => `قصدي ${st.name}${subjTxt} مع ${tTitle(x.name)} (المعتادة) ${when}`), `${st.name}${subjTxt} مع ${tTitle(tu.name)} فعلاً — معلمة جديدة معاه ${when}`]);
+                [...alts.map((x: any) => `قصدي ${st.name}${subjTxt} مع ${tTitle(x.name)} (المعتادة) ${when}`), `${st.name}${subjTxt} مع ${tTitle(tu.name)} فعلاً — معلمة جديدة للطالب ${when}`]);
             }
             // 5) يمكن الطالب غلط: أخ/أخت في نفس الأسرة هو اللي بياخد مع المعلمة دي
             const sn0 = (x: string) => String(x || '').replace(/\s/g, '');
@@ -391,15 +391,25 @@ Deno.serve(async (req) => {
           }
         }
         if (same) { const c2 = cairoParts(new Date(same.scheduled_at)); already.push({ student_name: st2.name, tutor_name: tutBy.get(same.tutor_id)?.name || '', subject: same.subject, date: c2.date, time: c2.time, minutes: same.actual_minutes || same.duration_minutes, by: supName(same.created_by, same.notes), at: same.created_at, session_id: same.id, differs: same.tutor_id !== tuF.id || c2.time !== a.time || (same.duration_minutes !== dur) }); return null; }
-        // أول مرة الطالب ده مع المعلمة دي ومفيش سعر متقال → ما نخمّنش في صمت: نعلّم السعر ونسأل المشرفة
-        if (kind !== 'trial' && a.tutor_rate_egp == null && p?.rate == null) {
-          r.rate_unconfirmed = true;
-          const k9 = 'rate|' + st2.id + '|' + tuF.id;
-          if (!seenRateQ.has(k9)) { seenRateQ.add(k9);
-            const others = [...new Set([...pair.entries()].filter(([k, v]) => k.endsWith('|' + tuF.id) && v.rate != null).map(([, v]) => Number(v.rate)))].sort((x, y) => x - y);
-            const opts = [...new Set([...others, Number(tuF.default_rate_egp || 0)].filter(x => x > 0))].slice(0, 3);
-            warnings.push(`💰 ${st2.name} مع ${tuF.name}: أول حصة ليهم مع بعض ومفيش سعر متفق عليه — حطيت ${r.tutor_cost_egp} مؤقتاً (السعر الافتراضي للمعلمة). اختار السعر الصح من تحت 👇`);
-            extraChoices.unshift({ question: `سعر ${tTitle(tuF.name)} مع ${st2.name}${subject ? ' (' + subject + ')' : ''} كام؟`, options: [...opts.map(x => `سعر ${tTitle(tuF.name)} مع ${st2.name}${subject ? ' ' + subject : ''} ${x} جنيه`), `السعر لسه مش متحدد — هبلغك`] });
+        // ===== سعر المعلمة =====
+        const saidTemp = /مؤقت|مش مؤكد|مش متأكد(ة)? من السعر|مش معايا السعر/.test(text);
+        if (kind !== 'trial' && saidTemp && (p?.rate == null || p?.tent)) {
+          r.rate_tentative = true;
+          warnings.push(`💰 ${st2.name} مع ${tTitle(tuF.name)}: اتسجلت بسعر ${r.tutor_cost_egp} ج مؤقتاً — هتفضل متعلّمة "سعر مؤقت" لحد ما حد يأكد السعر.`);
+        } else if (kind !== 'trial' && a.tutor_rate_egp == null) {
+          const tn = tTitle(tuF.name), def = Number(tuF.default_rate_egp || 0);
+          const saidRate = confirmed ? Number((text.match(/بسعر\s*(\d{2,4})/) || [])[1] || 0) : 0;
+          if (saidRate) { r.tutor_cost_egp = saidRate; }
+          else if (p?.tent) { r.rate_tentative = true; warnings.push(`💰 ${st2.name} مع ${tn}: السعر لسه مؤقت (${r.tutor_cost_egp} ج) — مش مؤكد. أكّده من "أسعار مؤقتة" أول ما تعرفه.`); }
+          else if (p?.rate == null) {
+            {
+              // أول حصة للطالب مع المعلمة ومفيش سعر → نسأل: سعر معروف، أو نسجّلها بالمعتاد مؤقتاً عشان الشغل ما يقفش
+              const others = [...new Set([...pair.entries()].filter(([k, v]) => k.endsWith('|' + tuF.id) && v.rate != null && !v.tent).map(([, v]) => Number(v.rate)))].sort((x, y) => x - y);
+              const opts = [...new Set([...others, def].filter(x => x > 0))].slice(0, 2);
+              const base = `قصدي ${st2.name}${subject ? ' ' + subject : ''} مع ${tn} ${when}`;
+              return ask(`${st2.name} مع ${tn}: أول حصة ليهم ومفيش سعر متفق عليه`, `سعر ${tn} مع ${st2.name}${subject ? ' (' + subject + ')' : ''} كام؟`,
+                [...opts.map(x => `${base} — بسعر ${x} جنيه`), `${base} — بسعرها المعتاد مؤقتاً (السعر لسه مش مؤكد)`]);
+            }
           }
         }
         return r;

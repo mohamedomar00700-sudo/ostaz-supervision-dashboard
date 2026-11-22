@@ -516,7 +516,7 @@ function sessionCard(s) {
     <div>
       <div class="item-head">
         <div>
-          <div class="item-title">${esc(st?.name || 'طالب محذوف')} ${kindBadge(s)}${s.makeup_of ? ' <span class="badge b-makeup">تعويضية</span>' : ''}</div>
+          <div class="item-title">${esc(st?.name || 'طالب محذوف')} ${kindBadge(s)}${s.makeup_of ? ' <span class="badge b-makeup">تعويضية</span>' : ''}${s.rate_tentative && !cancelled ? ' <span class="badge b-pending" title="سعر المعلمة مؤقت — لسه مش مؤكد" onclick="event.stopPropagation(); openPendingRates()" style="cursor:pointer">💰 سعر مؤقت</span>' : ''}</div>
           <div class="sub small">${esc(fam?.name || '')}${st ? ` · ${esc(st.grade_level)}` : ''}</div>
         </div>
         <span class="badge ${badge.cls}">${badge.label}</span>
@@ -1868,6 +1868,7 @@ function renderTutors() {
         ${(() => { const miss = tutorMissingRates(t); return miss.length
           ? `<span class="neg">⚠️ ${miss.length === 1 ? 'طالب' : miss.length + ' طلاب'} بدون أجر متفق عليه: <b>${esc(miss.map(p => byId(state.students, p.student_id)?.name || '').join('، '))}</b></span>`
           : `<span>الأجر: <b>${tutorRateLabel(t)}</b></span>`; })()}
+        ${(() => { const pp = pendingRates().filter(p => p.tutor_id === t.id); return pp.length ? `<span class="warn-txt" style="cursor:pointer" onclick="openPendingRates()">💰 سعر مؤقت مع: <b>${esc(pp.map(p => byId(state.students, p.student_id)?.name || '').join('، '))}</b></span>` : ''; })()}
         <span>حصص تمت: <b>${b.count}</b></span>
         <span>البوابة: ${t.user_id ? `<b class="pos">✅ مفعّلة</b>${t.portal_last_seen ? ` <span class="sub small">(آخر دخول ${ago(t.portal_last_seen)})</span>` : ''}` : t.email ? '<b class="warn-txt">مستنية تدخل</b>' : '<span class="sub">مش مفعّلة</span>'}</span>
         ${t.vodafone_cash ? `<span>${/^[^:]+:/.test(t.vodafone_cash) ? 'تحويل' : 'فودافون كاش'}: <b dir="ltr">${esc(t.vodafone_cash)}</b></span>` : ''}
@@ -2265,7 +2266,7 @@ function renderFinance() {
       <div class="card item mb fin-sum"><b>لسه للمعلمين دلوقتي:</b> <span class="num neg">${fmt(tutDue)} ج</span> <span class="sub">(${tutDueN} معلم/ة)</span> · <b>مستحق الفترة:</b> <span class="num">${fmt(cost)} ج</span> · <b>اتحوّل:</b> <span class="num">${fmt(paidOut)} ج</span></div>
       <div class="list" id="fin-tutors-list">${rows.map(x => { const sum = byT[x.t.id] ? tutorStudentSummary(byT[x.t.id]) : [];
         return `<div class="card item fin-row" data-q="${esc(normAr(x.t.name + ' ' + sum.map(r => r.who + ' ' + r.fam).join(' ')))}">
-          <div class="item-head"><div><div class="item-title">${esc(x.t.name)}</div>${tutorMissingRates(x.t).length ? '<div class="small neg">طالب بدون أجر متفق عليه</div>' : `<div class="sub small">${tutorRateLabel(x.t)}</div>`}</div>
+          <div class="item-head"><div><div class="item-title">${esc(x.t.name)}</div>${tutorMissingRates(x.t).length ? '<div class="small neg">طالب بدون أجر متفق عليه</div>' : `<div class="sub small">${tutorRateLabel(x.t)}</div>`}${pendingRates().some(p => p.tutor_id === x.t.id) ? '<div class="small warn-txt" style="cursor:pointer" onclick="openPendingRates()">💰 فيه سعر مؤقت — أكّده قبل التحويل</div>' : ''}</div>
             <span class="badge ${x.b.due > 0.01 ? 'b-cancel' : x.b.due < -0.01 ? 'b-done' : 'b-sched'} num">${x.b.due > 0.01 ? 'ليها ' + fmt(x.b.due) + ' ج' : x.b.due < -0.01 ? 'مقدّم ' + fmt(-x.b.due) + ' ج' : 'خالصة ✓'}</span></div>
           <div class="meta"><span>الفترة: <b class="num">${nSess(x.p.h || 0)}</b></span><span>مستحق الفترة: <b class="num">${fmt(x.p.egp)} ج</b></span><span>اتحوّل: <b class="num">${x.paid ? fmt(x.paid) + ' ج' : '—'}</b></span></div>
           ${sum.length ? `<details class="mt"><summary class="sub small" style="cursor:pointer">حصص كل طالب (${sum.length})</summary><div class="scrollx mt"><table><thead><tr><th>الطالب</th><th>الحصص</th><th>المادة</th><th>للمعلم</th></tr></thead><tbody>
@@ -2831,6 +2832,8 @@ function renderAttention() {
   if (empty) items.push(`<button class="att" onclick="openFamFilter('empty')">🔴 <b>${empty}</b> ${empty === 1 ? 'باقة خلصت' : 'باقات خلصت'} — محتاجة تجديد</button>`);
   const low = state.families.filter(lowPrepaid).length;
   if (low) items.push(`<button class="att att-warn" onclick="openFamFilter('low')">🪫 <b>${low}</b> ${low === 1 ? 'باقة قربت تخلص' : 'باقات قربت تخلص'}</button>`);
+  const pr = pendingRates().length;
+  if (pr) items.push(`<button class="att att-warn" onclick="openPendingRates()">💰 <b>${pr}</b> ${pr === 1 ? 'سعر معلمة لسه مؤقت' : 'أسعار معلمات لسه مؤقتة'} — مستني تأكيد</button>`);
   const noRate = state.tutors.filter(t => tutorMissingRates(t).length).length;
   if (noRate) items.push(`<button class="att" onclick="state.tutFilter='norate'; switchTab('tutors'); renderTutors()">🧑‍🏫 <b>${noRate}</b> معلم عنده طالب بدون أجر متفق عليه</button>`);
   const noPrice = state.students.filter(s => s.default_price == null).length;
@@ -4044,6 +4047,27 @@ async function slotSeries(s) {
   const rows = await q(sb.from('sessions').select('*').eq('student_id', s.student_id).eq('tutor_id', s.original_tutor_id || s.tutor_id).eq('status', 'scheduled')
     .gt('scheduled_at', s.scheduled_at).order('scheduled_at').limit(60));
   return rows.filter(r => !r.group_key && norm(r.subject) === norm(s.subject) && (() => { const p = tzParts(r.scheduled_at, tz); return p.wd === p0.wd && p.time === p0.time; })());
+}
+// أسعار مؤقتة: حصة أولى اتسجلت بسعر المعلمة المعتاد لأن السعر المتفق عليه لسه مش معروف
+// (student_subjects.rate_confirmed=false + sessions.rate_tentative) — بتفضل ظاهرة لحد ما حد يأكدها
+const pendingRates = () => (state.plans || []).filter(p => p.rate_confirmed === false && p.tutor_id);
+function openPendingRates() {
+  const ps = pendingRates();
+  if (!ps.length) { closeModal(); showToast('كل أسعار المعلمات مؤكدة ✓'); return; }
+  openModal('💰 أسعار لسه مش مؤكدة', `<p class="sub small">الحصص دي اتسجلت بسعر المعلمة المعتاد <b>مؤقتاً</b>. أول ما تعرف السعر المتفق عليه اكتبه هنا — هيتعدّل لوحده في كل الحصص اللي اتسجلت بالسعر المؤقت.</p>
+    <div class="list">${ps.map(p => { const st = byId(state.students, p.student_id), tu = byId(state.tutors, p.tutor_id), fam = st && byId(state.families, st.family_id);
+      return `<div class="card item"><div class="item-title">${esc(st?.name || '')} مع ${esc(tu?.name || '')}</div>
+        <div class="sub small">${esc(p.subject || '')}${fam ? ' · ' + esc(fam.name) : ''} · مؤقتاً <b>${p.tutor_rate_egp != null ? fmt(p.tutor_rate_egp) + ' ج/ساعة' : '—'}</b></div>
+        <div class="mt" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input type="number" inputmode="numeric" min="1" id="pr-${p.id}" value="${p.tutor_rate_egp ?? ''}" style="width:110px"> <span class="sub small">ج/ساعة</span>
+          <button class="btn btn-brand sm" onclick="confirmPendingRate('${p.id}')">✅ ده السعر المؤكد</button></div></div>`; }).join('')}</div>`);
+}
+async function confirmPendingRate(planId) {
+  const p = (state.plans || []).find(x => x.id === planId); const v = Number(document.getElementById('pr-' + planId)?.value);
+  if (!p || !(v > 0)) { showToast('اكتب السعر الأول', true); return; }
+  const { data, error } = await sb.rpc('confirm_pair_rate', { p_student: p.student_id, p_tutor: p.tutor_id, p_rate: v });
+  if (error) { showToast('ما اتحفظش: ' + error.message, true); return; }
+  showToast(`اتأكد السعر ${fmt(v)} ج/ساعة${data ? ' — واتعدّلت ' + data + ' حصة' : ''} ✓`);
+  await refreshAll(); openPendingRates();
 }
 // الأجر بيتحدد لكل طالب (student_subjects.tutor_rate_egp)، وأجر المعلم العام مجرد احتياطي.
 // المعلم "ناقصه أجر" بس لو عنده طالب مفيش له أجر متفق عليه ولا أجر عام يغطيه.

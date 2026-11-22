@@ -519,7 +519,7 @@
     if (a.op === 'add_session') {
       const tags = [a.kind === 'trial' ? '🧪 تجريبية' : a.kind === 'revision' ? '📝 مراجعة' : '', a.family_block ? '👨‍👩‍👧 حصة أسرة' : '', a.status === 'done' ? '✅ تمت' : ''].filter(Boolean).join(' · ');
       h = `➕ ${who}<div class="small">${dayLbl(a.date)} ${t12(a.time)} · ${dl(a.duration_minutes)}${a.status === 'done' && a.actual_minutes !== a.duration_minutes ? ` (فعلي ${dl(a.actual_minutes)})` : ''}${tags ? ' · ' + tags : ''}</div>
-        <div class="small sub">${a.kind === 'trial' ? 'مجانية للأسرة والمعلم' : `${a.student_price} ${e(a.student_currency)}/ساعة للأسرة · ${a.tutor_cost_egp} ج/ساعة للمعلم`}</div>
+        <div class="small sub">${a.kind === 'trial' ? 'مجانية للأسرة والمعلم' : `${a.student_price} ${e(a.student_currency)}/ساعة للأسرة · ${a.tutor_cost_egp} ج/ساعة للمعلم`}${a.rate_tentative ? ' <b style="color:#b45309">💰 سعر مؤقت — لسه مش مؤكد</b>' : ''}</div>
         ${a.duplicate_of ? `<div class="small" style="color:#b45309">⚠️ فيه حصة للطالب ده متسجلة ${t12(a.duplicate_of.time)} (${STATUS_AR[a.duplicate_of.status] || ''}) — اتأكد إنها مش مكررة</div>` : ''}`;
     } else if (a.op === 'set_status') {
       h = `${a.status === 'done' ? '✅' : '❌'} ${who}<div class="small">${dayLbl(a.date)} ${t12(a.time)} ← <b>${STATUS_AR[a.status] || a.status}</b>${a.status === 'done' && a.actual_minutes && a.actual_minutes !== (a.old?.actual_minutes || a.old?.duration_minutes) ? ` · المدة ${dl(a.actual_minutes)}` : ''}${a.cancel_reason ? ' · ' + e(a.cancel_reason) : ''}</div>`;
@@ -701,7 +701,7 @@
           const sn = x => String(x || '').replace(/\s/g, '');
           if ((ex || []).some(x => !String(x.status).startsWith('cancelled') && (x.tutor_id === a.tutor_id || sn(x.subject) === sn(a.subject)))) { results.push({ op: a.op, ok: false, dup: true, who: a.student_name, err: 'متسجلة بالفعل — ما اتكررتش' }); continue; }
           const row = { student_id: a.student_id, tutor_id: a.tutor_id, scheduled_at: a.scheduled_at, duration_minutes: a.duration_minutes, actual_minutes: a.actual_minutes, status: a.status,
-            subject: a.subject, kind: a.kind, family_block: !!a.family_block, student_price: a.student_price, student_currency: a.student_currency, tutor_cost_egp: a.tutor_cost_egp,
+            subject: a.subject, kind: a.kind, family_block: !!a.family_block, student_price: a.student_price, student_currency: a.student_currency, tutor_cost_egp: a.tutor_cost_egp, rate_tentative: !!a.rate_tentative,
             notes: '🦅 صقّور' + (a.note ? ': ' + a.note : ''), created_by: uid };
           // جروب؟ لو آخر حصة للطالب ده مع نفس المعلم كانت جروب → نسجّل الحصة لكل أعضاء الجروب (كل واحد بسعره، والمعلم بسعر الجروب)
           const { data: lg } = await sb.from('sessions').select('group_key,group_name,group_rate_egp').eq('student_id', a.student_id).eq('tutor_id', a.tutor_id)
