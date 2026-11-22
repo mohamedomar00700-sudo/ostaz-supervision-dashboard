@@ -269,7 +269,9 @@ Deno.serve(async (req) => {
 
     // ---------- تحقق + تكملة الأسعار والقيم ----------
     const warnings: string[] = []; const already: any[] = [];
-    const extraChoices: any[] = []; const seenRateQ = new Set<string>(); const saidNewAll = /جديد/.test(text);
+    const extraChoices: any[] = []; const seenRateQ = new Set<string>(); let blocked = 0;
+    const saidNewAll = /جديد/.test(text);
+    const confirmed = /قصدي|فعلاً —|فعلا —/.test(text); // رد على سؤال من صقّور → ما نسألش تاني
     const bare = (n: string) => String(n || '').replace(/^(أ|د|م)\.\s*/, '').replace(/\s*\(.*?\)/g, '').trim();
     const tTitle = (n: string) => (/^د\./.test(n) ? 'د. ' : 'مس ') + bare(n);
     const winBy = new Map((win || []).map(s => [s.id, s]));
@@ -296,43 +298,62 @@ Deno.serve(async (req) => {
       if (a.op === 'add_session') {
         const st = stuBy.get(sId.get(a.student) || ''), tu = tutBy.get(tId.get(a.tutor) || '');
         if (!st || !tu || !a.date || !a.time) { warnings.push(`حصة ناقصة بيانات اتشالت (${a.student || '?'} / ${a.tutor || '?'} / ${a.date || '?'} ${a.time || '?'})`); return null; }
-        // المادة مش من مواد المعلمة دي خالص (مثلاً "خليفة رياضيات مس سمر" وكل الـ سمرات مفيش فيهم رياضيات) → غالباً غلطة كتابة: ما نسجّلش، نسأل
-        if (a.subject && !/جديد/.test(text)) {
-          const want = subjKey(a.subject);
+        // ===== قبل ما نسجّل: أي احتمالين → نسأل، ما نخمّنش =====
+        // الردود على أسئلة صقّور (فيها "قصدي" / "فعلاً") بتعدّي من غير ما نسأل تاني
+        const when = `${a.date === nowC.date ? 'النهارده' : a.date.slice(8) + '/' + Number(a.date.slice(5, 7))} الساعة ${a.time}`;
+        const subjTxt = a.subject ? ' ' + a.subject : '';
+        const first = (n: string) => nz(bare(n).split(/\s+/)[0]);
+        const teaches = (tid: string) => [...pair.entries()].filter(([k]) => k.endsWith('|' + tid)).sort((x, y) => String(y[1].last || '').localeCompare(String(x[1].last || ''))).map(([k]) => stuBy.get(k.split('|')[0])?.name).filter(Boolean).slice(0, 2) as string[];
+        const tDesc = (t: any) => { const ns = teaches(t.id); return `${tTitle(t.name)}${t.subject_label ? ' (' + t.subject_label + ')' : ''}${ns.length ? ' اللي بتدّي ' + ns.join(' و') : ''}`; };
+        const sDesc = (x: any) => `${x.name} (${famBy.get(x.family_id)?.name || ''}${x.grade_level ? '، ' + x.grade_level : ''})`;
+        const ask = (warn: string, question: string, opts: string[]) => { warnings.push('❓ ' + warn + ' — ما سجّلتهاش، اختار من تحت أو اكتب قصدك 👇'); extraChoices.push({ question, options: [...new Set(opts)].slice(0, 4) }); blocked++; return null; };
+        if (!confirmed) {
+          // 1) اسم الطالب متكرر (مريم/مريم) والمعلمة مش بتدّي اللي اتختار بالذات
+          const twins = stuList.filter((x: any) => x.id !== st.id && nz(x.name) === nz(st.name));
+          if (twins.length && !pair.has(st.id + '|' + tu.id)) {
+            const all = [st, ...twins];
+            return ask(`فيه أكتر من طالب اسمه ${st.name}`, `${st.name}${subjTxt} مع ${tTitle(tu.name)} ${when} — أنهي ${st.name}؟`,
+              all.slice(0, 3).map((x: any) => `قصدي ${sDesc(x)}${subjTxt} مع ${tTitle(tu.name)} ${when}`));
+          }
+          // 2) المادة مش من مواد المعلمة دي خالص
+          const want = subjKey(a.subject || '');
           const tuSubs = tutorSubs(tu.id);
-          if (want && tuSubs.size && !subjOk(tuSubs, want)) {
-            const when = `${a.date === nowC.date ? 'النهارده' : a.date.slice(8) + '/' + Number(a.date.slice(5, 7))} الساعة ${a.time}`;
+          if (a.subject && want && tuSubs.size && !subjOk(tuSubs, want)) {
             const opts: string[] = [];
-            // المواد والمعلمات المعتادين للطالب
             [...pair.entries()].filter(([k]) => k.startsWith(st.id + '|')).sort((x, y) => String(y[1].last || '').localeCompare(String(x[1].last || ''))).slice(0, 2)
               .forEach(([k, v]) => { const t0 = tutBy.get(k.split('|')[1]); if (t0) opts.push(`قصدي ${st.name} ${[...v.subj][0] || ''} مع ${tTitle(t0.name)} (المعتادة) ${when}`); });
-            // معلمات بنفس الاسم الأول بيدّوا المادة المكتوبة
-            const first = (n: string) => nz(bare(n).split(/\s+/)[0]);
             tutList.filter((x: any) => x.id !== tu.id && first(x.name) === first(tu.name) && subjOk(tutorSubs(x.id), want)).slice(0, 1)
               .forEach((x: any) => opts.push(`قصدي ${st.name} ${a.subject} مع ${tTitle(x.name)} ${when}`));
             opts.push(`${st.name} ${a.subject} مع ${tTitle(tu.name)} فعلاً — مادة جديدة معاها ${when}`);
-            warnings.push(`❓ ${st.name}: "${a.subject}" مع ${tTitle(tu.name)} — ${tTitle(tu.name)} مش بتدّي ${a.subject} عندنا. ما سجّلتهاش، اختار من تحت أو اكتب قصدك 👇`);
-            extraChoices.unshift({ question: `${st.name} ${a.subject} مع ${tTitle(tu.name)} ${when} — قصدك إيه؟`, options: [...new Set(opts)].slice(0, 4) });
-            return null;
+            return ask(`${st.name}: "${a.subject}" مع ${tTitle(tu.name)} — ${tTitle(tu.name)} مش بتدّي ${a.subject} عندنا`, `${st.name}${subjTxt} مع ${tTitle(tu.name)} ${when} — قصدك إيه؟`, opts);
+          }
+          if (!pair.has(st.id + '|' + tu.id)) {
+            // 3) اسم المعلمة متكرر (سمر / سمر صلاح / سمر حمادة) والاسم الكامل ما اتكتبش، والمعلمة دي أول مرة مع الطالب
+            const tuFull = nz(bare(tu.name));
+            const fullWritten = bare(tu.name).split(/\s+/).length > 1 && textN.includes(tuFull);
+            const sakes = tutList.filter((x: any) => x.id !== tu.id && first(x.name) === first(tu.name));
+            if (sakes.length && !fullWritten) {
+              return ask(`${st.name}: فيه أكتر من معلمة اسمها ${bare(tu.name).split(/\s+/)[0]}`, `${st.name}${subjTxt} ${when} — مع أنهي مس ${bare(tu.name).split(/\s+/)[0]}؟`,
+                [tu, ...sakes].slice(0, 3).map((x: any) => `قصدي ${st.name}${subjTxt} ${when} مع ${tDesc(x)}`));
+            }
+            // 4) المعلمة عمرها ما درّست الطالب وفيه معلمة تانية بتدّيه نفس المادة
+            const sn = (x: string) => String(x || '').replace(/\s/g, '');
+            const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
+            if (regular.length && !/جديد/.test(text)) {
+              const alts = regular.map(([k]) => tutBy.get(k.split('|')[1])).filter(Boolean).slice(0, 2) as any[];
+              return ask(`${st.name}: ${tTitle(tu.name)} عمرها ما درّستله${subjTxt}`, `${st.name}${subjTxt} ${when}: مع ${tTitle(tu.name)} ولا المعتادة؟`,
+                [...alts.map((x: any) => `قصدي ${st.name}${subjTxt} مع ${tTitle(x.name)} (المعتادة) ${when}`), `${st.name}${subjTxt} مع ${tTitle(tu.name)} فعلاً — معلمة جديدة معاه ${when}`]);
+            }
+            // 5) يمكن الطالب غلط: أخ/أخت في نفس الأسرة هو اللي بياخد مع المعلمة دي
+            const sn0 = (x: string) => String(x || '').replace(/\s/g, '');
+            const sib = stuList.filter((x: any) => x.family_id === st.family_id && x.id !== st.id && pair.has(x.id + '|' + tu.id) && (!a.subject || [...pair.get(x.id + '|' + tu.id)!.subj].some(y => sn0(y) === sn0(a.subject))));
+            if (sib.length && textN.includes(nz(sib[0].name))) {
+              return ask(`${tTitle(tu.name)}: ${st.name} عمره ما خد معاها، بس ${sib[0].name} بياخد`, `${tTitle(tu.name)}${subjTxt} ${when}: لـ ${st.name} ولا ${sib[0].name}؟`,
+                [`قصدي ${sib[0].name}${subjTxt} مع ${tTitle(tu.name)} ${when}`, `${st.name}${subjTxt} مع ${tTitle(tu.name)} فعلاً — أول مرة معاها ${when}`]);
+            }
           }
         }
-        let tu2 = tu;
-        // أولوية المعلم اللي متسجل مع الطالب قبل كده: لو المعلم ده عمره ما درّس الطالب وفيه معلم تاني بيدرّسه نفس المادة → نختار المعلم المعتاد
-        const tuShort = String(tu.name).replace(/^(أ|د)\.\s*/, '').replace(/\s*\(.*?\)/g, '').trim();
-        const saidNew = /جديد/.test(text) || (tuShort.split(/\s+/).length > 1 && text.includes(tuShort)); // "معلمة جديدة" أو الاسم الكامل اتكتب صراحة
-        if (!pair.has(st.id + '|' + tu.id) && !saidNew) {
-          const sn = (x: string) => String(x || '').replace(/\s/g, '');
-          const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
-          if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة.`); tu2 = alt;
-            extraChoices.push({ question: `${st.name}${a.subject ? ' ' + a.subject : ''}: مع ${tTitle(alt.name)} (المعتادة) ولا ${tTitle(tu.name)} فعلاً؟`, options: [`${st.name}${a.subject ? ' ' + a.subject : ''} مع ${tTitle(tu.name)} فعلاً — معلمة جديدة معاها، نفس الميعاد`, `تمام، مع ${tTitle(alt.name)} زي ما هي`] }); } }
-        }
-        let tuF = tu2, st2 = st;
-        // الطالب غلط؟ (Gemini حط حصة حمدة على رسمية مثلاً): لو الطالب ده عمره ما خد مع المعلم ده، وأخ واحد بس في نفس الأسرة بياخد معاه نفس المادة → نحطها على الأخ
-        if (!pair.has(st.id + '|' + tuF.id)) {
-          const sn0 = (x: string) => String(x || '').replace(/\s/g, '');
-          const sib = (students || []).filter(x => x.family_id === st.family_id && x.id !== st.id && pair.has(x.id + '|' + tuF.id) && (!a.subject || [...pair.get(x.id + '|' + tuF.id)!.subj].some(y => sn0(y) === sn0(a.subject))));
-          if (sib.length === 1 && text.includes(sib[0].name)) { warnings.push(`${tuF.name}: حطيت الحصة على ${sib[0].name} بدل ${st.name} لأن ${sib[0].name} هي اللي بتاخد معاها ${a.subject || ''}.`); st2 = sib[0] as any; }
-        }
+        const tuF = tu, st2 = st;
         const fam = famBy.get(st2.family_id); const p = pair.get(st2.id + '|' + tuF.id);
         const kind = a.kind === 'trial' || a.kind === 'revision' ? a.kind : 'regular';
         const dur = Number(a.duration_minutes) || (kind === 'trial' ? 30 : 60);
@@ -529,8 +550,11 @@ Deno.serve(async (req) => {
 
     const tutNames = (tutors || []).map((t: any) => nz(String(t.name).replace(/^(أ|د|م)\.\s*/, '').replace(/\s*\(.*?\)/g, '')));
     const newTutors = (out.new_tutors || []).filter((t: any) => t?.name && !tutNames.includes(nz(String(t.name).replace(/^(مس|ميس|مستر|أ\.|د\.)\s*/, '')))).slice(0, 5);
-    const choices = [...extraChoices, ...(out.choices || [])].filter((c: any) => c?.question && Array.isArray(c.options) && c.options.length).slice(0, 4).map((c: any) => ({ question: c.question, options: c.options.slice(0, 4) }));
-    return json({ reply: out.reply || '', questions: out.questions || [], choices, new_tutors: newTutors, actions, warnings, already, ...(body.debug ? { raw: out } : {}) });
+    const choices = [...extraChoices, ...(out.choices || [])].filter((c: any) => c?.question && Array.isArray(c.options) && c.options.length).slice(0, 8).map((c: any) => ({ question: c.question, options: c.options.slice(0, 4) }));
+    // الرد ما يقولش "هسجّل" لحاجة اتوقفت عشان محتاجة تأكيد
+    let reply = out.reply || '';
+    if (blocked) reply = actions.length ? `جهزت الباقي في الكارت، بس فيه ${blocked === 1 ? 'حاجة' : blocked + ' حاجات'} محتاج أتأكد منها منك قبل ما أسجّلها 👇` : `محتاج أتأكد منك من ${blocked === 1 ? 'حاجة' : blocked + ' حاجات'} قبل ما أسجّل 👇`;
+    return json({ reply, questions: out.questions || [], choices, new_tutors: newTutors, actions, warnings, already, ...(body.debug ? { raw: out } : {}) });
   } catch (e) {
     return json({ error: String(e?.message || e).slice(0, 300) }, 500);
   }
