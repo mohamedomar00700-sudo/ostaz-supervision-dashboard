@@ -276,6 +276,19 @@ Deno.serve(async (req) => {
     const raw = [...(out.add_sessions || []).map((a: any) => ({ ...a, op: 'add_session' })), ...(out.status_changes || []).map((a: any) => ({ ...a, op: 'set_status' })), ...(out.updates || []).map((a: any) => ({ ...a, op: 'update_session' }))];
     const nz = (x: string) => String(x || '').replace(/[ًٌٍَُِّْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, '');
     const textN = nz(text);
+    // مفتاح موحّد للمادة (رياضيات/ماث/Math → math …) + مواد كل معلمة (من خانة المادة + اللي درّسته فعلاً)
+    const subjKey = (x: string) => { const s = nz(String(x || '')).toLowerCase();
+      if (/رياض|ماث|math/.test(s)) return 'math'; if (/انجليز|english/.test(s)) return 'eng'; if (/عربي|arabic/.test(s)) return 'ar';
+      if (/فيزي|physic/.test(s)) return 'phy'; if (/كيمي|chem/.test(s)) return 'chem'; if (/احيا|bio/.test(s)) return 'bio';
+      if (/علوم|ساينس|scien/.test(s)) return 'sci'; if (/قران|quran/.test(s)) return 'quran'; if (/اسلام|islam/.test(s)) return 'isl';
+      if (/سوشيال|دراسات|social/.test(s)) return 'soc'; if (/ict|كمبيوتر|حاسب/.test(s)) return 'ict'; return ''; };
+    const SCI = new Set(['sci', 'phy', 'chem', 'bio']);
+    const subjOk = (set: Set<string>, k: string) => set.has(k) || (SCI.has(k) && set.has('sci')) || (k === 'sci' && [...set].some(x => SCI.has(x)));
+    const _ts = new Map<string, Set<string>>();
+    const tutorSubs = (id: string) => { if (_ts.has(id)) return _ts.get(id)!; const set = new Set<string>();
+      String(tutBy.get(id)?.subject_label || '').split(/[،,]\s*|\s+و\s*/).forEach(x => { const k = subjKey(x); if (k) set.add(k); });
+      for (const [k, v] of pair) if (k.endsWith('|' + id)) v.subj.forEach(x => { const kk = subjKey(x); if (kk) set.add(kk); });
+      _ts.set(id, set); return set; };
     const NICK: Record<string, string[]> = { 'فاطمة': ['فطوم', 'فطومة', 'فاطمه'], 'عبد الرحمن': ['عبده', 'بودي'], 'محمد': ['حمودي', 'مودي'], 'عبد الله': ['عبودي'] };
     const mentioned = (st: any) => !!st && (textN.includes(nz(st.name)) || (NICK[st.name] || []).some(n => textN.includes(nz(n))) || (() => { const f = famBy.get(st.family_id); const fn = nz(String(f?.name || '').replace(/^أسرة\s*/, '').replace(/\(.*?\)/g, '').trim()); return fn.length > 3 && textN.includes(fn); })());
     let actions = raw.map((a: any) => {
@@ -283,6 +296,26 @@ Deno.serve(async (req) => {
       if (a.op === 'add_session') {
         const st = stuBy.get(sId.get(a.student) || ''), tu = tutBy.get(tId.get(a.tutor) || '');
         if (!st || !tu || !a.date || !a.time) { warnings.push(`حصة ناقصة بيانات اتشالت (${a.student || '?'} / ${a.tutor || '?'} / ${a.date || '?'} ${a.time || '?'})`); return null; }
+        // المادة مش من مواد المعلمة دي خالص (مثلاً "خليفة رياضيات مس سمر" وكل الـ سمرات مفيش فيهم رياضيات) → غالباً غلطة كتابة: ما نسجّلش، نسأل
+        if (a.subject && !/جديد/.test(text)) {
+          const want = subjKey(a.subject);
+          const tuSubs = tutorSubs(tu.id);
+          if (want && tuSubs.size && !subjOk(tuSubs, want)) {
+            const when = `${a.date === nowC.date ? 'النهارده' : a.date.slice(8) + '/' + Number(a.date.slice(5, 7))} الساعة ${a.time}`;
+            const opts: string[] = [];
+            // المواد والمعلمات المعتادين للطالب
+            [...pair.entries()].filter(([k]) => k.startsWith(st.id + '|')).sort((x, y) => String(y[1].last || '').localeCompare(String(x[1].last || ''))).slice(0, 2)
+              .forEach(([k, v]) => { const t0 = tutBy.get(k.split('|')[1]); if (t0) opts.push(`قصدي ${st.name} ${[...v.subj][0] || ''} مع ${tTitle(t0.name)} (المعتادة) ${when}`); });
+            // معلمات بنفس الاسم الأول بيدّوا المادة المكتوبة
+            const first = (n: string) => nz(bare(n).split(/\s+/)[0]);
+            tutList.filter((x: any) => x.id !== tu.id && first(x.name) === first(tu.name) && subjOk(tutorSubs(x.id), want)).slice(0, 1)
+              .forEach((x: any) => opts.push(`قصدي ${st.name} ${a.subject} مع ${tTitle(x.name)} ${when}`));
+            opts.push(`${st.name} ${a.subject} مع ${tTitle(tu.name)} فعلاً — مادة جديدة معاها ${when}`);
+            warnings.push(`❓ ${st.name}: "${a.subject}" مع ${tTitle(tu.name)} — ${tTitle(tu.name)} مش بتدّي ${a.subject} عندنا. ما سجّلتهاش، اختار من تحت أو اكتب قصدك 👇`);
+            extraChoices.unshift({ question: `${st.name} ${a.subject} مع ${tTitle(tu.name)} ${when} — قصدك إيه؟`, options: [...new Set(opts)].slice(0, 4) });
+            return null;
+          }
+        }
         let tu2 = tu;
         // أولوية المعلم اللي متسجل مع الطالب قبل كده: لو المعلم ده عمره ما درّس الطالب وفيه معلم تاني بيدرّسه نفس المادة → نختار المعلم المعتاد
         const tuShort = String(tu.name).replace(/^(أ|د)\.\s*/, '').replace(/\s*\(.*?\)/g, '').trim();
@@ -292,15 +325,6 @@ Deno.serve(async (req) => {
           const regular = [...pair.entries()].filter(([k, v]) => k.startsWith(st.id + '|') && (!a.subject || [...v.subj].some(x => sn(x) === sn(a.subject))));
           if (regular.length === 1) { const alt = tutBy.get(regular[0][0].split('|')[1]); if (alt) { warnings.push(`${st.name}: ${tu.name} عمرها ما درّستله — حطيت ${alt.name} لأنها المعلمة المعتادة.`); tu2 = alt;
             extraChoices.push({ question: `${st.name}${a.subject ? ' ' + a.subject : ''}: مع ${tTitle(alt.name)} (المعتادة) ولا ${tTitle(tu.name)} فعلاً؟`, options: [`${st.name}${a.subject ? ' ' + a.subject : ''} مع ${tTitle(tu.name)} فعلاً — معلمة جديدة معاها، نفس الميعاد`, `تمام، مع ${tTitle(alt.name)} زي ما هي`] }); } }
-          // نفس الاسم الأول (مس سمر = أ. سمر / سمر صلاح / سمر حمادة): لو المختارة عمرها ما درّست الطالب ومعلمة تانية بنفس الاسم الأول بتدرّسه (أي مادة) → نختارها هي
-          if (tu2 === tu) {
-            const first = (n: string) => nz(bare(n).split(/\s+/)[0]);
-            const f0 = first(tu.name);
-            const nameSakes = tutList.filter((x: any) => x.id !== tu.id && first(x.name) === f0 && pair.has(st.id + '|' + x.id));
-            if (nameSakes.length === 1) { const alt = nameSakes[0];
-              warnings.push(`${st.name}: "${tTitle(tu.name)}" فيه أكتر من معلمة بالاسم ده — حطيت ${alt.name} لأنها اللي بتدرّسله.`); tu2 = alt;
-              extraChoices.push({ question: `${st.name}${a.subject ? ' ' + a.subject : ''}: مع ${tTitle(alt.name)} ولا ${tTitle(tu.name)}؟`, options: [`${st.name}${a.subject ? ' ' + a.subject : ''} مع ${tTitle(tu.name)} فعلاً، نفس الميعاد`, `تمام، مع ${tTitle(alt.name)} زي ما هي`] }); }
-          }
         }
         let tuF = tu2, st2 = st;
         // الطالب غلط؟ (Gemini حط حصة حمدة على رسمية مثلاً): لو الطالب ده عمره ما خد مع المعلم ده، وأخ واحد بس في نفس الأسرة بياخد معاه نفس المادة → نحطها على الأخ
