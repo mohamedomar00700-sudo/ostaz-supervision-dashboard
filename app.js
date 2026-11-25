@@ -4948,6 +4948,36 @@ function normSubj(s) { s = (s || '').trim(); if (!s) return 'غير محدد'; i
   if (/فيزي|physic/i.test(s)) return 'فيزياء'; if (/كيمي|chem/i.test(s)) return 'كيمياء'; if (/أحياء|احياء|biolog/i.test(s)) return 'أحياء';
   if (/علوم|science/i.test(s)) return 'علوم'; if (/قرآن|قران|إسلام|اسلام|دين/.test(s)) return 'قرآن وتربية إسلامية';
   if (/سوشيال|اجتماع|دراسات|social/i.test(s)) return 'سوشيال / دراسات'; if (/فرنس|french/i.test(s)) return 'فرنساوي'; if (/ict|حاسب|كمبيوتر/i.test(s)) return 'ICT / كمبيوتر'; return s; }
+/* ===== التوقع (Forecast) =====
+   مؤشر موسمي لكل شهر (1 = شهر عادي). مبني من السنة اللي فاتت (سبتمبر 2025 → أغسطس 2026) على نفس الـ4 أسر
+   اللي كانوا معانا طول السنة (أبو معروف، أبو عبود، أم حمدان، أم زهرة) — عشان النمو (أسر جديدة) ما يتحسبش موسم.
+   مارس اتصلّح (الحرب وقّفت الدراسة) بمتوسط فبراير وأبريل. وبعدين اتقرّب ناحية 1 بنسبة 20% لأن العينة صغيرة (4 أسر).
+   مجموع الـ12 = 12. يتراجع تاني لما يبقى معانا سنة كاملة على السيستم. */
+const SEASON_IDX = { 1: .97, 2: 1.04, 3: 1.06, 4: 1.10, 5: 1.06, 6: 1.82, 7: .42, 8: .46, 9: .77, 10: 1.04, 11: 1.93, 12: .34 };
+function bizForecast(z) {
+  const MM = z.MM, now = new Date(), idx = k => SEASON_IDX[+k.slice(5, 7)] || 1;
+  const cm = MM[MM.length - 1], lf = z.lastFull, est = [];
+  if (lf && lf.rev > 0) est.push({ src: 'lf', v: lf.rev / idx(lf.k), w: 1 });
+  const dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate(), el = Math.max(0, now.getDate() - 1);
+  if (cm && cm.k === monthKey(now) && el >= 7 && cm.rev > 0) est.push({ src: 'cur', v: cm.rev * dim / el / idx(cm.k), w: 1 });
+  if (!est.length) { const A = z.A; if (!A.rev) return null; est.push({ src: '30', v: A.rev / idx(monthKey(now)), w: 1 }); }
+  const base = est.reduce((a, e) => a + e.v * e.w, 0) / est.reduce((a, e) => a + e.w, 0);
+  const months = []; for (let i = 0; i < 12; i++) { const d = new Date(now.getFullYear(), now.getMonth() + i, 1), k = monthKey(d); months.push({ k, idx: idx(k), rev: base * idx(k), actual: i === 0 && cm && cm.k === k ? cm.rev : null }); }
+  const A = z.A, gm = A.rev ? (A.rev - A.tc) / A.rev : (lf && lf.rev ? (lf.rev - lf.tc) / lf.rev : 0), ex = lf ? lf.ex : 0;
+  return { base, est, months, rev: base * 12, net: base * 12 * gm - ex * 12, gm, ex };
+}
+function bizForecastHtml(F) {
+  if (!F || !isAdmin) return '';
+  const mx = Math.max(1, ...F.months.map(m => Math.max(m.rev, m.actual || 0)));
+  const mn = k => new Date(k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'short' });
+  const tag = i => i >= 1.5 ? 'مراجعات' : i <= .5 ? 'إجازة' : '';
+  return `<div class="card item"><div class="fc-legend"><span><i class="fc-net"></i>الإيراد المتوقع</span><span><i class="fc-rev"></i>اللي اتسجل لحد النهارده</span></div>
+    <div class="fc">${F.months.map(m => `<div class="fc-col" title="${m.k}: متوقع ${fmt(Math.round(m.rev))} ج${m.actual != null ? ` · اتسجل ${fmt(Math.round(m.actual))} ج` : ''} · مؤشر الموسم ${m.idx}">
+      <div class="fc-top num small">${fmtK(m.rev)}</div>
+      <div class="fc-bars">${m.actual != null ? `<div class="fc-bar fc-rev" style="height:${m.actual / mx * 100}%"></div>` : ''}<div class="fc-bar fc-net" style="height:${m.rev / mx * 100}%"></div></div>
+      <div class="fc-lbl">${mn(m.k)}</div><div class="fc-val small ${m.idx >= 1.5 ? 'pos' : m.idx <= .5 ? 'neg' : 'sub'}">${tag(m.idx) || '&nbsp;'}</div></div>`).join('')}</div>
+    <p class="sub small mt">الطريقة: بناخد مستوى الشغل الحالي (${F.est.map(e => e.src === 'lf' ? 'الشهر اللي فات' : e.src === 'cur' ? 'معدل الشهر ده' : 'آخر 30 يوم').join(' + ')}) ونشيل منه أثر الموسم ⇐ <b class="num">${fmtK(F.base)}</b> ج في الشهر العادي، وبعدين نضربه في نمط مواسم السنة اللي فاتت (ذروة نوفمبر ويونيو للمراجعات، ونزول ديسمبر ويوليو وأغسطس للإجازات). التوقع على عدد الأسر الحالي — أي أسر جديدة بتزوّد عليه.</p></div>`;
+}
 const pctChg = (a, b) => b ? (a - b) / Math.abs(b) * 100 : null;
 const chgHtml = (a, b, inv) => { const p = pctChg(a, b); if (p == null) return a ? '<span class="sub">جديد</span>' : ''; const good = inv ? p <= 0 : p >= 0;
   return `<span class="${good ? 'pos' : 'neg'}">${p >= 0 ? '▲' : '▼'} ${Math.abs(p) >= 100 ? Math.round(Math.abs(p)) : Math.abs(p).toFixed(1)}%</span>`; };
@@ -4980,7 +5010,8 @@ function renderBusiness() {
   const z = bizCompute(), A = z.A, P = z.P, lf = z.lastFull;
   const arpf = A.fam.size ? A.rev / A.fam.size : 0, perHour = A.h ? A.rev / A.h : 0, costHour = A.h ? A.tc / A.h : 0, gm = A.rev ? (A.rev - A.tc) / A.rev : 0;
   const hPerStu = A.stu.size ? A.h / A.stu.size : 0;
-  const runRev = lf ? lf.rev * 12 : A.rev * 12, runNet = lf ? (lf.rev - lf.tc - lf.ex) * 12 : (A.rev - A.tc) * 12;
+  const F = bizForecast(z);
+  const runRev = F ? F.rev : 0, runNet = F ? F.net : 0;
   const repRate = z.repBase ? z.repDone / z.repBase : null;
   const newThis = z.MM.length ? z.MM[z.MM.length - 1].newStu : 0;
   const totalH = A.h;
@@ -4990,7 +5021,7 @@ function renderBusiness() {
       <div class="biz-hero-n">
         <div title="الأسر اللي ليها ملف وطلاب على السيستم دلوقتي"><b class="num">${z.totals.fam}</b><span>أسرة متسجلة</span></div>${z.totals.ever > z.totals.fam ? `<div title="كل الأسر اللي اتعاملنا معاها — شامل أسر الحسابات القديمة"><b class="num">${z.totals.ever}</b><span>أسرة من أول الأكاديمية</span></div>` : ''}<div><b class="num">${z.totals.stu}</b><span>طالب متسجل</span></div>
         <div><b class="num">${z.totals.tut}</b><span>معلم/ة</span></div><div><b class="num">${fmt(Math.round(A.h))}</b><span>ساعة آخر 30 يوم</span></div>
-        ${isAdmin ? `<div><b class="num">${fmtK(runRev)}</b><span>إيراد سنوي متوقع (ج)</span></div>` : ''}
+        ${isAdmin ? `<div><b class="num">${fmtK(runRev)}</b><span>إيراد متوقع للـ12 شهر الجايين (ج)</span></div>` : ''}
       </div>
       <div class="biz-actions no-print"><button class="btn btn-brand sm" onclick="bizPrint()">🖨️ تقرير PDF للعرض</button><button class="btn btn-ghost sm" onclick="bizCopy()">📋 نسخ الملخص</button><button class="btn btn-ghost sm" onclick="state.biz=null; loadBusiness()">🔄 تحديث</button></div>
     </div>
@@ -5010,7 +5041,7 @@ function renderBusiness() {
       ${bizKpi('متوسط سعر الساعة', fmt(Math.round(perHour)), `ج · تكلفة المعلم ${fmt(Math.round(costHour))} ج للساعة`, chgHtml(perHour, P.h ? P.rev / P.h : 0), { icon: '🏷️' })}
       ${bizKpi('متوسط إيراد الأسرة', fmt(Math.round(arpf)), 'ج شهرياً لكل أسرة نشطة', chgHtml(arpf, P.fam.size ? P.rev / P.fam.size : 0), { icon: '🏠' })}
       ${lf ? bizKpi(`صافي ربح ${new Date(lf.k + '-15').toLocaleDateString('ar-EG-u-nu-latn', { month: 'long' })}`, fmt(lf.rev - lf.tc - lf.ex), `ج بعد المعلمين والرواتب (${lf.rev ? Math.round((lf.rev - lf.tc - lf.ex) / lf.rev * 100) : 0}%)`, '', { icon: '🏦', vcls: lf.rev - lf.tc - lf.ex >= 0 ? 'pos' : 'neg' }) : ''}
-      ${bizKpi('صافي ربح سنوي متوقع', fmtK(runNet), `ج لو استمر نفس معدل ${lf ? 'الشهر اللي فات' : 'آخر 30 يوم'}`, '', { icon: '🚀' })}
+      ${bizKpi('صافي ربح متوقع (12 شهر)', fmtK(runNet), `ج من إيراد متوقع ${fmtK(runRev)} — محسوب بمواسم السنة (المراجعات والإجازات)`, '', { icon: '🚀' })}
     </div>` : ''}
 
     <div class="section-title"><h2>📊 النمو شهر بشهر</h2></div>
@@ -5021,6 +5052,7 @@ function renderBusiness() {
         <td class="num">${m.ret != null && i ? Math.round(m.ret * 100) + '%' : '—'}</td><td class="num">${m.fam.size}</td><td class="num">${fmt(m.h, 1)}</td>
         ${isAdmin ? `<td class="num">${fmt(m.rev)}</td><td class="num ${m.rev - m.tc - m.ex >= 0 ? 'pos' : 'neg'}">${fmt(m.rev - m.tc - m.ex)}</td>` : ''}</tr>`).join('')}
     </tbody></table></div><p class="sub small">"وقفوا" = طلاب حضروا الشهر اللي قبله ومحضروش الشهر ده. "الاستمرار" = نسبة اللي كمّلوا من الشهر اللي قبله.</p>` : ''}
+    ${isAdmin && F ? `<div class="section-title"><h2>🔮 توقع الـ12 شهر الجايين</h2></div>${bizForecastHtml(F)}` : ''}
 
     <div class="section-title"><h2>🌍 مين عملاءنا؟ <span class="sub small">(نسبة من ساعات آخر 30 يوم)</span></h2></div>
     <div class="grid2 biz-grid">
@@ -5057,7 +5089,7 @@ function bizCopy() {
 ⏱ ساعات تدريس آخر 30 يوم: ${fmt(Math.round(A.h))} ساعة (${A.n} حصة)
 ${isAdmin ? `💰 إيراد آخر 30 يوم: ${fmt(A.rev)} ج · هامش بعد المعلمين ${Math.round(s.gm * 100)}%
 🏷️ متوسط سعر الساعة: ${fmt(Math.round(s.perHour))} ج · متوسط إيراد الأسرة: ${fmt(Math.round(s.arpf))} ج/شهر
-🚀 إيراد سنوي متوقع: ${fmt(s.runRev)} ج · صافي ربح سنوي متوقع: ${fmt(s.runNet)} ج
+🚀 إيراد متوقع للـ12 شهر الجايين: ${fmt(Math.round(s.runRev))} ج · صافي ربح متوقع: ${fmt(Math.round(s.runNet))} ج (محسوب بمواسم السنة)
 ` : ''}🌍 البلاد: ${pct(z.byCountry)}
 📚 المواد: ${pct(z.bySubj)}
 ✅ الالتزام: ${z.commit == null ? '—' : Math.round(z.commit * 100) + '%'}${z.trialDecided ? ` · تحويل التجريبي: ${Math.round(z.trialWon / z.trialDecided * 100)}%` : ''}`;
