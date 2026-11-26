@@ -209,7 +209,7 @@ Deno.serve(async (req) => {
       if (r.subject) x.subj.add(r.subject); if (!x.last || r.scheduled_at > x.last) x.last = r.scheduled_at; if (x.rate == null && r.kind !== 'trial' && Number(r.tutor_cost_egp) > 0) x.rate = Number(r.tutor_cost_egp);
       if (x.price == null && r.kind !== 'trial' && Number(r.student_price) > 0) x.price = Number(r.student_price); pair.set(k, x); });
     (plans || []).forEach(p => { if (!p.tutor_id) return; const k = p.student_id + '|' + p.tutor_id; const x = pair.get(k) || { subj: new Set() };
-      if (p.subject) x.subj.add(p.subject); if (x.rate == null && p.tutor_rate_egp != null) x.rate = Number(p.tutor_rate_egp); if (p.rate_confirmed === false) x.tent = true; pair.set(k, x); });
+      if (p.subject) x.subj.add(p.subject); if (p.tutor_rate_egp != null && Number(p.tutor_rate_egp) > 0) x.rate = Number(p.tutor_rate_egp); /* السعر الثابت المتسجل للطالب×المعلم هو الأساس — مش آخر حصة (عشان غلطة في حصة ما تتنقلش للي بعدها) */ if (p.rate_confirmed === false) x.tent = true; pair.set(k, x); });
 
     const stuLines = stuList.map(s => `${sCode.get(s.id)}: ${s.name} — ${famBy.get(s.family_id)?.name || ''}${s.grade_level ? ' — ' + s.grade_level : ''}`).join('\n');
     const tutLines = tutList.map(t => `${tCode.get(t.id)}: ${t.name}`).join('\n');
